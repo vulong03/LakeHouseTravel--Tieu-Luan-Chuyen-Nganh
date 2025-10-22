@@ -1,0 +1,3 @@
+# MinIO Configuration
+# This directory contains MinIO server configuration
+# Data will be stored in the data/ subdirectory

@@ -1,0 +1,14 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Lakehouse PostgreSQL",
+      "Group": "Lakehouse Metadata",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "metastore_db",
+      "Username": "lakehouse_user",
+      "SSLMode": "prefer",
+      "Comment": "Hive Metastore Database - Contains Iceberg table metadata (DBS, TBLS, COLUMNS_V2, PARTITIONS, etc.)"
+    }
+  }
+}

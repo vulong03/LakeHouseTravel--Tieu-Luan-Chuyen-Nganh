@@ -1,0 +1,110 @@
+# Git Ignore for Lakehouse Project
+
+# ============================================
+# Data Files
+# ============================================
+data/raw/**/*.csv
+data/sample/**
+*.parquet
+*.orc
+
+# ============================================
+# Docker Volumes & Data
+# ============================================
+postgres/data/
+minio/data/
+hive/data/
+dremio/data/
+ml/mlflow/data/
+airflow/logs/
+spark/logs/
+
+# ============================================
+# Environment Files
+# ============================================
+.env.local
+.env.production
+*.env.backup
+
+# ============================================
+# Python
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# ============================================
+# Jupyter Notebooks
+# ============================================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+notebooks/.ipynb_checkpoints/
+
+# ============================================
+# IDE & Editors
+# ============================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ============================================
+# Logs
+# ============================================
+*.log
+logs/
+*.out
+*.err
+
+# ============================================
+# Temporary Files
+# ============================================
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# ============================================
+# Power BI
+# ============================================
+*.pbix.bak
+
+# ============================================
+# OS Files
+# ============================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ============================================
+# Docker
+# ============================================
+.dockerignore
+
+# ============================================
+# MLflow
+# ============================================
+mlruns/
+mlartifacts/
+
+# Keep these files
+!.gitkeep
+!README.md
