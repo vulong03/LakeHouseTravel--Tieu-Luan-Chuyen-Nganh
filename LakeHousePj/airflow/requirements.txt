@@ -1,0 +1,31 @@
+# ============================================
+# Airflow Python Requirements
+# Additional packages for Lakehouse operations
+# ============================================
+
+# Apache Providers
+apache-airflow-providers-postgres==5.12.0
+apache-airflow-providers-docker==3.12.0
+apache-airflow-providers-celery==3.7.2
+apache-airflow-providers-redis==3.7.1
+
+# Database drivers
+psycopg2-binary==2.9.9
+sqlalchemy==1.4.53
+
+# Data processing
+pandas==2.1.4
+numpy==1.26.4
+
+# AWS/S3 (MinIO compatibility)
+boto3==1.35.36
+botocore==1.35.36
+
+# Spark interaction (optional)
+pyspark==3.5.0
+
+# Monitoring & Logging
+requests==2.31.0
+
+# Utilities
+python-dotenv==1.0.1

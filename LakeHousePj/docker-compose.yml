@@ -262,3 +262,94 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+  # ============================================
+  # Airflow Postgres - Metadata Database
+  # ============================================
+  airflow-postgres:
+    image: postgres:15-alpine
+    container_name: lakehouse_airflow_postgres
+    hostname: airflow-postgres
+    networks:
+      - lakehouse_network
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - ./airflow/postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ============================================
+  # Airflow - Webserver + Scheduler (All-in-One)
+  # ============================================
+  airflow:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: lakehouse_airflow
+    hostname: airflow
+    networks:
+      - lakehouse_network
+    ports:
+      - "8082:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Ho_Chi_Minh
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+      AIRFLOW__WEBSERVER__RBAC: 'true'
+      AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: 30
+      AIRFLOW__LOGGING__LOGGING_LEVEL: INFO
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+      _AIRFLOW_WWW_USER_FIRSTNAME: Admin
+      _AIRFLOW_WWW_USER_LASTNAME: User
+      _AIRFLOW_WWW_USER_EMAIL: admin@lakehouse.local
+      _AIRFLOW_WWW_USER_ROLE: Admin
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/config:/opt/airflow/config
+      - ./data:/opt/airflow/data
+      - ./spark/jobs:/opt/airflow/spark-jobs
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      spark-master:
+        condition: service_healthy
+    command: >
+      bash -c "
+      airflow db migrate &&
+      airflow users create \
+        --username admin \
+        --password admin \
+        --firstname Admin \
+        --lastname User \
+        --role Admin \
+        --email admin@lakehouse.local || true &&
+      airflow webserver & airflow scheduler
+      "
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped

@@ -1,0 +1,32 @@
+# Ignore Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore virtual environments
+venv/
+env/
+ENV/
+
+# Ignore IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Ignore test files
+*_test.py
+test_*.py
+
+# Ignore documentation
+*.md
+docs/
+
+# Ignore data files
+*.csv
+*.json
+*.parquet
+
+# Ignore logs
+*.log
