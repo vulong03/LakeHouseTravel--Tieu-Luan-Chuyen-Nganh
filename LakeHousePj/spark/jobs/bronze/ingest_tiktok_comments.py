@@ -2,8 +2,8 @@
 Bronze Layer - Ingest TikTok Comment Files
 Source: data/raw/tiktok/comments/tiktok_comments_*.csv
 Target: 
-  - lakehouse.bronze.tiktok_posts_raw (metadata from lines 1-16)
-  - lakehouse.bronze.tiktok_comments_raw (comments from lines 18+)
+  - lakehouse.bronze.raw_tiktok_post_metadata   (metadata from lines 1-16)
+  - lakehouse.bronze.raw_tiktok_post_comments (comments from lines 18+)
 
 Strategy: APPEND mode with incremental loading (checksum-based deduplication)
 """
@@ -74,7 +74,7 @@ def create_bronze_posts_table(spark):
     create_iceberg_table_if_not_exists(
         spark=spark,
         database="bronze",
-        table_name="tiktok_posts_raw",
+        table_name="raw_tiktok_post_metadata  ",
         schema=schema,
         partition_by=[],
         table_properties={
@@ -112,7 +112,7 @@ def create_bronze_comments_table(spark):
     create_iceberg_table_if_not_exists(
         spark=spark,
         database="bronze",
-        table_name="tiktok_comments_raw",
+        table_name="raw_tiktok_post_comments",
         schema=schema,
         partition_by=["post_url"],
         table_properties={
@@ -239,7 +239,7 @@ def ingest_comment_file(spark, file_path, file_checksum, file_name, file_size):
     post_df = spark.createDataFrame([post_metadata])
     
     # Write to posts table
-    post_df.writeTo("lakehouse.bronze.tiktok_posts_raw") \
+    post_df.writeTo("lakehouse.bronze.raw_tiktok_post_metadata  ") \
         .using("iceberg") \
         .append()
     
@@ -256,7 +256,7 @@ def ingest_comment_file(spark, file_path, file_checksum, file_name, file_size):
         comments_df = spark.createDataFrame(comments_data)
         
         # Write to comments table
-        comments_df.writeTo("lakehouse.bronze.tiktok_comments_raw") \
+        comments_df.writeTo("lakehouse.bronze.raw_tiktok_post_comments") \
             .using("iceberg") \
             .append()
         
@@ -381,7 +381,7 @@ def main():
                     file_size=file_size,
                     file_checksum=file_checksum,
                     records_ingested=posts + comments,
-                    table_name="bronze.tiktok_posts_raw + tiktok_comments_raw",
+                    table_name="bronze.raw_tiktok_post_metadata   + raw_tiktok_post_comments",
                     status="success"
                 )
                 
@@ -394,7 +394,7 @@ def main():
                     file_size=file_size,
                     file_checksum=file_checksum,
                     records_ingested=0,
-                    table_name="bronze.tiktok_posts_raw + tiktok_comments_raw",
+                    table_name="bronze.raw_tiktok_post_metadata   + raw_tiktok_post_comments",
                     status="failed"
                 )
                 continue

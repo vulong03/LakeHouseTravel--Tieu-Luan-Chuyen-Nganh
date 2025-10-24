@@ -1,7 +1,7 @@
 """
 Bronze Layer - Ingest TikTok Videos Metadata
 Source: data/raw/tiktok/links/merged_videos.csv
-Target: lakehouse.bronze.tiktok_videos_metadata
+Target: lakehouse.bronze.raw_tiktok_video_links
 
 Strategy: APPEND mode with incremental loading (checksum-based deduplication)
 - Detects file changes via checksum comparison
@@ -56,17 +56,120 @@ def check_if_file_ingested(spark, file_checksum):
 
 
 def get_existing_urls(spark):
-    """Get set of URLs already in Bronze table"""
+    """Get set of URLs already in Bronze table (excluding deleted ones)"""
     
     try:
-        existing_df = spark.table("lakehouse.bronze.tiktok_videos_metadata")
+        existing_df = spark.table("lakehouse.bronze.raw_tiktok_video_links") \
+            .filter((F.col("is_deleted").isNull()) | (F.col("is_deleted") == "false"))
         existing_urls = set([row.url for row in existing_df.select("url").distinct().collect()])
-        print(f"📊 Found {len(existing_urls)} existing URLs in Bronze table")
+        print(f"📊 Found {len(existing_urls)} existing URLs in Bronze table (excluding deleted)")
         return existing_urls
     
     except Exception as e:
         print(f"⚠️ Bronze table not found or empty: {e}")
         return set()
+
+
+def get_all_existing_urls_with_metadata(spark):
+    """Get all existing URLs with their metadata for comparison"""
+    
+    try:
+        existing_df = spark.table("lakehouse.bronze.raw_tiktok_video_links") \
+            .filter((F.col("is_deleted").isNull()) | (F.col("is_deleted") == "false"))
+        
+        # Return as dict: {url: {posted_date, read_status, ...}}
+        existing_data = {}
+        for row in existing_df.collect():
+            existing_data[row.url] = {
+                'posted_date': row.posted_date,
+                'read_status': row.read_status,
+                'keyword': row.keyword,
+                'ques_id': row.ques_id,
+                'target_type': row.target_type,
+                'region': row.region,
+                'has_sub': row.has_sub,
+                'vi_sub': row.vi_sub
+            }
+        
+        print(f"📊 Loaded {len(existing_data)} existing URLs with metadata")
+        return existing_data
+    
+    except Exception as e:
+        print(f"⚠️ Could not load existing metadata: {e}")
+        return {}
+
+
+def mark_deleted_urls(spark, deleted_urls):
+    """Mark URLs as deleted (soft delete)"""
+    
+    if not deleted_urls:
+        return
+    
+    try:
+        print(f"\n🗑️  Marking {len(deleted_urls)} URLs as deleted...")
+        
+        # Create temp view with deleted URLs
+        deleted_df = spark.createDataFrame(
+            [(url,) for url in deleted_urls],
+            ["url"]
+        )
+        deleted_df.createOrReplaceTempView("deleted_urls_temp")
+        
+        # Use Iceberg MERGE to update deleted flag
+        spark.sql("""
+            MERGE INTO lakehouse.bronze.raw_tiktok_video_links AS target
+            USING deleted_urls_temp AS source
+            ON target.url = source.url
+            WHEN MATCHED THEN UPDATE SET
+                target.is_deleted = 'true',
+                target.deleted_at = current_timestamp(),
+                target.last_updated_at = current_timestamp()
+        """)
+        
+        print(f"   ✅ Marked {len(deleted_urls)} URLs as deleted")
+        
+    except Exception as e:
+        print(f"   ⚠️ Failed to mark deleted URLs: {e}")
+        print(f"   Note: MERGE may not be supported in this Iceberg version")
+
+
+def update_existing_urls(spark, updated_records):
+    """Update metadata for existing URLs that have changed"""
+    
+    if not updated_records:
+        return
+    
+    try:
+        print(f"\n🔄 Updating {len(updated_records)} URLs with changed metadata...")
+        
+        # Create DataFrame from updated records
+        updated_df = spark.createDataFrame(updated_records)
+        updated_df.createOrReplaceTempView("updated_urls_temp")
+        
+        # Use Iceberg MERGE to update metadata
+        spark.sql("""
+            MERGE INTO lakehouse.bronze.raw_tiktok_video_links AS target
+            USING updated_urls_temp AS source
+            ON target.url = source.url
+            WHEN MATCHED THEN UPDATE SET
+                target.posted_date = source.posted_date,
+                target.read_status = source.read_status,
+                target.keyword = source.keyword,
+                target.ques_id = source.ques_id,
+                target.target_type = source.target_type,
+                target.region = source.region,
+                target.has_sub = source.has_sub,
+                target.vi_sub = source.vi_sub,
+                target.source_file = source.source_file,
+                target.source_file_checksum = source.source_file_checksum,
+                target.last_updated_at = current_timestamp()
+        """)
+        
+        print(f"   ✅ Updated {len(updated_records)} URLs")
+        
+    except Exception as e:
+        print(f"   ⚠️ Failed to update URLs: {e}")
+        print(f"   Note: MERGE may not be supported in this Iceberg version")
 
 
 def create_bronze_videos_table(spark):
@@ -87,13 +190,18 @@ def create_bronze_videos_table(spark):
         # Metadata columns
         StructField("ingestion_timestamp", TimestampType(), False),
         StructField("source_file", StringType(), False),
-        StructField("source_file_checksum", StringType(), False)
+        StructField("source_file_checksum", StringType(), False),
+        
+        # Soft delete columns
+        StructField("is_deleted", StringType(), True),  # 'true'/'false' as string for compatibility
+        StructField("deleted_at", TimestampType(), True),
+        StructField("last_updated_at", TimestampType(), True)
     ])
     
     create_iceberg_table_if_not_exists(
         spark=spark,
         database="bronze",
-        table_name="tiktok_videos_metadata",
+        table_name="raw_tiktok_video_links",
         schema=schema,
         partition_by=["region"],
         table_properties={
@@ -106,7 +214,10 @@ def create_bronze_videos_table(spark):
 def ingest_videos_metadata(spark, source_file_path):
     """
     Ingest merged_videos.csv into Bronze table
-    Uses APPEND mode with deduplication to avoid duplicate URLs
+    Features:
+    - APPEND mode for new URLs
+    - UPDATE mode for changed metadata
+    - SOFT DELETE for removed URLs
     
     Args:
         spark: SparkSession
@@ -144,55 +255,109 @@ def ingest_videos_metadata(spark, source_file_path):
     total_records = df.count()
     print(f"📝 Records in file: {total_records}")
     
-    # Get existing URLs to avoid duplicates
+    # Get current URLs from file
+    current_urls = set([row.url for row in df.select("url").collect()])
+    
+    # Get existing URLs and metadata from Bronze table
     existing_urls = get_existing_urls(spark)
+    existing_metadata = get_all_existing_urls_with_metadata(spark)
     
-    # Filter out URLs already in Bronze table
-    if existing_urls:
-        df_new = df.filter(~F.col("url").isin(existing_urls))
-        new_record_count = df_new.count()
-        
-        print(f"� New URLs to ingest: {new_record_count}")
-        print(f"📊 Duplicate URLs skipped: {total_records - new_record_count}")
-        
-        if new_record_count == 0:
-            print(f"⏭️  No new records to ingest")
-            
-            # Still log to tracking (file processed but no new data)
-            log_ingestion_to_postgres(
-                spark=spark,
-                file_path=source_file_path,
-                file_name=file_name,
-                file_size=file_size,
-                file_checksum=file_checksum,
-                records_ingested=0,
-                table_name="bronze.tiktok_videos_metadata",
-                status="success"
-            )
-            return 0
+    # === 1. DETECT DELETED URLs ===
+    deleted_urls = existing_urls - current_urls
+    if deleted_urls:
+        print(f"\n🗑️  Detected {len(deleted_urls)} deleted URLs")
+        print(f"   Sample deleted URLs: {list(deleted_urls)[:3]}")
+        mark_deleted_urls(spark, deleted_urls)
     else:
-        df_new = df
-        new_record_count = total_records
-        print(f"📊 First ingestion, processing all {new_record_count} records")
+        print(f"\n✅ No deleted URLs detected")
     
-    # Add metadata columns
-    df_with_metadata = df_new \
-        .withColumn("ingestion_timestamp", F.lit(datetime.now())) \
-        .withColumn("source_file", F.lit(file_name)) \
-        .withColumn("source_file_checksum", F.lit(file_checksum))
+    # === 2. DETECT NEW URLs ===
+    new_urls = current_urls - existing_urls
+    df_new = df.filter(F.col("url").isin(new_urls)) if new_urls else None
     
-    # Show sample
-    print("\n📋 Sample new data:")
-    df_with_metadata.select("url", "keyword", "region", "read_status").show(5, truncate=False)
+    if df_new and df_new.count() > 0:
+        new_record_count = df_new.count()
+        print(f"\n➕ Detected {new_record_count} new URLs")
+        
+        # Add metadata columns
+        df_new_with_metadata = df_new \
+            .withColumn("ingestion_timestamp", F.lit(datetime.now())) \
+            .withColumn("source_file", F.lit(file_name)) \
+            .withColumn("source_file_checksum", F.lit(file_checksum)) \
+            .withColumn("is_deleted", F.lit("false")) \
+            .withColumn("deleted_at", F.lit(None).cast(TimestampType())) \
+            .withColumn("last_updated_at", F.lit(datetime.now()))
+        
+        # Show sample
+        print(f"\n📋 Sample new data:")
+        df_new_with_metadata.select("url", "keyword", "region", "read_status").show(5, truncate=False)
+        
+        # Write to Bronze table (APPEND mode)
+        print(f"\n💾 Appending {new_record_count} new URLs to Bronze table...")
+        df_new_with_metadata.writeTo("lakehouse.bronze.raw_tiktok_video_links") \
+            .using("iceberg") \
+            .append()
+        
+        print(f"   ✅ Successfully ingested {new_record_count} new records")
+    else:
+        new_record_count = 0
+        print(f"\n✅ No new URLs to ingest")
     
-    # Write to Bronze table (APPEND mode - only new records)
-    print(f"\n💾 Appending to Bronze table: bronze.tiktok_videos_metadata")
+    # === 3. DETECT UPDATED URLs (metadata changes) ===
+    common_urls = current_urls & existing_urls
+    updated_records = []
     
-    df_with_metadata.writeTo("lakehouse.bronze.tiktok_videos_metadata") \
-        .using("iceberg") \
-        .append()
+    if common_urls:
+        print(f"\n🔍 Checking {len(common_urls)} existing URLs for metadata changes...")
+        
+        for row in df.filter(F.col("url").isin(common_urls)).collect():
+            url = row.url
+            existing = existing_metadata.get(url, {})
+            
+            # Check if any metadata field has changed
+            has_changes = (
+                row.posted_date != existing.get('posted_date') or
+                row.read_status != existing.get('read_status') or
+                row.keyword != existing.get('keyword') or
+                row.ques_id != existing.get('ques_id') or
+                row.target_type != existing.get('target_type') or
+                row.region != existing.get('region') or
+                row.has_sub != existing.get('has_sub') or
+                row.vi_sub != existing.get('vi_sub')
+            )
+            
+            if has_changes:
+                updated_records.append({
+                    'url': url,
+                    'posted_date': row.posted_date,
+                    'read_status': row.read_status,
+                    'keyword': row.keyword,
+                    'ques_id': row.ques_id,
+                    'target_type': row.target_type,
+                    'region': row.region,
+                    'has_sub': row.has_sub,
+                    'vi_sub': row.vi_sub,
+                    'source_file': file_name,
+                    'source_file_checksum': file_checksum
+                })
+        
+        if updated_records:
+            print(f"\n🔄 Detected {len(updated_records)} URLs with metadata changes")
+            print(f"   Sample updated URLs: {[r['url'] for r in updated_records[:3]]}")
+            update_existing_urls(spark, updated_records)
+        else:
+            print(f"\n✅ No metadata changes detected for existing URLs")
     
-    print(f"✅ Successfully ingested {new_record_count} new records")
+    # === 4. SUMMARY ===
+    total_changes = new_record_count + len(updated_records) + len(deleted_urls)
+    
+    print(f"\n" + "=" * 80)
+    print(f"📊 INGESTION SUMMARY:")
+    print(f"   ➕ New URLs added: {new_record_count}")
+    print(f"   🔄 URLs updated: {len(updated_records)}")
+    print(f"   🗑️  URLs deleted (soft): {len(deleted_urls)}")
+    print(f"   📝 Total changes: {total_changes}")
+    print("=" * 80)
     
     # Log to PostgreSQL tracking table
     log_ingestion_to_postgres(
@@ -201,12 +366,12 @@ def ingest_videos_metadata(spark, source_file_path):
         file_name=file_name,
         file_size=file_size,
         file_checksum=file_checksum,
-        records_ingested=new_record_count,
-        table_name="bronze.tiktok_videos_metadata",
+        records_ingested=total_changes,
+        table_name="bronze.raw_tiktok_video_links",
         status="success"
     )
     
-    return new_record_count
+    return total_changes
 
 
 def log_ingestion_to_postgres(spark, file_path, file_name, file_size, 

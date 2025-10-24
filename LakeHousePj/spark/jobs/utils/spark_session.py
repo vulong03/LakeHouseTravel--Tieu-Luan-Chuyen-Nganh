@@ -27,7 +27,7 @@ def get_spark_session(app_name="LakehouseTourism"):
             .config("spark.sql.catalog.lakehouse", "org.apache.iceberg.spark.SparkCatalog") \
             .config("spark.sql.catalog.lakehouse.type", "hive") \
             .config("spark.sql.catalog.lakehouse.uri", "thrift://hive-metastore:9083") \
-            .config("spark.sql.catalog.lakehouse.warehouse", "s3a://bronze/warehouse") \
+            .config("spark.sql.catalog.lakehouse.warehouse", "s3a://bronze/lakehouse") \
             .config("spark.sql.defaultCatalog", "lakehouse") \
             .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
             .config("spark.hadoop.fs.s3a.access.key", "minioadmin") \
