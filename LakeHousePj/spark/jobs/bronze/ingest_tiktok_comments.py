@@ -11,7 +11,6 @@ Strategy: APPEND mode with incremental loading (checksum-based deduplication)
 import sys
 import os
 from datetime import datetime
-import hashlib
 import csv
 import io
 
@@ -20,17 +19,22 @@ sys.path.append('/opt/spark/jobs')
 
 from utils.spark_session import get_spark_session
 from utils.iceberg_utils import create_iceberg_table_if_not_exists
+from utils.file_tracker import (
+    calculate_file_checksum,
+    check_if_file_ingested,
+    log_ingestion_to_postgres
+)
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, StringType, TimestampType
 
-
-def calculate_file_checksum(file_path):
-    """Calculate MD5 checksum of file"""
-    hash_md5 = hashlib.md5()
-    with open(file_path, 'rb') as f:
-        for chunk in iter(lambda: f.read(4096), b""):
-            hash_md5.update(chunk)
-    return hash_md5.hexdigest()
+# PostgreSQL connection parameters
+POSTGRES_CONN = {
+    'host': 'postgres',
+    'port': 5432,
+    'database': 'metastore_db',
+    'user': 'lakehouse_user',
+    'password': 'lakehouse_pass'
+}
 
 
 def create_bronze_posts_table(spark):
@@ -265,55 +269,6 @@ def ingest_comment_file(spark, file_path, file_checksum, file_name, file_size):
     return 1, len(comments_data)  # 1 post, N comments
 
 
-def log_ingestion_to_postgres(spark, file_path, file_name, file_size, 
-                               file_checksum, records_ingested, table_name, status):
-    """Log ingestion to PostgreSQL tracking table"""
-    
-    try:
-        # Create tracking record with proper types
-        tracking_data = [(
-            file_path,
-            file_name,
-            int(file_size),
-            file_checksum,
-            datetime.now(),  # Use datetime object directly
-            int(records_ingested),
-            table_name,
-            status,
-            None
-        )]
-        
-        # Define explicit schema
-        from pyspark.sql.types import StructType, StructField, StringType, LongType, IntegerType, TimestampType
-        
-        schema = StructType([
-            StructField("file_path", StringType(), False),
-            StructField("file_name", StringType(), False),
-            StructField("file_size_bytes", LongType(), True),
-            StructField("file_checksum", StringType(), False),
-            StructField("ingestion_timestamp", TimestampType(), False),  # Changed to TimestampType
-            StructField("records_ingested", IntegerType(), True),
-            StructField("table_name", StringType(), True),
-            StructField("status", StringType(), False),
-            StructField("error_message", StringType(), True)
-        ])
-        
-        tracking_df = spark.createDataFrame(tracking_data, schema)
-        
-        tracking_df.write \
-            .format("jdbc") \
-            .option("url", "jdbc:postgresql://postgres:5432/metastore_db") \
-            .option("dbtable", "file_ingestion_log") \
-            .option("user", "lakehouse_user") \
-            .option("password", "lakehouse_pass") \
-            .option("driver", "org.postgresql.Driver") \
-            .mode("append") \
-            .save()
-        
-    except Exception as e:
-        print(f"⚠️ Failed to log to PostgreSQL: {e}")
-
-
 def main():
     """Main execution"""
     
@@ -358,7 +313,7 @@ def main():
             file_checksum = calculate_file_checksum(file_path)
             
             # Check if already ingested
-            if check_if_file_ingested(spark, file_checksum):
+            if check_if_file_ingested(file_checksum, POSTGRES_CONN):
                 print(f"\n📄 {file_name}")
                 print(f"   ⏭️  Already ingested (checksum: {file_checksum[:8]}...)")
                 skipped_files += 1
@@ -373,29 +328,41 @@ def main():
                 total_posts += posts
                 total_comments += comments
                 
-                # Log to tracking table
+                # Prepare ingestion_details for multi-table tracking
+                ingestion_details = {
+                    "tables": [
+                        {
+                            "name": "raw_tiktok_post_metadata",
+                            "records": posts
+                        },
+                        {
+                            "name": "raw_tiktok_post_comments",
+                            "records": comments
+                        }
+                    ]
+                }
+                
+                # Log to tracking table WITH ingestion_details
                 log_ingestion_to_postgres(
-                    spark=spark,
                     file_path=file_path,
-                    file_name=file_name,
-                    file_size=file_size,
                     file_checksum=file_checksum,
                     records_ingested=posts + comments,
-                    table_name="bronze.raw_tiktok_post_metadata   + raw_tiktok_post_comments",
-                    status="success"
+                    table_name="bronze.raw_tiktok_post_metadata + raw_tiktok_post_comments",
+                    status="success",
+                    postgres_conn_params=POSTGRES_CONN,
+                    ingestion_details=ingestion_details
                 )
                 
             except Exception as e:
                 print(f"   ❌ Error: {e}")
                 log_ingestion_to_postgres(
-                    spark=spark,
                     file_path=file_path,
-                    file_name=file_name,
-                    file_size=file_size,
                     file_checksum=file_checksum,
                     records_ingested=0,
-                    table_name="bronze.raw_tiktok_post_metadata   + raw_tiktok_post_comments",
-                    status="failed"
+                    table_name="bronze.raw_tiktok_post_metadata + raw_tiktok_post_comments",
+                    status="failed",
+                    postgres_conn_params=POSTGRES_CONN,
+                    error_message=str(e)
                 )
                 continue
         

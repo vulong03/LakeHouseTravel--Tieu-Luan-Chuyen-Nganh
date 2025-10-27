@@ -70,6 +70,7 @@ init_tracking = BashOperator(
         table_name TEXT,
         status TEXT CHECK (status IN ('success', 'failed', 'in_progress')),
         error_message TEXT,
+        ingestion_details JSONB,
         CONSTRAINT unique_file_checksum UNIQUE(file_checksum)
     );
     
@@ -77,6 +78,8 @@ init_tracking = BashOperator(
     CREATE INDEX IF NOT EXISTS idx_file_name ON file_ingestion_log(file_name);
     CREATE INDEX IF NOT EXISTS idx_table_name ON file_ingestion_log(table_name);
     CREATE INDEX IF NOT EXISTS idx_ingestion_timestamp ON file_ingestion_log(ingestion_timestamp);
+    
+    COMMENT ON COLUMN file_ingestion_log.ingestion_details IS 'Optional JSONB for multi-table ingestion breakdown (e.g., TikTok comments split into 2 tables)';
 EOF
     """,
     dag=dag,

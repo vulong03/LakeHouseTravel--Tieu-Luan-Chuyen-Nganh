@@ -31,6 +31,9 @@ RUN curl -L https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/${HADOOP
 RUN curl -L https://repo1.maven.org/maven2/org/postgresql/postgresql/${POSTGRESQL_JDBC_VERSION}/postgresql-${POSTGRESQL_JDBC_VERSION}.jar \
     -o /opt/spark/jars/postgresql-${POSTGRESQL_JDBC_VERSION}.jar
 
+# Install Python dependencies (psycopg2 for direct PostgreSQL access)
+RUN pip install --no-cache-dir psycopg2-binary
+
 # Create directories
 RUN mkdir -p /opt/spark/jobs /opt/spark/logs /opt/spark/work-dir && \
     chown -R spark:spark /opt/spark/jobs /opt/spark/logs /opt/spark/work-dir

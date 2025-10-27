@@ -5,8 +5,13 @@ Provides functions to track ingested files and detect content changes
 
 import hashlib
 from pathlib import Path
-from typing import Optional, Dict
-from pyspark.sql import SparkSession
+from typing import Optional, Dict, Tuple
+
+# Lazy import pyspark (only available in spark-submit context)
+try:
+    from pyspark.sql import SparkSession
+except ImportError:
+    SparkSession = None  # Will be None when testing outside spark-submit
 
 
 class FileTracker:
@@ -176,7 +181,7 @@ class FileTracker:
         except Exception as e:
             print(f"⚠️  Warning: Could not log ingestion: {str(e)}")
     
-    def should_process_file(self, file_path: str) -> tuple[bool, Optional[str], Optional[Dict]]:
+    def should_process_file(self, file_path: str) -> Tuple[bool, Optional[str], Optional[Dict]]:
         """
         Determine if file should be processed based on checksum
         
@@ -214,3 +219,145 @@ def print_skip_message(file_path: str, previous_info: Optional[Dict]):
         print(f"   Records: {previous_info['records_ingested']} | Table: {previous_info['table_name']}")
     else:
         print(f"⏭️  SKIP: {file_name} (already processed)")
+
+
+# =============================================================================
+# Standalone Functions for Bronze Layer Ingestion (Option B Implementation)
+# =============================================================================
+
+def calculate_file_checksum(file_path: str) -> str:
+    """
+    Calculate MD5 checksum for a file.
+    Standalone version for use in ingestion scripts.
+    
+    Args:
+        file_path: Full path to the file
+        
+    Returns:
+        MD5 hash as hex string
+    """
+    import hashlib
+    
+    md5_hash = hashlib.md5()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            md5_hash.update(chunk)
+    return md5_hash.hexdigest()
+
+
+def check_if_file_ingested(file_checksum: str, postgres_conn_params: dict) -> bool:
+    """
+    Check if a file with the given checksum has already been ingested.
+    
+    Args:
+        file_checksum: MD5 hash of the file
+        postgres_conn_params: Dict with host, port, database, user, password
+        
+    Returns:
+        bool: True if file already ingested, False otherwise
+    """
+    import psycopg2
+    
+    try:
+        conn = psycopg2.connect(**postgres_conn_params)
+        cursor = conn.cursor()
+        
+        query = """
+            SELECT COUNT(*) FROM file_ingestion_log 
+            WHERE file_checksum = %s AND status = 'success'
+        """
+        cursor.execute(query, (file_checksum,))
+        count = cursor.fetchone()[0]
+        
+        cursor.close()
+        conn.close()
+        
+        return count > 0
+    except Exception as e:
+        print(f"Error checking file ingestion status: {str(e)}")
+        return False
+
+
+def log_ingestion_to_postgres(
+    file_path: str,
+    file_checksum: str,
+    records_ingested: int,
+    table_name: str,
+    status: str,
+    postgres_conn_params: dict,
+    error_message: str = None,
+    ingestion_details: dict = None
+):
+    """
+    Log file ingestion details to PostgreSQL tracking table.
+    Supports optional ingestion_details for multi-table ingestion tracking.
+    
+    Args:
+        file_path: Full path to the ingested file
+        file_checksum: MD5 hash of the file
+        records_ingested: Number of records ingested (total across all tables)
+        table_name: Primary target Bronze table name
+        status: 'success', 'failed', or 'in_progress'
+        postgres_conn_params: Dict with host, port, database, user, password
+        error_message: Optional error message if status='failed'
+        ingestion_details: Optional dict for multi-table ingestion breakdown
+                          Example: {
+                              "tables": [
+                                  {"name": "raw_tiktok_post_metadata", "records": 1},
+                                  {"name": "raw_tiktok_post_comments", "records": 150}
+                              ]
+                          }
+    """
+    import psycopg2
+    import json
+    import os
+    from datetime import datetime
+    
+    try:
+        conn = psycopg2.connect(**postgres_conn_params)
+        cursor = conn.cursor()
+        
+        file_name = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
+        
+        # Convert ingestion_details dict to JSON string for PostgreSQL JSONB column
+        ingestion_details_json = json.dumps(ingestion_details) if ingestion_details else None
+        
+        insert_query = """
+            INSERT INTO file_ingestion_log (
+                file_path, file_name, file_size_bytes, file_checksum,
+                ingestion_timestamp, records_ingested, table_name, 
+                status, error_message, ingestion_details
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (file_checksum) DO UPDATE SET
+                ingestion_timestamp = EXCLUDED.ingestion_timestamp,
+                records_ingested = EXCLUDED.records_ingested,
+                status = EXCLUDED.status,
+                error_message = EXCLUDED.error_message,
+                ingestion_details = EXCLUDED.ingestion_details
+        """
+        
+        cursor.execute(insert_query, (
+            file_path,
+            file_name,
+            file_size,
+            file_checksum,
+            datetime.now(),
+            records_ingested,
+            table_name,
+            status,
+            error_message,
+            ingestion_details_json
+        ))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        print(f"✅ Logged ingestion: {file_name} → {table_name} ({records_ingested} records)")
+        if ingestion_details:
+            print(f"   Multi-table details: {ingestion_details}")
+            
+    except Exception as e:
+        print(f"❌ Error logging to PostgreSQL: {str(e)}")
+        raise

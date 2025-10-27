@@ -12,47 +12,28 @@ Strategy: APPEND mode with incremental loading (checksum-based deduplication)
 import sys
 import os
 from datetime import datetime
-import hashlib
 
 # Add parent directory to path
 sys.path.append('/opt/spark/jobs')
 
 from utils.spark_session import get_spark_session
 from utils.iceberg_utils import create_iceberg_table_if_not_exists
+from utils.file_tracker import (
+    calculate_file_checksum,
+    check_if_file_ingested,
+    log_ingestion_to_postgres
+)
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, StringType, TimestampType
 
-
-def calculate_file_checksum(file_path):
-    """Calculate MD5 checksum of file"""
-    hash_md5 = hashlib.md5()
-    with open(file_path, 'rb') as f:
-        for chunk in iter(lambda: f.read(4096), b""):
-            hash_md5.update(chunk)
-    return hash_md5.hexdigest()
-
-
-def check_if_file_ingested(spark, file_checksum):
-    """Check if file already ingested by checksum"""
-    
-    try:
-        result = spark.read \
-            .format("jdbc") \
-            .option("url", "jdbc:postgresql://postgres:5432/metastore_db") \
-            .option("dbtable", "file_ingestion_log") \
-            .option("user", "lakehouse_user") \
-            .option("password", "lakehouse_pass") \
-            .option("driver", "org.postgresql.Driver") \
-            .load() \
-            .filter(F.col("file_checksum") == file_checksum) \
-            .filter(F.col("status") == "success") \
-            .count()
-        
-        return result > 0
-    
-    except Exception as e:
-        print(f"⚠️ Could not check tracking log: {e}")
-        return False
+# PostgreSQL connection parameters
+POSTGRES_CONN = {
+    'host': 'postgres',
+    'port': 5432,
+    'database': 'metastore_db',
+    'user': 'lakehouse_user',
+    'password': 'lakehouse_pass'
+}
 
 
 def get_existing_urls(spark):
@@ -240,7 +221,7 @@ def ingest_videos_metadata(spark, source_file_path):
     print(f"🔐 Checksum: {file_checksum}")
     
     # Check if exact file already ingested (by checksum)
-    if check_if_file_ingested(spark, file_checksum):
+    if check_if_file_ingested(file_checksum, POSTGRES_CONN):
         print(f"⏭️  File already ingested (checksum: {file_checksum[:8]}...)")
         print(f"   No changes detected, skipping ingestion")
         return 0
@@ -361,69 +342,15 @@ def ingest_videos_metadata(spark, source_file_path):
     
     # Log to PostgreSQL tracking table
     log_ingestion_to_postgres(
-        spark=spark,
         file_path=source_file_path,
-        file_name=file_name,
-        file_size=file_size,
         file_checksum=file_checksum,
         records_ingested=total_changes,
         table_name="bronze.raw_tiktok_video_links",
-        status="success"
+        status="success",
+        postgres_conn_params=POSTGRES_CONN
     )
     
     return total_changes
-
-
-def log_ingestion_to_postgres(spark, file_path, file_name, file_size, 
-                               file_checksum, records_ingested, table_name, status):
-    """Log ingestion to PostgreSQL tracking table"""
-    
-    try:
-        # Create tracking record with proper types
-        tracking_data = [(
-            file_path,
-            file_name,
-            int(file_size),
-            file_checksum,
-            datetime.now(),  # Use datetime object directly
-            int(records_ingested),
-            table_name,
-            status,
-            None  # error_message
-        )]
-        
-        # Define explicit schema
-        from pyspark.sql.types import StructType, StructField, StringType, LongType, IntegerType, TimestampType
-        
-        schema = StructType([
-            StructField("file_path", StringType(), False),
-            StructField("file_name", StringType(), False),
-            StructField("file_size_bytes", LongType(), True),
-            StructField("file_checksum", StringType(), False),
-            StructField("ingestion_timestamp", TimestampType(), False),  # Changed to TimestampType
-            StructField("records_ingested", IntegerType(), True),
-            StructField("table_name", StringType(), True),
-            StructField("status", StringType(), False),
-            StructField("error_message", StringType(), True)
-        ])
-        
-        tracking_df = spark.createDataFrame(tracking_data, schema)
-        
-        # Write to PostgreSQL
-        tracking_df.write \
-            .format("jdbc") \
-            .option("url", "jdbc:postgresql://postgres:5432/metastore_db") \
-            .option("dbtable", "file_ingestion_log") \
-            .option("user", "lakehouse_user") \
-            .option("password", "lakehouse_pass") \
-            .option("driver", "org.postgresql.Driver") \
-            .mode("append") \
-            .save()
-        
-        print(f"📊 Logged to file_ingestion_log table")
-        
-    except Exception as e:
-        print(f"⚠️ Failed to log to PostgreSQL: {e}")
 
 
 def main():
