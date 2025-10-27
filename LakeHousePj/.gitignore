@@ -18,6 +18,9 @@ dremio/data/
 ml/mlflow/data/
 airflow/logs/
 spark/logs/
+spark/spark-events/
+pgadmin/data/
+airflow/postgres-data/
 
 # ============================================
 # Environment Files
