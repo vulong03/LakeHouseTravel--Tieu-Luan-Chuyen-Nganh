@@ -31,9 +31,11 @@ USER hive
 
 # Expose Metastore port
 EXPOSE 9083
+EXPOSE 10000
 
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
     CMD nc -z localhost 9083 || exit 1
-
+HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
+    CMD nc -z localhost 10000 || exit 1
 # Default entrypoint is inherited from base image

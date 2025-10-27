@@ -73,10 +73,12 @@ services:
       mc mb myminio/${BRONZE_BUCKET} --ignore-existing;
       mc mb myminio/${SILVER_BUCKET} --ignore-existing;
       mc mb myminio/${GOLD_BUCKET} --ignore-existing;
+      mc mb myminio/scratch --ignore-existing;
       echo 'Buckets created successfully';
       mc anonymous set download myminio/${BRONZE_BUCKET};
       mc anonymous set download myminio/${SILVER_BUCKET};
       mc anonymous set download myminio/${GOLD_BUCKET};
+      mc anonymous set download myminio/scratch;
       echo 'Bucket policies set successfully';
       exit 0;
       "
@@ -109,6 +111,7 @@ services:
         condition: service_healthy
     volumes:
       - ./hive/data:/opt/hive/data
+      - ./hive/init/hive-site.xml:/opt/hive/conf/hive-site.xml
     healthcheck:
       test: ["CMD", "nc", "-z", "localhost", "9083"]
       interval: 30s
@@ -116,6 +119,39 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Thêm vào services:
+  hive-server2:
+    build:
+      context: ./hive
+      dockerfile: Dockerfile
+    container_name: lakehouse_hive_server2
+    hostname: hive-server2
+    networks:
+      - lakehouse_network
+    ports:
+      - "10000:10000"
+    environment:
+      JAVA_OPTS: "-Dhive.conf.dir=/opt/hive/conf"
+      SERVICE_NAME: hiveserver2
+      DB_DRIVER: postgres
+      SERVICE_OPTS: >-
+        -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
+        -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+        -Djavax.jdo.option.ConnectionUserName=${POSTGRES_USER}
+        -Djavax.jdo.option.ConnectionPassword=${POSTGRES_PASSWORD}
+    depends_on:
+      hive-metastore:
+        condition: service_healthy
+    volumes:
+      - ./hive/data:/opt/hive/data
+      - ./hive/init/hive-site.xml:/opt/hive/conf/hive-site.xml
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "10000"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    command: bash -c "export HIVE_CONF_DIR=/opt/hive/conf; /opt/hive/bin/hive --service hiveserver2"
   # ============================================
   # Spark Master - Cluster Coordinator
   # ============================================

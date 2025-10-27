@@ -72,8 +72,8 @@
     <!-- ============================================ -->
     <property>
         <name>hive.metastore.warehouse.dir</name>
-        <value>s3a://bronze/warehouse</value>
-        <description>Default warehouse location</description>
+        <value>s3a://bronze/lakehouse</value>
+        <description>Lakehouse warehouse - shared with Spark jobs</description>
     </property>
     
     <property>
@@ -104,5 +104,73 @@
         <name>hive.metastore.event.db.notification.api.auth</name>
         <value>false</value>
         <description>Disable event notification auth</description>
+    </property>
+    <property>
+        <name>hive.server2.thrift.port</name>
+        <value>10000</value>
+    </property>
+    <property>
+        <name>hive.server2.thrift.bind.host</name>
+        <value>0.0.0.0</value>
+    </property>
+    <property>
+        <name>hive.server2.authentication</name>
+        <value>NOSASL</value>
+    </property>
+    <property>
+        <name>hive.server2.enable.doAs</name>
+        <value>false</value>
+    </property>
+
+    <!-- ============================================ -->
+    <!-- Filesystem Settings for S3/MinIO -->
+    <!-- ============================================ -->
+    <property>
+        <name>fs.defaultFS</name>
+        <value>s3a://bronze</value>
+        <description>Default filesystem</description>
+    </property>
+
+    <property>
+        <name>hive.exec.scratchdir</name>
+        <value>s3a://scratch/hive</value>
+        <description>Scratch directory on dedicated scratch bucket</description>
+    </property>
+
+    <property>
+        <name>hive.exec.local.scratchdir</name>
+        <value>/tmp/hive</value>
+        <description>Local scratch directory</description>
+    </property>
+
+    <property>
+        <name>hive.downloaded.resources.dir</name>
+        <value>/tmp/hive/resources</value>
+        <description>Downloaded resources directory</description>
+    </property>
+
+    <property>
+        <name>hive.querylog.location</name>
+        <value>/tmp/hive/querylog</value>
+        <description>Query log location</description>
+    </property>
+
+    <property>
+        <name>hive.server2.logging.operation.log.location</name>
+        <value>/tmp/hive/operation_logs</value>
+        <description>Operation logs location</description>
+    </property>
+
+    <!-- Disable authorization checks that require HDFS -->
+    <property>
+        <name>hive.security.authorization.enabled</name>
+        <value>false</value>
+        <description>Disable authorization</description>
+    </property>
+
+    <property>
+        <name>hive.metastore.pre.event.listeners</name>
+        <value></value>
+        <description>Disable pre-event listeners</description>
     </property>
 </configuration>

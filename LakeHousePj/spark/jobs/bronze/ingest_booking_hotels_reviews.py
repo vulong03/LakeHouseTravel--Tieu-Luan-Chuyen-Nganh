@@ -100,7 +100,7 @@ def ingest_hotels_reviews(spark, source_file_path):
     print(f"🔐 Checksum: {file_checksum}")
     
     # Check if file already processed
-    if check_if_file_ingested(spark, file_checksum):
+    if check_if_file_ingested(file_checksum, POSTGRES_CONN):
         print(f"⏭️  File already ingested (checksum: {file_checksum[:8]}...)")
         return 0
     
