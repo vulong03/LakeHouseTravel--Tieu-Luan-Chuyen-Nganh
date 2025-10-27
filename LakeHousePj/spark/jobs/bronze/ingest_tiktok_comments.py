@@ -126,29 +126,6 @@ def create_bronze_comments_table(spark):
     )
 
 
-def check_if_file_ingested(spark, file_checksum):
-    """Check if file already ingested by checksum"""
-    
-    try:
-        result = spark.read \
-            .format("jdbc") \
-            .option("url", "jdbc:postgresql://postgres:5432/metastore_db") \
-            .option("dbtable", "file_ingestion_log") \
-            .option("user", "lakehouse_user") \
-            .option("password", "lakehouse_pass") \
-            .option("driver", "org.postgresql.Driver") \
-            .load() \
-            .filter(F.col("file_checksum") == file_checksum) \
-            .filter(F.col("status") == "success") \
-            .count()
-        
-        return result > 0
-    
-    except Exception as e:
-        print(f"⚠️ Could not check tracking log: {e}")
-        return False
-
-
 def parse_comment_file(file_path):
     """
     Parse TikTok comment CSV file

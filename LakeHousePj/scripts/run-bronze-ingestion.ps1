@@ -16,7 +16,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-$required_containers = @("lakehouse_spark_master", "lakehouse_postgres", "lakehouse_minio")
+$required_containers = @("lakehouse_spark_master", "lakehouse_postgres", "lakehouse_minio", "lakehouse_hive_metastore")
 foreach ($container in $required_containers) {
     if ($containers -notcontains $container) {
         Write-Host "ERROR: Required container '$container' is not running" -ForegroundColor Red
@@ -26,6 +26,22 @@ foreach ($container in $required_containers) {
 }
 Write-Host "All required containers are running" -ForegroundColor Green
 Write-Host ""
+
+# Define Spark Submit command template (consistent with Airflow DAG)
+$SPARK_SUBMIT_CMD = @"
+docker exec lakehouse_spark_master /opt/spark/bin/spark-submit \
+    --master spark://spark-master:7077 \
+    --deploy-mode client \
+    --jars /opt/spark/jars/postgresql-42.7.2.jar,/opt/spark/jars/iceberg-spark-runtime-3.5_2.12-1.4.3.jar \
+    --driver-class-path /opt/spark/jars/postgresql-42.7.2.jar \
+    --conf spark.sql.adaptive.enabled=true \
+    --conf spark.sql.adaptive.coalescePartitions.enabled=true \
+    --conf spark.sql.catalog.lakehouse=org.apache.iceberg.spark.SparkCatalog \
+    --conf spark.sql.catalog.lakehouse.type=hive \
+    --conf spark.sql.catalog.lakehouse.uri=thrift://hive-metastore:9083 \
+    --conf spark.sql.catalog.lakehouse.warehouse=s3a://bronze/ \
+    --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+"@
 
 # Initialize PostgreSQL tracking table
 Write-Host "========================================" -ForegroundColor Cyan
@@ -59,8 +75,16 @@ Write-Host ""
 
 docker exec lakehouse_spark_master /opt/spark/bin/spark-submit `
     --master spark://spark-master:7077 `
+    --deploy-mode client `
     --jars /opt/spark/jars/postgresql-42.7.2.jar,/opt/spark/jars/iceberg-spark-runtime-3.5_2.12-1.4.3.jar `
     --driver-class-path /opt/spark/jars/postgresql-42.7.2.jar `
+    --conf spark.sql.adaptive.enabled=true `
+    --conf spark.sql.adaptive.coalescePartitions.enabled=true `
+    --conf spark.sql.catalog.lakehouse=org.apache.iceberg.spark.SparkCatalog `
+    --conf spark.sql.catalog.lakehouse.type=hive `
+    --conf spark.sql.catalog.lakehouse.uri=thrift://hive-metastore:9083 `
+    --conf spark.sql.catalog.lakehouse.warehouse=s3a://bronze/ `
+    --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions `
     /opt/spark/jobs/bronze/ingest_tiktok_videos.py
 
 if ($LASTEXITCODE -eq 0) {
@@ -84,8 +108,16 @@ Write-Host ""
 
 docker exec lakehouse_spark_master /opt/spark/bin/spark-submit `
     --master spark://spark-master:7077 `
+    --deploy-mode client `
     --jars /opt/spark/jars/postgresql-42.7.2.jar,/opt/spark/jars/iceberg-spark-runtime-3.5_2.12-1.4.3.jar `
     --driver-class-path /opt/spark/jars/postgresql-42.7.2.jar `
+    --conf spark.sql.adaptive.enabled=true `
+    --conf spark.sql.adaptive.coalescePartitions.enabled=true `
+    --conf spark.sql.catalog.lakehouse=org.apache.iceberg.spark.SparkCatalog `
+    --conf spark.sql.catalog.lakehouse.type=hive `
+    --conf spark.sql.catalog.lakehouse.uri=thrift://hive-metastore:9083 `
+    --conf spark.sql.catalog.lakehouse.warehouse=s3a://bronze/ `
+    --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions `
     /opt/spark/jobs/bronze/ingest_tiktok_comments.py
 
 if ($LASTEXITCODE -eq 0) {
@@ -118,8 +150,16 @@ Write-Host ""
 
 docker exec lakehouse_spark_master /opt/spark/bin/spark-submit `
     --master spark://spark-master:7077 `
+    --deploy-mode client `
     --jars /opt/spark/jars/postgresql-42.7.2.jar,/opt/spark/jars/iceberg-spark-runtime-3.5_2.12-1.4.3.jar `
     --driver-class-path /opt/spark/jars/postgresql-42.7.2.jar `
+    --conf spark.sql.adaptive.enabled=true `
+    --conf spark.sql.adaptive.coalescePartitions.enabled=true `
+    --conf spark.sql.catalog.lakehouse=org.apache.iceberg.spark.SparkCatalog `
+    --conf spark.sql.catalog.lakehouse.type=hive `
+    --conf spark.sql.catalog.lakehouse.uri=thrift://hive-metastore:9083 `
+    --conf spark.sql.catalog.lakehouse.warehouse=s3a://bronze/ `
+    --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions `
     /opt/spark/jobs/bronze/ingest_booking_hotels_list.py
 
 if ($LASTEXITCODE -eq 0) {
@@ -143,8 +183,16 @@ Write-Host ""
 
 docker exec lakehouse_spark_master /opt/spark/bin/spark-submit `
     --master spark://spark-master:7077 `
+    --deploy-mode client `
     --jars /opt/spark/jars/postgresql-42.7.2.jar,/opt/spark/jars/iceberg-spark-runtime-3.5_2.12-1.4.3.jar `
     --driver-class-path /opt/spark/jars/postgresql-42.7.2.jar `
+    --conf spark.sql.adaptive.enabled=true `
+    --conf spark.sql.adaptive.coalescePartitions.enabled=true `
+    --conf spark.sql.catalog.lakehouse=org.apache.iceberg.spark.SparkCatalog `
+    --conf spark.sql.catalog.lakehouse.type=hive `
+    --conf spark.sql.catalog.lakehouse.uri=thrift://hive-metastore:9083 `
+    --conf spark.sql.catalog.lakehouse.warehouse=s3a://bronze/ `
+    --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions `
     /opt/spark/jobs/bronze/ingest_booking_hotels_detail.py
 
 if ($LASTEXITCODE -eq 0) {
@@ -168,8 +216,16 @@ Write-Host ""
 
 docker exec lakehouse_spark_master /opt/spark/bin/spark-submit `
     --master spark://spark-master:7077 `
+    --deploy-mode client `
     --jars /opt/spark/jars/postgresql-42.7.2.jar,/opt/spark/jars/iceberg-spark-runtime-3.5_2.12-1.4.3.jar `
     --driver-class-path /opt/spark/jars/postgresql-42.7.2.jar `
+    --conf spark.sql.adaptive.enabled=true `
+    --conf spark.sql.adaptive.coalescePartitions.enabled=true `
+    --conf spark.sql.catalog.lakehouse=org.apache.iceberg.spark.SparkCatalog `
+    --conf spark.sql.catalog.lakehouse.type=hive `
+    --conf spark.sql.catalog.lakehouse.uri=thrift://hive-metastore:9083 `
+    --conf spark.sql.catalog.lakehouse.warehouse=s3a://bronze/ `
+    --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions `
     /opt/spark/jobs/bronze/ingest_booking_hotels_reviews.py
 
 if ($LASTEXITCODE -eq 0) {
