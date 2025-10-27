@@ -59,6 +59,8 @@ Write-Host ""
 
 docker exec lakehouse_spark_master /opt/spark/bin/spark-submit `
     --master spark://spark-master:7077 `
+    --jars /opt/spark/jars/postgresql-42.7.2.jar,/opt/spark/jars/iceberg-spark-runtime-3.5_2.12-1.4.3.jar `
+    --driver-class-path /opt/spark/jars/postgresql-42.7.2.jar `
     /opt/spark/jobs/bronze/ingest_tiktok_videos.py
 
 if ($LASTEXITCODE -eq 0) {
@@ -82,6 +84,8 @@ Write-Host ""
 
 docker exec lakehouse_spark_master /opt/spark/bin/spark-submit `
     --master spark://spark-master:7077 `
+    --jars /opt/spark/jars/postgresql-42.7.2.jar,/opt/spark/jars/iceberg-spark-runtime-3.5_2.12-1.4.3.jar `
+    --driver-class-path /opt/spark/jars/postgresql-42.7.2.jar `
     /opt/spark/jobs/bronze/ingest_tiktok_comments.py
 
 if ($LASTEXITCODE -eq 0) {
@@ -114,6 +118,8 @@ Write-Host ""
 
 docker exec lakehouse_spark_master /opt/spark/bin/spark-submit `
     --master spark://spark-master:7077 `
+    --jars /opt/spark/jars/postgresql-42.7.2.jar,/opt/spark/jars/iceberg-spark-runtime-3.5_2.12-1.4.3.jar `
+    --driver-class-path /opt/spark/jars/postgresql-42.7.2.jar `
     /opt/spark/jobs/bronze/ingest_booking_hotels_list.py
 
 if ($LASTEXITCODE -eq 0) {
@@ -137,6 +143,8 @@ Write-Host ""
 
 docker exec lakehouse_spark_master /opt/spark/bin/spark-submit `
     --master spark://spark-master:7077 `
+    --jars /opt/spark/jars/postgresql-42.7.2.jar,/opt/spark/jars/iceberg-spark-runtime-3.5_2.12-1.4.3.jar `
+    --driver-class-path /opt/spark/jars/postgresql-42.7.2.jar `
     /opt/spark/jobs/bronze/ingest_booking_hotels_detail.py
 
 if ($LASTEXITCODE -eq 0) {
@@ -160,6 +168,8 @@ Write-Host ""
 
 docker exec lakehouse_spark_master /opt/spark/bin/spark-submit `
     --master spark://spark-master:7077 `
+    --jars /opt/spark/jars/postgresql-42.7.2.jar,/opt/spark/jars/iceberg-spark-runtime-3.5_2.12-1.4.3.jar `
+    --driver-class-path /opt/spark/jars/postgresql-42.7.2.jar `
     /opt/spark/jobs/bronze/ingest_booking_hotels_reviews.py
 
 if ($LASTEXITCODE -eq 0) {
