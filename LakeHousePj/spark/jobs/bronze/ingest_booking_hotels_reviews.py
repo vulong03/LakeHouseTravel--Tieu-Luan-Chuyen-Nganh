@@ -4,9 +4,10 @@ Source: /data/raw/booking/vietnam_hotels_reviews.csv
 Target: lakehouse.bronze.raw_booking_hotels_reviews
 
 Strategy: 
-- Load RAW data AS-IS (no transformation, no deduplication)
+- Load RAW data AS-IS (no transformation)
 - File-level checksum tracking
-- APPEND mode
+- Row-level checksum for deduplication
+- MERGE/UPSERT mode (single file can be updated)
 - NO partition (reviews data structure doesn't have province)
 """
 
@@ -18,6 +19,7 @@ sys.path.append('/opt/spark/jobs')
 
 from utils.spark_session import get_spark_session
 from utils.iceberg_utils import create_iceberg_table_if_not_exists
+from utils.merge_utils import calculate_row_checksum
 from utils.file_tracker import (
     calculate_file_checksum,
     check_if_file_ingested,
@@ -51,6 +53,9 @@ def create_bronze_table(spark):
         StructField("review_score", StringType(), True),
         StructField("review_positive", StringType(), True),
         StructField("review_negative", StringType(), True),
+        
+        # Row-level checksum for deduplication
+        StructField("row_checksum", StringType(), False),
         
         # Metadata columns
         StructField("ingestion_timestamp", TimestampType(), False),
@@ -123,11 +128,16 @@ def ingest_hotels_reviews(spark, source_file_path):
         valid_records = df.count()
         print(f"   ➡️  Keeping {valid_records} valid reviews (filtered out {null_count} NULL records)")
     
-    # Show data quality stats
-    print(f"\n📊 Data quality stats:")
-    print(f"   - Reviews with positive text: {df.filter(F.col('review_positive').isNotNull() & (F.col('review_positive') != '')).count()}")
-    print(f"   - Reviews with negative text: {df.filter(F.col('review_negative').isNotNull() & (F.col('review_negative') != '')).count()}")
-    print(f"   - Reviews with score: {df.filter(F.col('review_score').isNotNull() & (F.col('review_score') != '')).count()}")
+    # ============================================================================
+    # ⚠️ COMMENTED OUT - Too expensive for large datasets (1.4M rows)
+    # These operations cause multiple full scans and can freeze Spark workers
+    # Uncomment only for small test datasets
+    # ============================================================================
+    # # Show data quality stats
+    # print(f"\n📊 Data quality stats:")
+    # print(f"   - Reviews with positive text: {df.filter(F.col('review_positive').isNotNull() & (F.col('review_positive') != '')).count()}")
+    # print(f"   - Reviews with negative text: {df.filter(F.col('review_negative').isNotNull() & (F.col('review_negative') != '')).count()}")
+    # print(f"   - Reviews with score: {df.filter(F.col('review_score').isNotNull() & (F.col('review_score') != '')).count()}")
     
     # Add metadata columns
     df_with_metadata = df \
@@ -135,34 +145,75 @@ def ingest_hotels_reviews(spark, source_file_path):
         .withColumn("source_file", F.lit(file_name)) \
         .withColumn("source_file_checksum", F.lit(file_checksum))
     
-    # Show sample data
-    print(f"\n📋 Sample data (first 3 rows):")
-    df_with_metadata.select("hotel_name", "reviewer_name", "reviewer_country", "review_score", "review_title").show(3, truncate=False)
+    # # Show sample data
+    # print(f"\n📋 Sample data (first 3 rows):")
+    # df_with_metadata.select("hotel_name", "reviewer_name", "reviewer_country", "review_score", "review_title").show(3, truncate=False)
+    # 
+    # # Show reviews per hotel
+    # print(f"\n📊 Top 10 hotels by review count:")
+    # df_with_metadata.groupBy("hotel_name") \
+    #     .count() \
+    #     .orderBy(F.desc("count")) \
+    #     .show(10, truncate=False)
+    # 
+    # # Show traveler type distribution
+    # print(f"\n📊 Traveler type distribution:")
+    # df_with_metadata.groupBy("traveler_type") \
+    #     .count() \
+    #     .orderBy(F.desc("count")) \
+    #     .show(truncate=False)
+    # ============================================================================
     
-    # Show reviews per hotel
-    print(f"\n📊 Top 10 hotels by review count:")
-    df_with_metadata.groupBy("hotel_name") \
-        .count() \
-        .orderBy(F.desc("count")) \
-        .show(10, truncate=False)
+    # Calculate row checksum BEFORE adding metadata
+    business_columns = [
+        "hotel_name", "reviewer_name", "reviewer_country",
+        "room_type", "stay_date", "traveler_type", "review_date",
+        "review_title", "review_score", "review_positive", "review_negative"
+    ]
     
-    # Show traveler type distribution
-    print(f"\n📊 Traveler type distribution:")
-    df_with_metadata.groupBy("traveler_type") \
-        .count() \
-        .orderBy(F.desc("count")) \
-        .show(truncate=False)
+    df_with_checksum = calculate_row_checksum(df_with_metadata, business_columns)
     
-    # Get final record count after filtering
-    final_record_count = df_with_metadata.count()
+    # Get existing checksums for deduplication using LEFT ANTI JOIN (much faster than .isin())
+    try:
+        existing_df = spark.table("lakehouse.bronze.raw_booking_hotels_reviews")
+        existing_count = existing_df.count()
+        print(f"\n📊 Existing reviews in Bronze: {existing_count}")
+        
+        # Use LEFT ANTI JOIN instead of .collect() + .isin() for better performance
+        print(f"🔍 Deduplicating using LEFT ANTI JOIN (distributed operation)...")
+        df_new = df_with_checksum.join(
+            existing_df.select("row_checksum"),
+            on="row_checksum",
+            how="left_anti"  # Keep only rows from left that DON'T match right
+        )
+        
+        new_count = df_new.count()
+        total_count = df_with_checksum.count()
+        duplicate_count = total_count - new_count
+        
+        print(f"\n🔍 Deduplication results:")
+        print(f"   - Total reviews in file: {total_count}")
+        print(f"   - New reviews to ingest: {new_count}")
+        print(f"   - Duplicate reviews (skipped): {duplicate_count}")
+        
+    except Exception as e:
+        print(f"\n📊 Table is empty or doesn't exist yet ({e})")
+        df_new = df_with_checksum
+        new_count = df_new.count()
+        print(f"\n🔍 All {new_count} reviews are new (first ingestion)")
     
-    # Write to Bronze table (APPEND mode, NO deduplication)
-    print(f"\n💾 Appending {final_record_count} records to Bronze table...")
-    df_with_metadata.writeTo("lakehouse.bronze.raw_booking_hotels_reviews") \
-        .using("iceberg") \
-        .append()
-    
-    print(f"   ✅ Successfully ingested {final_record_count} records")
+    # Only write if there are new reviews
+    if new_count > 0:
+        print(f"\n💾 Appending {new_count} NEW reviews to Bronze table...")
+        df_new.writeTo("lakehouse.bronze.raw_booking_hotels_reviews") \
+            .using("iceberg") \
+            .append()
+        
+        print(f"   ✅ Successfully ingested {new_count} new reviews")
+        final_record_count = new_count
+    else:
+        print(f"\n⏭️  No new reviews to ingest (all are duplicates)")
+        final_record_count = 0
     
     # Log to PostgreSQL tracking table
     log_ingestion_to_postgres(

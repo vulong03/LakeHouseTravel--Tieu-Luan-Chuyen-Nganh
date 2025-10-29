@@ -3,10 +3,15 @@ Bronze Layer - Ingest TikTok Videos Metadata
 Source: data/raw/tiktok/links/merged_videos.csv
 Target: lakehouse.bronze.raw_tiktok_video_links
 
-Strategy: APPEND mode with incremental loading (checksum-based deduplication)
+Strategy: APPEND mode with incremental loading (row-level checksum detection)
 - Detects file changes via checksum comparison
-- Only ingests new/modified records (not previously seen URLs)
+- Row-level change detection using row_checksum
+- Only updates records that have actually changed
 - Preserves historical ingestion timestamps
+
+Note: If upgrading from old schema (without row_checksum), 
+      you need to DROP and RECREATE the table:
+      DROP TABLE lakehouse.bronze.raw_tiktok_video_links;
 """
 
 import sys
@@ -18,6 +23,7 @@ sys.path.append('/opt/spark/jobs')
 
 from utils.spark_session import get_spark_session
 from utils.iceberg_utils import create_iceberg_table_if_not_exists
+from utils.merge_utils import calculate_row_checksum
 from utils.file_tracker import (
     calculate_file_checksum,
     check_if_file_ingested,
@@ -52,31 +58,29 @@ def get_existing_urls(spark):
 
 
 def get_all_existing_urls_with_metadata(spark):
-    """Get all existing URLs with their metadata for comparison"""
+    """Get all existing URLs with their row checksums for comparison"""
     
     try:
         existing_df = spark.table("lakehouse.bronze.raw_tiktok_video_links") \
             .filter((F.col("is_deleted").isNull()) | (F.col("is_deleted") == "false"))
         
-        # Return as dict: {url: {posted_date, read_status, ...}}
-        existing_data = {}
-        for row in existing_df.collect():
-            existing_data[row.url] = {
-                'posted_date': row.posted_date,
-                'read_status': row.read_status,
-                'keyword': row.keyword,
-                'ques_id': row.ques_id,
-                'target_type': row.target_type,
-                'region': row.region,
-                'has_sub': row.has_sub,
-                'vi_sub': row.vi_sub
-            }
+        # Check if row_checksum column exists
+        if "row_checksum" not in existing_df.columns:
+            print(f"⚠️ Table does not have row_checksum column yet (old schema)")
+            print(f"   Will treat all existing URLs as needing update")
+            # Return empty dict - all records will be treated as changed
+            return {}
         
-        print(f"📊 Loaded {len(existing_data)} existing URLs with metadata")
+        # Return as dict: {url: row_checksum} - simplified!
+        existing_data = {}
+        for row in existing_df.select("url", "row_checksum").collect():
+            existing_data[row.url] = row.row_checksum
+        
+        print(f"📊 Loaded {len(existing_data)} existing URLs with checksums")
         return existing_data
     
     except Exception as e:
-        print(f"⚠️ Could not load existing metadata: {e}")
+        print(f"⚠️ Could not load existing checksums: {e}")
         return {}
 
 
@@ -127,7 +131,7 @@ def update_existing_urls(spark, updated_records):
         updated_df = spark.createDataFrame(updated_records)
         updated_df.createOrReplaceTempView("updated_urls_temp")
         
-        # Use Iceberg MERGE to update metadata
+        # Use Iceberg MERGE to update metadata including row_checksum
         spark.sql("""
             MERGE INTO lakehouse.bronze.raw_tiktok_video_links AS target
             USING updated_urls_temp AS source
@@ -141,6 +145,7 @@ def update_existing_urls(spark, updated_records):
                 target.region = source.region,
                 target.has_sub = source.has_sub,
                 target.vi_sub = source.vi_sub,
+                target.row_checksum = source.row_checksum,
                 target.source_file = source.source_file,
                 target.source_file_checksum = source.source_file_checksum,
                 target.last_updated_at = current_timestamp()
@@ -167,6 +172,9 @@ def create_bronze_videos_table(spark):
         StructField("region", StringType(), True),
         StructField("has_sub", StringType(), True),
         StructField("vi_sub", StringType(), True),
+        
+        # Row checksum for change detection
+        StructField("row_checksum", StringType(), False),
         
         # Metadata columns
         StructField("ingestion_timestamp", TimestampType(), False),
@@ -269,13 +277,20 @@ def ingest_videos_metadata(spark, source_file_path):
             .withColumn("deleted_at", F.lit(None).cast(TimestampType())) \
             .withColumn("last_updated_at", F.lit(datetime.now()))
         
+        # Calculate row checksum for change detection
+        business_columns = [
+            "url", "posted_date", "read_status", "keyword", "ques_id",
+            "target_type", "region", "has_sub", "vi_sub"
+        ]
+        df_new_with_checksum = calculate_row_checksum(df_new_with_metadata, business_columns)
+        
         # Show sample
         print(f"\n📋 Sample new data:")
-        df_new_with_metadata.select("url", "keyword", "region", "read_status").show(5, truncate=False)
+        df_new_with_checksum.select("url", "keyword", "region", "read_status").show(5, truncate=False)
         
         # Write to Bronze table (APPEND mode)
         print(f"\n💾 Appending {new_record_count} new URLs to Bronze table...")
-        df_new_with_metadata.writeTo("lakehouse.bronze.raw_tiktok_video_links") \
+        df_new_with_checksum.writeTo("lakehouse.bronze.raw_tiktok_video_links") \
             .using("iceberg") \
             .append()
         
@@ -291,36 +306,29 @@ def ingest_videos_metadata(spark, source_file_path):
     if common_urls:
         print(f"\n🔍 Checking {len(common_urls)} existing URLs for metadata changes...")
         
-        for row in df.filter(F.col("url").isin(common_urls)).collect():
+        # Get current data for common URLs
+        df_current = df.filter(F.col("url").isin(common_urls))
+        
+        # Add metadata columns
+        df_current_with_meta = df_current \
+            .withColumn("source_file", F.lit(file_name)) \
+            .withColumn("source_file_checksum", F.lit(file_checksum))
+        
+        # Calculate row checksum
+        business_columns = [
+            "url", "posted_date", "read_status", "keyword", "ques_id",
+            "target_type", "region", "has_sub", "vi_sub"
+        ]
+        df_current_with_checksum = calculate_row_checksum(df_current_with_meta, business_columns)
+        
+        # Compare checksums - SIMPLIFIED!
+        for row in df_current_with_checksum.collect():
             url = row.url
-            existing = existing_metadata.get(url, {})
+            existing_checksum = existing_metadata.get(url, '')
             
-            # Check if any metadata field has changed
-            has_changes = (
-                row.posted_date != existing.get('posted_date') or
-                row.read_status != existing.get('read_status') or
-                row.keyword != existing.get('keyword') or
-                row.ques_id != existing.get('ques_id') or
-                row.target_type != existing.get('target_type') or
-                row.region != existing.get('region') or
-                row.has_sub != existing.get('has_sub') or
-                row.vi_sub != existing.get('vi_sub')
-            )
-            
-            if has_changes:
-                updated_records.append({
-                    'url': url,
-                    'posted_date': row.posted_date,
-                    'read_status': row.read_status,
-                    'keyword': row.keyword,
-                    'ques_id': row.ques_id,
-                    'target_type': row.target_type,
-                    'region': row.region,
-                    'has_sub': row.has_sub,
-                    'vi_sub': row.vi_sub,
-                    'source_file': file_name,
-                    'source_file_checksum': file_checksum
-                })
+            # Single comparison instead of 8!
+            if row.row_checksum != existing_checksum:
+                updated_records.append(row.asDict())
         
         if updated_records:
             print(f"\n🔄 Detected {len(updated_records)} URLs with metadata changes")

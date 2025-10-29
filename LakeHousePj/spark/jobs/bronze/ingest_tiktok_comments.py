@@ -78,7 +78,7 @@ def create_bronze_posts_table(spark):
     create_iceberg_table_if_not_exists(
         spark=spark,
         database="bronze",
-        table_name="raw_tiktok_post_metadata  ",
+        table_name="raw_tiktok_post_metadata",
         schema=schema,
         partition_by=[],
         table_properties={
@@ -220,7 +220,7 @@ def ingest_comment_file(spark, file_path, file_checksum, file_name, file_size):
     post_df = spark.createDataFrame([post_metadata])
     
     # Write to posts table
-    post_df.writeTo("lakehouse.bronze.raw_tiktok_post_metadata  ") \
+    post_df.writeTo("lakehouse.bronze.raw_tiktok_post_metadata") \
         .using("iceberg") \
         .append()
     
