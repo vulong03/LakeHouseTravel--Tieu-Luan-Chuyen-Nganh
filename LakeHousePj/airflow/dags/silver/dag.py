@@ -1,14 +1,17 @@
 """
-Silver Layer Transformation DAG (Template)
-Clean, validate, and enrich Bronze data into Silver layer
+Silver Layer Transformation DAG
+Transform Bronze CSV files into Silver Iceberg tables with UPSERT/APPEND logic
 
-TODO: Implement Silver transformation jobs when ready
+Features:
+- UPSERT mode for hotels_detail, hotels_list, tiktok_videos (latest file only)
+- APPEND mode for hotels_reviews, tiktok_comments (multi-file incremental)
+- File size tracking in PostgreSQL
+- Row-level checksum deduplication
 """
 
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator, ShortCircuitOperator
-from airflow.operators.empty import EmptyOperator
 
 import sys
 import os
@@ -19,7 +22,7 @@ from common.health_checks import check_docker_health
 from common.notifications import log_dag_start, log_dag_complete
 from silver.config import (
     DAG_ID, DESCRIPTION, TAGS, SCHEDULE_INTERVAL,
-    START_DATE, CATCHUP, DEFAULT_ARGS
+    START_DATE, CATCHUP, DEFAULT_ARGS, SILVER_JOBS
 )
 
 # ============================================
@@ -37,10 +40,10 @@ dag = DAG(
 )
 
 # ============================================
-# Tasks (Placeholder)
+# Tasks
 # ============================================
 
-# Health Check
+# Task 0: Health Check
 health_check = ShortCircuitOperator(
     task_id='check_docker_health',
     python_callable=check_docker_health,
@@ -48,7 +51,7 @@ health_check = ShortCircuitOperator(
     dag=dag,
 )
 
-# Start
+# Task 1: Start
 start_task = PythonOperator(
     task_id='start_task',
     python_callable=log_dag_start,
@@ -56,23 +59,43 @@ start_task = PythonOperator(
     dag=dag,
 )
 
-# TODO: Implement these tasks when Silver jobs are ready
-clean_tiktok = EmptyOperator(
-    task_id='clean_tiktok_data',
+# ============================================
+# Silver Transformation Tasks
+# ============================================
+
+# Booking.com Hotels (UPSERT mode)
+transform_hotels_detail = BashOperator(
+    task_id='transform_hotels_detail',
+    bash_command=SparkSubmitCommand.silver_job(SILVER_JOBS['transform_hotels_detail']),
     dag=dag,
 )
 
-clean_booking = EmptyOperator(
-    task_id='clean_booking_data',
+transform_hotels_list = BashOperator(
+    task_id='transform_hotels_list',
+    bash_command=SparkSubmitCommand.silver_job(SILVER_JOBS['transform_hotels_list']),
     dag=dag,
 )
 
-enrich_data = EmptyOperator(
-    task_id='enrich_data',
+transform_hotels_reviews = BashOperator(
+    task_id='transform_hotels_reviews',
+    bash_command=SparkSubmitCommand.silver_job(SILVER_JOBS['transform_hotels_reviews']),
     dag=dag,
 )
 
-# Complete
+# TikTok (UPSERT for videos, APPEND for comments)
+transform_tiktok_videos = BashOperator(
+    task_id='transform_tiktok_videos',
+    bash_command=SparkSubmitCommand.silver_job(SILVER_JOBS['transform_tiktok_videos']),
+    dag=dag,
+)
+
+transform_tiktok_comments = BashOperator(
+    task_id='transform_tiktok_comments',
+    bash_command=SparkSubmitCommand.silver_job(SILVER_JOBS['transform_tiktok_comments']),
+    dag=dag,
+)
+
+# Task: Complete
 complete_task = PythonOperator(
     task_id='complete_task',
     python_callable=log_dag_complete,
@@ -84,4 +107,18 @@ complete_task = PythonOperator(
 # Dependencies
 # ============================================
 
-health_check >> start_task >> [clean_tiktok, clean_booking] >> enrich_data >> complete_task
+health_check >> start_task
+
+# Booking.com pipeline (parallel)
+start_task >> [transform_hotels_detail, transform_hotels_list, transform_hotels_reviews]
+
+# TikTok pipeline (videos first, then comments)
+start_task >> transform_tiktok_videos >> transform_tiktok_comments
+
+# Complete
+[
+    transform_hotels_detail,
+    transform_hotels_list,
+    transform_hotels_reviews,
+    transform_tiktok_comments
+] >> complete_task

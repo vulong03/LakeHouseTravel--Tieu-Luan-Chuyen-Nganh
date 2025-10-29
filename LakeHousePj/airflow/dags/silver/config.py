@@ -1,16 +1,17 @@
 """
 Silver Layer DAG Configuration
+Transform Bronze data into Silver layer with UPSERT and file size tracking
 """
 
 from datetime import datetime, timedelta
 
 # DAG metadata
 DAG_ID = 'silver_layer_transformation'
-DESCRIPTION = 'Clean, validate, and enrich Bronze data into Silver layer'
-TAGS = ['silver', 'transformation', 'cleaning', 'validation']
+DESCRIPTION = 'Transform Bronze CSV files into Silver Iceberg tables with UPSERT/APPEND logic'
+TAGS = ['silver', 'transformation', 'upsert', 'deduplication', 'file-tracking']
 
 # Schedule
-SCHEDULE_INTERVAL = '@daily'  # Run daily after Bronze
+SCHEDULE_INTERVAL = None  # Manual trigger (change to '@daily' for automation)
 START_DATE = datetime(2025, 1, 1)
 CATCHUP = False
 
@@ -25,10 +26,20 @@ DEFAULT_ARGS = {
     'execution_timeout': timedelta(hours=3),
 }
 
-# Silver Spark jobs
+# Required containers for health check
+REQUIRED_CONTAINERS = [
+    'lakehouse_spark_master',
+    'lakehouse_postgres',
+    'lakehouse_minio',
+    'lakehouse_hive_metastore'
+]
+
+# Silver transformation jobs
+# Format: job_id: script_name (in /opt/spark/jobs/silver/)
 SILVER_JOBS = {
-    'clean_tiktok_videos': 'clean_tiktok_videos',
-    'clean_tiktok_comments': 'clean_tiktok_comments',
-    'clean_booking_hotels': 'clean_booking_hotels',
-    'enrich_location_data': 'enrich_location_data',
+    'transform_hotels_detail': 'transform_booking_hotels_detail',
+    'transform_hotels_list': 'transform_booking_hotels_list',
+    'transform_hotels_reviews': 'transform_booking_hotels_reviews',
+    'transform_tiktok_videos': 'transform_tiktok_videos',
+    'transform_tiktok_comments': 'transform_tiktok_comments',
 }
