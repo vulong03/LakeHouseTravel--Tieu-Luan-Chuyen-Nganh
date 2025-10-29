@@ -51,7 +51,8 @@ class SparkSubmitCommand:
         """Shortcut for Bronze layer jobs"""
         return cls.build(
             job_path=f'/opt/spark/jobs/bronze/{job_name}.py',
-            bucket='bronze'
+            bucket='bronze',
+            extra_conf=f'--conf spark.app.name=Bronze_{job_name}'
         )
     
     @classmethod
@@ -59,7 +60,8 @@ class SparkSubmitCommand:
         """Shortcut for Silver layer jobs"""
         return cls.build(
             job_path=f'/opt/spark/jobs/silver/{job_name}.py',
-            bucket='silver'
+            bucket='silver',
+            extra_conf=f'--conf spark.app.name=Silver_{job_name}'
         )
     
     @classmethod
@@ -67,5 +69,6 @@ class SparkSubmitCommand:
         """Shortcut for Gold layer jobs"""
         return cls.build(
             job_path=f'/opt/spark/jobs/gold/{job_name}.py',
-            bucket='gold'
+            bucket='gold',
+            extra_conf=f'--conf spark.app.name=Gold_{job_name}'
         )
