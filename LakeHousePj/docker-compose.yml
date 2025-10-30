@@ -110,7 +110,6 @@ services:
       minio:
         condition: service_healthy
     volumes:
-      - ./hive/data:/opt/hive/data
       - ./hive/init/hive-site.xml:/opt/hive/conf/hive-site.xml
     healthcheck:
       test: ["CMD", "nc", "-z", "localhost", "9083"]
@@ -143,7 +142,6 @@ services:
       hive-metastore:
         condition: service_healthy
     volumes:
-      - ./hive/data:/opt/hive/data
       - ./hive/init/hive-site.xml:/opt/hive/conf/hive-site.xml
     healthcheck:
       test: ["CMD", "nc", "-z", "localhost", "10000"]

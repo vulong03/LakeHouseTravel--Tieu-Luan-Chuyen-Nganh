@@ -9,6 +9,16 @@
       "Username": "lakehouse_user",
       "SSLMode": "prefer",
       "Comment": "Hive Metastore Database - Contains Iceberg table metadata (DBS, TBLS, COLUMNS_V2, PARTITIONS, etc.)"
+    },
+    "2": {
+      "Name": "Airflow PostgreSQL",
+      "Group": "Lakehouse Metadata",
+      "Host": "airflow-postgres",
+      "Port": 5432,
+      "MaintenanceDB": "airflow",
+      "Username": "airflow",
+      "SSLMode": "prefer",
+      "Comment": "Airflow Metadata Database - Contains DAG runs, task instances, connections, variables"
     }
   }
 }
