@@ -29,6 +29,34 @@ from silver.hotels_detail.config import (
 )
 
 
+# ============================================================================
+# S3 FILE SIZE UTILITY
+# ============================================================================
+
+def get_s3_file_size(spark, file_path):
+    """
+    Get file size in bytes from S3 using Hadoop FileSystem API
+    """
+    try:
+        hadoop_conf = spark._jsc.hadoopConfiguration()
+        fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(
+            spark._jvm.java.net.URI(file_path), 
+            hadoop_conf
+        )
+        
+        path = spark._jvm.org.apache.hadoop.fs.Path(file_path)
+        file_status = fs.getFileStatus(path)
+        size_bytes = file_status.getLen()
+        
+        size_mb = size_bytes / (1024 * 1024)
+        print(f"📦 File size: {size_mb:.2f} MB ({size_bytes:,} bytes)")
+        
+        return size_bytes
+    except Exception as e:
+        print(f"⚠️  Could not get file size: {e}")
+        return 0
+
+
 def get_latest_bronze_file(spark, bronze_base_path):
     """
     Find the latest Bronze file based on timestamp in filename
@@ -142,6 +170,9 @@ def transform_to_scratch(spark):
     print(f"\n📄 Processing: {file_name}")
     print(f"   Checksum: {file_checksum}")
     
+    # Get file size
+    file_size_bytes = get_s3_file_size(spark, latest_file_path)
+    
     # Read CSV from Bronze with multiLine option (PRESERVED FROM ORIGINAL)
     print(f"\n📖 Reading CSV from Bronze (with multiLine support for descriptions)...")
     df = spark.read \
@@ -171,11 +202,12 @@ def transform_to_scratch(spark):
     print(f"   - Hotels with reviews: {df.filter(F.col('review_count_text').isNotNull() & (F.col('review_count_text') != '')).count():,}")
     print(f"   - Hotels with activities: {df.filter(F.col('activities').isNotNull() & (F.col('activities') != '')).count():,}")
     
-    # Add metadata columns
+    # Add metadata columns (for tracking in Step 2)
     df_with_metadata = df \
         .withColumn("ingestion_timestamp", F.lit(datetime.now())) \
         .withColumn("source_file", F.lit(file_name)) \
-        .withColumn("source_file_checksum", F.lit(file_checksum))
+        .withColumn("source_file_checksum", F.lit(file_checksum)) \
+        .withColumn("source_file_size_bytes", F.lit(file_size_bytes))
     
     # Show sample data
     print(f"\n📋 Sample data (first 3 rows):")

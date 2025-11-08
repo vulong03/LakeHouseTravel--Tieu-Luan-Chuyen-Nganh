@@ -28,6 +28,7 @@ from silver.hotels_detail.config import (
     SILVER_DATABASE,
     TABLE_NAME,
     SILVER_TABLE,
+    BRONZE_BASE_PATH,
     SCRATCH_BASE_PATH,
     BUSINESS_KEY,
     BUSINESS_COLUMNS,
@@ -241,10 +242,14 @@ def clean_and_load_to_silver(spark):
     print(f"   ⏭️  Skipped: {stats['skipped']:,} unchanged records")
     print(f"   📈 Total processed: {stats['inserted'] + stats['updated'] + stats['skipped']:,}")
     
-    # Get source file info for tracking
-    source_file_info = df.select("source_file", "source_file_checksum").first()
+    # Get source file info for tracking (added by Step 1)
+    source_file_info = df.select("source_file", "source_file_checksum", "source_file_size_bytes").first()
     source_file = source_file_info.source_file if source_file_info else "unknown"
     file_checksum = source_file_info.source_file_checksum if source_file_info else "unknown"
+    source_size_bytes = source_file_info.source_file_size_bytes if source_file_info else 0
+    
+    # Construct Bronze file path for logging
+    bronze_file_path = f"{BRONZE_BASE_PATH}/{source_file}"
     
     # Check if already logged to prevent duplicates
     if not check_if_file_ingested(file_checksum, POSTGRES_CONN, layer='silver'):
@@ -266,14 +271,15 @@ def clean_and_load_to_silver(spark):
         }
         
         log_ingestion_to_postgres(
-            file_path=scratch_path,
+            file_path=bronze_file_path,
             file_checksum=file_checksum,
             records_ingested=stats['inserted'] + stats['updated'],
             table_name=SILVER_TABLE,
             status="success",
             postgres_conn_params=POSTGRES_CONN,
             layer='silver',
-            ingestion_details=ingestion_details
+            ingestion_details=ingestion_details,
+            file_size_bytes=source_size_bytes
         )
         print(f"✅ Logged to PostgreSQL tracking")
     else:
