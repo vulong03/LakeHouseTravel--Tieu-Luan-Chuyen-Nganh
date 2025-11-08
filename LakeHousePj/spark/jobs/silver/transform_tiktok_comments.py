@@ -26,7 +26,7 @@ from utils.file_tracker import (
     log_ingestion_to_postgres
 )
 from pyspark.sql import functions as F
-from pyspark.sql.types import StructType, StructField, StringType, TimestampType
+from pyspark.sql.types import StructType, StructField, StringType, TimestampType, ArrayType, IntegerType, LongType
 
 # PostgreSQL connection parameters
 POSTGRES_CONN = {
@@ -36,6 +36,100 @@ POSTGRES_CONN = {
     'user': 'lakehouse_user',
     'password': 'lakehouse_pass'
 }
+
+# Batch processing configuration
+# Batch processing configuration
+BATCH_SIZE = 50  # Process 50 files at a time (safe for 4GB RAM)
+
+
+def parse_tiktok_file_metadata(lines_array):
+    """
+    Parse metadata from first 16 lines of TikTok file
+    Returns: dict with metadata fields
+    
+    Args:
+        lines_array: Array of strings (file lines)
+    """
+    if len(lines_array) < 16:
+        return None
+    
+    def extract_value(line):
+        """Extract value after colon"""
+        if ':' in line:
+            return line.split(':', 1)[1].strip()
+        return ''
+    
+    try:
+        metadata = {
+            'crawl_time': extract_value(lines_array[0]),
+            'post_url': extract_value(lines_array[1]),
+            'author': extract_value(lines_array[2]),
+            'author_tag': extract_value(lines_array[3]),
+            'author_url': extract_value(lines_array[4]),
+            'post_date': extract_value(lines_array[5]),
+            'likes': extract_value(lines_array[6]),
+            'comments_count': extract_value(lines_array[7]),
+            'saves': extract_value(lines_array[8]),
+            'shares': extract_value(lines_array[9]),
+            'post_description': extract_value(lines_array[10]),
+            'comments_level1': extract_value(lines_array[11]),
+            'comments_level2': extract_value(lines_array[12]),
+            'comments_loaded': extract_value(lines_array[13]),
+            'comments_displayed_tiktok': extract_value(lines_array[14]),
+            'comments_difference': extract_value(lines_array[15])
+        }
+        return metadata
+    except Exception as e:
+        print(f"⚠️ Error parsing metadata: {e}")
+        return None
+
+
+def parse_tiktok_file_comments(lines_array, post_url):
+    """
+    Parse comments from CSV section (line 17+) of TikTok file
+    Returns: list of dicts with comment data
+    
+    Args:
+        lines_array: Array of strings (file lines)
+        post_url: Post URL to link comments
+    """
+    if len(lines_array) < 18:
+        return []
+    
+    comments_data = []
+    
+    try:
+        # CSV starts at line 17 (index 16)
+        csv_lines = lines_array[16:]
+        
+        if len(csv_lines) <= 1:
+            return []  # Only header, no data
+        
+        # Parse CSV using Python csv module
+        from io import StringIO
+        import csv
+        
+        csv_str = '\n'.join(csv_lines)
+        reader = csv.DictReader(StringIO(csv_str))
+        
+        for row in reader:
+            comments_data.append({
+                'post_url': post_url,
+                'stt': row.get('STT', ''),
+                'ten': row.get('Tên', ''),
+                'tag_ten': row.get('Tag tên', ''),
+                'url': row.get('URL', ''),
+                'comment': row.get('Comment', ''),
+                'time': row.get('Time', ''),
+                'likes': row.get('Likes', ''),
+                'level_comment': row.get('Level Comment', ''),
+                'replied_to_tag_name': row.get('Replied To Tag Name', ''),
+                'number_of_replies': row.get('Number of Replies', '')
+            })
+    except Exception as e:
+        print(f"⚠️ Error parsing comments: {e}")
+    
+    return comments_data
 
 
 def get_s3_file_size(spark, file_path):
@@ -216,6 +310,77 @@ def parse_comment_file(file_path):
     return post_metadata, comments_data
 
 
+def process_single_file_batch(spark, file_path, file_name, file_checksum, file_size_bytes):
+    """
+    Process single file and return metadata + comments DataFrames
+    This replaces the old loop logic but keeps same parsing
+    
+    Returns: (post_df, comments_df, stats_dict)
+    """
+    
+    file_size_mb = file_size_bytes / (1024 * 1024)
+    
+    print(f"\n📄 Processing: {file_name}")
+    print(f"   📦 File size: {file_size_mb:.2f} MB ({file_size_bytes:,} bytes)")
+    
+    try:
+        # Read file as text lines
+        lines_df = spark.read.text(file_path)
+        lines = [row.value for row in lines_df.collect()]
+        
+        if len(lines) < 18:
+            print(f"   ⚠️  Skipped: File too short (< 18 lines)")
+            return None, None, {'status': 'skipped', 'reason': 'too_short'}
+        
+        # Parse metadata (lines 0-15)
+        metadata = parse_tiktok_file_metadata(lines)
+        
+        if not metadata:
+            print(f"   ❌ Error parsing metadata")
+            return None, None, {'status': 'failed', 'reason': 'metadata_parse_error'}
+        
+        # Add ingestion metadata
+        metadata['ingestion_timestamp'] = datetime.now()
+        metadata['source_file'] = file_name
+        metadata['source_file_checksum'] = file_checksum
+        
+        print(f"   Post: {metadata['post_url']}")
+        print(f"   Author: {metadata['author']} ({metadata['author_tag']})")
+        
+        # Create post DataFrame
+        post_df = spark.createDataFrame([metadata])
+        
+        # Parse comments (lines 16+)
+        comments_data = parse_tiktok_file_comments(lines, metadata['post_url'])
+        
+        # Add ingestion metadata to comments
+        for comment in comments_data:
+            comment['ingestion_timestamp'] = datetime.now()
+            comment['source_file'] = file_name
+            comment['source_file_checksum'] = file_checksum
+        
+        # Create comments DataFrame
+        comments_df = None
+        if comments_data:
+            comments_df = spark.createDataFrame(comments_data)
+        
+        stats = {
+            'status': 'success',
+            'post_url': metadata['post_url'],
+            'author': metadata['author'],
+            'comment_count': len(comments_data),
+            'file_size': file_size_bytes
+        }
+        
+        print(f"   ✅ Parsed: 1 post + {len(comments_data)} comments")
+        
+        return post_df, comments_df, stats
+        
+    except Exception as e:
+        print(f"   ❌ Error processing file: {e}")
+        return None, None, {'status': 'failed', 'reason': str(e)}
+
+
 def ingest_comment_file(spark, file_path, file_checksum, file_name, file_size):
     """Ingest single comment file"""
     
@@ -265,194 +430,167 @@ def ingest_comment_file(spark, file_path, file_checksum, file_name, file_size):
 def transform_tiktok_comments(spark, source_pattern):
     """
     Transform TikTok comment files from Bronze into 2 Silver tables
-    Each file has: 16-line metadata header + CSV comments
+    OPTIMIZED: Batch processing to handle 8000+ files without timeout
     """
     print(f"🚀 Starting transformation: {source_pattern}")
     
-    # Read all text files from Bronze (NOT as CSV yet - need to parse header)
+    # STEP 1: Get all files from Bronze
     df_raw = spark.read.text(source_pattern)
-    
-    # Get list of files using input_file_name() function
     file_paths = df_raw.select(F.input_file_name().alias("file_path")).distinct().collect()
     file_paths = [row.file_path for row in file_paths]
     
-    print(f"📝 Found {len(file_paths)} comment files in Bronze")
+    total_files = len(file_paths)
+    print(f"📝 Found {total_files} comment files in Bronze")
     
-    total_posts = 0
-    total_comments = 0
-    skipped = 0
+    if total_files == 0:
+        print(f"⚠️  No files to process")
+        return 0, 0, 0
+    
+    # STEP 2: Filter unprocessed files
+    print(f"\n🔍 Checking which files are already processed...")
+    unprocessed = []
     
     for file_path in file_paths:
         file_name = os.path.basename(file_path)
-        
-        # Extract checksum from filename (Bronze already calculated it)
-        # Format: tiktok_comments_2025-09-27T04-22-16_20251029_203916_d0e0e6d9.csv
-        #                                                             ^^^^^^^^ checksum
         file_checksum = file_name.replace('.csv', '').split('_')[-1]
         
-        # Get file size from S3
-        file_size_bytes = get_s3_file_size(spark, file_path)
-        file_size_mb = file_size_bytes / (1024 * 1024)
+        if not check_if_file_ingested(file_checksum, POSTGRES_CONN, layer='silver'):
+            file_size_bytes = get_s3_file_size(spark, file_path)
+            unprocessed.append({
+                'file_path': file_path,
+                'file_name': file_name,
+                'file_checksum': file_checksum,
+                'file_size_bytes': file_size_bytes
+            })
+    
+    unprocessed_count = len(unprocessed)
+    skipped_count = total_files - unprocessed_count
+    
+    print(f"   ✅ New files to process: {unprocessed_count}")
+    print(f"   ⏭️  Already processed: {skipped_count}")
+    
+    if unprocessed_count == 0:
+        print(f"\n✅ All files already processed!")
+        return 0, 0, skipped_count
+    
+    # STEP 3: Process in batches
+    total_posts = 0
+    total_comments = 0
+    num_batches = (unprocessed_count + BATCH_SIZE - 1) // BATCH_SIZE
+    
+    print(f"\n📦 Processing {unprocessed_count} files in {num_batches} batch(es) ({BATCH_SIZE} files/batch)")
+    print(f"=" * 80)
+    
+    for batch_idx in range(0, unprocessed_count, BATCH_SIZE):
+        batch_files = unprocessed[batch_idx:batch_idx + BATCH_SIZE]
+        batch_num = batch_idx // BATCH_SIZE + 1
         
-        # Check if already processed in Silver layer
-        if check_if_file_ingested(file_checksum, POSTGRES_CONN, layer='silver'):
-            print(f"\n📄 {file_name}")
-            print(f"   📦 File size: {file_size_mb:.2f} MB ({file_size_bytes:,} bytes)")
-            print(f"   ⏭️  Already processed in Silver layer (checksum: {file_checksum})")
-            skipped += 1
-            continue
+        print(f"\n{'='*80}")
+        print(f"📦 BATCH {batch_num}/{num_batches}: Processing {len(batch_files)} files")
+        print(f"{'='*80}")
         
-        print(f"\n📄 Processing: {file_name}")
-        print(f"   📦 File size: {file_size_mb:.2f} MB ({file_size_bytes:,} bytes)")
+        # Process each file in batch
+        batch_posts = []
+        batch_comments = []
         
-        # Read this specific file as text lines
-        lines_df = spark.read.text(file_path)
-        lines = [row.value for row in lines_df.collect()]
-        
-        if len(lines) < 18:
-            print(f"   ⚠️  Skipped: File too short (< 18 lines)")
-            skipped += 1
-            continue
-        
-        # Parse metadata (lines 0-15 = first 16 lines)
-        try:
-            def extract_value(line):
-                return line.split(':', 1)[1].strip() if ':' in line else ''
+        for file_info in batch_files:
+            post_df, comments_df, stats = process_single_file_batch(
+                spark,
+                file_info['file_path'],
+                file_info['file_name'],
+                file_info['file_checksum'],
+                file_info['file_size_bytes']
+            )
             
-            post_metadata = {
-                'crawl_time': extract_value(lines[0]),
-                'post_url': extract_value(lines[1]),
-                'author': extract_value(lines[2]),
-                'author_tag': extract_value(lines[3]),
-                'author_url': extract_value(lines[4]),
-                'post_date': extract_value(lines[5]),
-                'likes': extract_value(lines[6]),
-                'comments_count': extract_value(lines[7]),
-                'saves': extract_value(lines[8]),
-                'shares': extract_value(lines[9]),
-                'post_description': extract_value(lines[10]),
-                'comments_level1': extract_value(lines[11]),
-                'comments_level2': extract_value(lines[12]),
-                'comments_loaded': extract_value(lines[13]),
-                'comments_displayed_tiktok': extract_value(lines[14]),
-                'comments_difference': extract_value(lines[15]),
-                'ingestion_timestamp': datetime.now(),
-                'source_file': file_name,
-                'source_file_checksum': file_name  # Use filename as checksum for simplicity
-            }
+            # Collect DataFrames for batch write
+            if post_df is not None:
+                batch_posts.append(post_df)
+                total_posts += 1
             
-            print(f"   Post: {post_metadata['post_url']}")
-            print(f"   Author: {post_metadata['author']} ({post_metadata['author_tag']})")
+            if comments_df is not None:
+                batch_comments.append(comments_df)
+                total_comments += stats['comment_count']
             
-            # Create DataFrame for post metadata and APPEND
-            post_df = spark.createDataFrame([post_metadata])
-            post_df.writeTo("lakehouse.silver.tiktok_post_metadata") \
+            # Store stats for logging
+            file_info['stats'] = stats
+        
+        # STEP 4: Batch write to Iceberg
+        if batch_posts:
+            print(f"\n💾 Writing batch to Iceberg tables...")
+            
+            # Union all post DataFrames
+            posts_union = batch_posts[0]
+            for df in batch_posts[1:]:
+                posts_union = posts_union.union(df)
+            
+            # Write posts
+            posts_union.writeTo("lakehouse.silver.tiktok_post_metadata") \
                 .using("iceberg") \
                 .append()
             
-            total_posts += 1
-            print(f"   ✅ Post metadata appended")
+            print(f"   ✅ {len(batch_posts)} posts written")
             
-        except Exception as e:
-            print(f"   ❌ Error parsing metadata: {e}")
-            skipped += 1
-            continue
-        
-        # Parse comments (line 17 is header, line 18+ is data)
-        # Read CSV from line 18 onwards
-        try:
-            # Create temp CSV string from lines 17+
-            csv_lines = lines[17:]  # Line 17 (index 17) = header, 18+ = data
-            
-            if len(csv_lines) <= 1:
-                print(f"   ⚠️  No comment data (only header)")
-                continue
-            
-            # Use Spark to parse CSV from lines
-            from io import StringIO
-            import csv
-            
-            csv_str = '\n'.join(csv_lines)
-            
-            # Parse with Python csv module first to get column names
-            reader = csv.DictReader(StringIO(csv_str))
-            comments_data = []
-            
-            for row in reader:
-                comments_data.append({
-                    'post_url': post_metadata['post_url'],
-                    'stt': row.get('STT', ''),
-                    'ten': row.get('Tên', ''),
-                    'tag_ten': row.get('Tag tên', ''),
-                    'url': row.get('URL', ''),
-                    'comment': row.get('Comment', ''),
-                    'time': row.get('Time', ''),
-                    'likes': row.get('Likes', ''),
-                    'level_comment': row.get('Level Comment', ''),
-                    'replied_to_tag_name': row.get('Replied To Tag Name', ''),
-                    'number_of_replies': row.get('Number of Replies', ''),
-                    'ingestion_timestamp': datetime.now(),
-                    'source_file': file_name,
-                    'source_file_checksum': file_name
-                })
-            
-            if comments_data:
-                comments_df = spark.createDataFrame(comments_data)
-                comments_df.writeTo("lakehouse.silver.tiktok_post_comments") \
+            # Union all comments DataFrames
+            if batch_comments:
+                comments_union = batch_comments[0]
+                for df in batch_comments[1:]:
+                    comments_union = comments_union.union(df)
+                
+                # Write comments (partitioned by post_url)
+                comments_union.repartition("post_url") \
+                    .writeTo("lakehouse.silver.tiktok_post_comments") \
                     .using("iceberg") \
                     .append()
                 
-                total_comments += len(comments_data)
-                print(f"   ✅ {len(comments_data)} comments appended")
+                print(f"   ✅ Comments written (partitioned by post_url)")
+        
+        # STEP 5: Log each file to PostgreSQL (same as old logic)
+        print(f"\n📝 Logging ingestion to PostgreSQL...")
+        for file_info in batch_files:
+            stats = file_info.get('stats', {})
             
-            # Log successful processing to tracking table (Silver layer)
-            ingestion_details = {
-                "tables": [
-                    {
-                        "name": "tiktok_post_metadata",
-                        "records": 1
-                    },
-                    {
-                        "name": "tiktok_post_comments",
-                        "records": len(comments_data) if comments_data else 0
-                    }
-                ],
-                "post_url": post_metadata['post_url'],
-                "author": post_metadata['author'],
-                "source_size_bytes": file_size_bytes
-            }
-            
-            log_ingestion_to_postgres(
-                file_path=file_path,
-                file_checksum=file_checksum,
-                records_ingested=1 + (len(comments_data) if comments_data else 0),
-                table_name="silver.tiktok_post_metadata + tiktok_post_comments",
-                status="success",
-                postgres_conn_params=POSTGRES_CONN,
-                layer='silver',  # Track in Silver layer
-                ingestion_details=ingestion_details,
-                file_size_bytes=file_size_bytes
-            )
-            
-        except Exception as e:
-            print(f"   ⚠️  Error parsing comments: {e}")
-            
-            # Log failed processing
-            log_ingestion_to_postgres(
-                file_path=file_path,
-                file_checksum=file_checksum,
-                records_ingested=0,
-                table_name="silver.tiktok_post_metadata + tiktok_post_comments",
-                status="failed",
-                postgres_conn_params=POSTGRES_CONN,
-                layer='silver',
-                error_message=str(e),
-                file_size_bytes=file_size_bytes
-            )
-            
-            # Continue - we already saved post metadata
+            if stats.get('status') == 'success':
+                ingestion_details = {
+                    "tables": [
+                        {"name": "tiktok_post_metadata", "records": 1},
+                        {"name": "tiktok_post_comments", "records": stats.get('comment_count', 0)}
+                    ],
+                    "post_url": stats.get('post_url', ''),
+                    "author": stats.get('author', ''),
+                    "source_size_bytes": file_info['file_size_bytes']
+                }
+                
+                log_ingestion_to_postgres(
+                    file_path=file_info['file_path'],
+                    file_checksum=file_info['file_checksum'],
+                    records_ingested=1 + stats.get('comment_count', 0),
+                    table_name="silver.tiktok_post_metadata + tiktok_post_comments",
+                    status="success",
+                    postgres_conn_params=POSTGRES_CONN,
+                    layer='silver',
+                    ingestion_details=ingestion_details,
+                    file_size_bytes=file_info['file_size_bytes']
+                )
+                
+                print(f"   ✅ Logged: {file_info['file_name']} (checksum: {file_info['file_checksum']})")
+            else:
+                # Log failed file
+                log_ingestion_to_postgres(
+                    file_path=file_info['file_path'],
+                    file_checksum=file_info['file_checksum'],
+                    records_ingested=0,
+                    table_name="silver.tiktok_post_metadata + tiktok_post_comments",
+                    status="failed",
+                    postgres_conn_params=POSTGRES_CONN,
+                    layer='silver',
+                    error_message=stats.get('reason', 'unknown'),
+                    file_size_bytes=file_info['file_size_bytes']
+                )
+                print(f"   ⚠️  Failed: {file_info['file_name']}")
+        
+        print(f"\n✅ Batch {batch_num}/{num_batches} completed!")
     
-    return total_posts, total_comments, skipped
+    return total_posts, total_comments, skipped_count
 
 
 def main():
@@ -476,11 +614,8 @@ def main():
         create_silver_posts_table(spark)
         create_silver_comments_table(spark)
         
-        # Transform files
-        print("\n2️⃣  Transforming comment files from Bronze...")
-        posts, comments, skipped = transform_tiktok_comments(spark, source_pattern)
-        # Transform files
-        print("\n2️⃣  Transforming comment files from Bronze...")
+        # Transform files (OPTIMIZED: Batch processing)
+        print("\n2️⃣  Transforming comment files from Bronze (BATCH MODE)...")
         posts, comments, skipped = transform_tiktok_comments(spark, source_pattern)
         
         print("\n" + "=" * 80)
