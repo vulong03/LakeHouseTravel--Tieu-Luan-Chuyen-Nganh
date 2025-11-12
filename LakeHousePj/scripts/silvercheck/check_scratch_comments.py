@@ -22,7 +22,7 @@ def main():
     scratch_path = "s3a://scratch/pipeline/silver/tiktok_post_comments/run_20251111_150809"
     
     # Target URL
-    target_url = "https://www.tiktok.com/@_nguyen.hoa2403_/video/7545117738658761991"
+    target_url = "https://www.tiktok.com/@halleygoround/video/7344974438342905089"
     
     print("=" * 80)
     print("🔍 CHECKING SCRATCH COMMENTS")
