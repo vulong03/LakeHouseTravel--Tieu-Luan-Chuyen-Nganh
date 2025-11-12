@@ -18,7 +18,7 @@ sys.path.append('/opt/spark/jobs')
 from utils.spark_session import get_spark_session
 from utils.iceberg_utils import create_iceberg_table_if_not_exists
 from utils.merge_utils import calculate_row_checksum, merge_into_bronze
-from utils.file_tracker import check_if_file_ingested, log_ingestion_to_postgres
+from utils.file_tracker import log_ingestion_to_postgres
 
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, StringType, TimestampType, DoubleType, IntegerType
@@ -251,39 +251,35 @@ def clean_and_load_to_silver(spark):
     # Construct Bronze file path for logging
     bronze_file_path = f"{BRONZE_BASE_PATH}/{source_file}"
     
-    # Check if already logged to prevent duplicates
-    if not check_if_file_ingested(file_checksum, POSTGRES_CONN, layer='silver'):
-        # Log to PostgreSQL tracking
-        ingestion_details = {
-            "merge_stats": {
-                "inserted": stats['inserted'],
-                "updated": stats['updated'],
-                "skipped": stats['skipped']
-            },
-            "source_file": source_file,
-            "scratch_run": run_id,
-            "business_key": BUSINESS_KEY,
-            "cleaning_stats": {
-                "original": original_count,
-                "cleaned": cleaned_count,
-                "removed": removed_count
-            }
+    # Log to PostgreSQL tracking (always log, even if skipped=100%)
+    ingestion_details = {
+        "merge_stats": {
+            "inserted": stats['inserted'],
+            "updated": stats['updated'],
+            "skipped": stats['skipped']
+        },
+        "source_file": source_file,
+        "scratch_run": run_id,
+        "business_key": BUSINESS_KEY,
+        "cleaning_stats": {
+            "original": original_count,
+            "cleaned": cleaned_count,
+            "removed": removed_count
         }
-        
-        log_ingestion_to_postgres(
-            file_path=bronze_file_path,
-            file_checksum=file_checksum,
-            records_ingested=stats['inserted'] + stats['updated'],
-            table_name=SILVER_TABLE,
-            status="success",
-            postgres_conn_params=POSTGRES_CONN,
-            layer='silver',
-            ingestion_details=ingestion_details,
-            file_size_bytes=source_size_bytes
-        )
-        print(f"✅ Logged to PostgreSQL tracking")
-    else:
-        print(f"ℹ️  Already logged in tracking (skipped duplicate log)")
+    }
+    
+    log_ingestion_to_postgres(
+        file_path=bronze_file_path,
+        file_checksum=file_checksum,
+        records_ingested=stats['inserted'] + stats['updated'],
+        table_name=SILVER_TABLE,
+        status="success",
+        postgres_conn_params=POSTGRES_CONN,
+        layer='silver',
+        ingestion_details=ingestion_details,
+        file_size_bytes=source_size_bytes
+    )
+    print(f"✅ Logged to PostgreSQL tracking")
     
     return stats
 

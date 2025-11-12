@@ -50,3 +50,12 @@ CLEANING_CONFIG = {
 
 # Bronze File Pattern
 BRONZE_FILE_PATTERN = r'merged_videos_(\d{8}_\d{6})_([a-f0-9]{8})\.csv'
+
+# PostgreSQL connection for tracking
+POSTGRES_CONN = {
+    'host': 'postgres',
+    'port': 5432,
+    'database': 'metastore_db',
+    'user': 'lakehouse_user',
+    'password': 'lakehouse_pass'
+}

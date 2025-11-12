@@ -14,9 +14,10 @@ sys.path.append('/opt/spark/jobs')
 
 from config import (
     BRONZE_BASE_PATH, SCRATCH_BASE_PATH, NOT_NULL_COLUMNS,
-    BRONZE_FILE_PATTERN, CLEANING_CONFIG
+    BRONZE_FILE_PATTERN, CLEANING_CONFIG, POSTGRES_CONN
 )
 from utils.spark_session import get_spark_session
+from utils.file_tracker import check_if_file_ingested
 from pyspark.sql import functions as F
 
 
@@ -171,6 +172,18 @@ def main():
         
         print(f"\n📄 Processing: {file_name}")
         print(f"   Checksum: {file_checksum}")
+        
+        # Check if already processed in Silver layer
+        print(f"\n🔍 Checking tracking database...")
+        if check_if_file_ingested(file_checksum, POSTGRES_CONN, layer='silver'):
+            print(f"   ⏭️  Already processed in Silver layer")
+            print(f"      Checksum: {file_checksum}")
+            print(f"      Skipping transformation")
+            print(f"\n{'=' * 80}")
+            print(f"⏭️  STEP 1 SKIPPED: File already processed")
+            print(f"{'=' * 80}")
+            return
+        print(f"   ✓ New file, proceeding with transformation")
         
         # Get file size
         file_size_bytes = get_s3_file_size(spark, latest_file_path)

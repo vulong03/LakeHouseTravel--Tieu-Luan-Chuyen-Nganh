@@ -135,35 +135,6 @@ def create_silver_table(spark):
 
 
 # ============================================================================
-# CLEANUP FUNCTION
-# ============================================================================
-
-def cleanup_tmp_folders(spark, transformed_path):
-    """Delete tmp folder after successful load"""
-    print(f"\n6️⃣  Cleaning up tmp folders...")
-    
-    try:
-        hadoop_conf = spark._jsc.hadoopConfiguration()
-        fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(
-            spark._jvm.java.net.URI("s3a://scratch"),
-            hadoop_conf
-        )
-        
-        path = spark._jvm.org.apache.hadoop.fs.Path(transformed_path)
-        if fs.exists(path):
-            fs.delete(path, True)  # True = recursive
-            print(f"   ✓ Deleted: {transformed_path}")
-        
-        # Keep metadata folder (if it exists)
-        metadata_path = transformed_path.replace("/01_transformed", "/_metadata.json")
-        print(f"   ℹ️  Metadata preserved: {metadata_path}")
-        
-    except Exception as e:
-        print(f"   ⚠️  Could not delete tmp folder: {e}")
-        print(f"      (Manual cleanup may be needed)")
-
-
-# ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
 
@@ -323,10 +294,7 @@ def clean_and_load(spark):
     
     print(f"   ✓ Logged to tracking database")
     
-    # 7. Cleanup tmp folders
-    cleanup_tmp_folders(spark, transformed_path)
-    
-    # 8. Final summary
+    # 7. Final summary
     print(f"\n{'=' * 80}")
     print(f"✅ Task 2 COMPLETED SUCCESSFULLY")
     print(f"{'=' * 80}")
@@ -375,8 +343,6 @@ def main():
         print(f"❌ Task 2 FAILED")
         print(f"{'=' * 80}")
         print(f"Error: {e}")
-        print(f"\n⚠️  Tmp folders preserved for debugging:")
-        print(f"   {PATHS['transformed']}")
         print("")
         import traceback
         traceback.print_exc()

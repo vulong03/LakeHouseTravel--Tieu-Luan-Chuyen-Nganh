@@ -17,6 +17,7 @@ from datetime import datetime
 sys.path.append('/opt/spark/jobs')
 
 from utils.spark_session import get_spark_session
+from utils.file_tracker import check_if_file_ingested
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
@@ -170,6 +171,15 @@ def transform_to_scratch(spark):
     print(f"\n📄 Processing: {file_name}")
     print(f"   Checksum: {file_checksum}")
     
+    # Check if already processed in Silver layer
+    print(f"\n🔍 Checking tracking database...")
+    if check_if_file_ingested(file_checksum, POSTGRES_CONN, layer='silver'):
+        print(f"   ⏭️  Already processed in Silver layer")
+        print(f"      Checksum: {file_checksum}")
+        print(f"      Skipping transformation")
+        return 0
+    print(f"   ✓ New file, proceeding with transformation")
+    
     # Get file size
     file_size_bytes = get_s3_file_size(spark, latest_file_path)
     
@@ -247,7 +257,16 @@ def main():
     try:
         spark = get_spark_session(app_name="Silver_Hotels_Detail_Step1_Transform")
         
-        output_path, record_count = transform_to_scratch(spark)
+        result = transform_to_scratch(spark)
+        
+        # Check if file was skipped (already processed)
+        if result == 0:
+            print("\n" + "=" * 80)
+            print("⏭️  STEP 1 SKIPPED: File already processed in Silver layer")
+            print("=" * 80)
+            return
+        
+        output_path, record_count = result
         
         print("\n" + "=" * 80)
         print(f"✅ STEP 1 COMPLETED: {record_count:,} records transformed to Scratch")
