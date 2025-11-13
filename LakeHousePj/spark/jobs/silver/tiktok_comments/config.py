@@ -58,7 +58,7 @@ BUSINESS_COLUMNS_COMMENTS = [
 ]
 
 # Partition columns
-PARTITION_COLUMNS_POSTS = []  # No partition for posts (small table)
+PARTITION_COLUMNS_POSTS = ["post_url"]  # Partition by post_url (consistent with comments)
 PARTITION_COLUMNS_COMMENTS = ["post_url"]  # Partition comments by post_url
 
 # NOT NULL constraints (for data validation)
@@ -75,4 +75,9 @@ POSTGRES_CONN = {
 }
 
 # Batch processing configuration
-BATCH_SIZE = 50  # Process 50 files at a time (safe for low RAM)
+BATCH_SIZE = 30  # Process 30 partitions per batch (optimized for Hive Metastore memory)
+
+# Performance tuning
+ENABLE_BATCH_LOGGING = True  # Log each file individually within batches
+MAX_RETRIES_PER_BATCH = 2  # Retry failed batches this many times
+CONTINUE_ON_BATCH_FAILURE = True  # Continue to next batch if one fails

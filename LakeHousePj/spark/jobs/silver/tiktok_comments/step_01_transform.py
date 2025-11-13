@@ -382,14 +382,24 @@ def transform_bronze_to_scratch(spark):
         print(f"\n✅ All files already processed in Silver layer!")
         return 0, 0
     
-    # Process in batches
+    # Generate unique run ID for this transform run
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_path_posts = f"{SCRATCH_BASE_PATH_POSTS}/run_{run_id}"
+    output_path_comments = f"{SCRATCH_BASE_PATH_COMMENTS}/run_{run_id}"
+    
+    print(f"\n📁 Output paths:")
+    print(f"   Posts: {output_path_posts}")
+    print(f"   Comments: {output_path_comments}")
+    
+    # Process in batches and write incrementally
     num_batches = (unprocessed_count + BATCH_SIZE - 1) // BATCH_SIZE
     
     print(f"\n📦 Processing {unprocessed_count} files in {num_batches} batch(es) ({BATCH_SIZE} files/batch)")
+    print(f"   Strategy: Process batch → Validate → Write (incremental)")
     print(f"=" * 80)
     
-    all_posts = []
-    all_comments = []
+    total_posts_written = 0
+    total_comments_written = 0
     
     for batch_idx in range(0, unprocessed_count, BATCH_SIZE):
         batch_files = unprocessed[batch_idx:batch_idx + BATCH_SIZE]
@@ -399,6 +409,10 @@ def transform_bronze_to_scratch(spark):
         print(f"📦 BATCH {batch_num}/{num_batches}: Processing {len(batch_files)} files")
         print(f"{'='*80}")
         
+        # Collect batch data in memory (only 1 batch at a time)
+        batch_posts = []
+        batch_comments = []
+        
         # Process each file in batch
         for file_path, file_name, scrape_timestamp in batch_files:
             post_metadata, comments_data, file_size = process_single_file(
@@ -406,95 +420,78 @@ def transform_bronze_to_scratch(spark):
             )
             
             if post_metadata:
-                all_posts.append(post_metadata)
+                batch_posts.append(post_metadata)
             
             if comments_data:
-                all_comments.extend(comments_data)
+                batch_comments.extend(comments_data)
         
-        print(f"\n✅ Batch {batch_num}/{num_batches} completed!")
-    
-    # Create DataFrames
-    total_posts = len(all_posts)
-    total_comments = len(all_comments)
+        # Skip if no data parsed in this batch
+        if not batch_posts:
+            print(f"⚠️  No data parsed in batch {batch_num} - skipping write")
+            continue
+        
+        # Create DataFrames for this batch
+        print(f"\n🔨 Creating batch DataFrames...")
+        df_batch_posts = spark.createDataFrame(batch_posts)
+        df_batch_comments = spark.createDataFrame(batch_comments) if batch_comments else None
+        
+        # Add ingestion_timestamp
+        print(f"🔧 Adding ingestion_timestamp...")
+        df_batch_posts = df_batch_posts.withColumn("ingestion_timestamp", F.lit(datetime.now()))
+        if df_batch_comments:
+            df_batch_comments = df_batch_comments.withColumn("ingestion_timestamp", F.lit(datetime.now()))
+        
+        # Validate posts
+        print(f"🔍 Validating posts...")
+        df_batch_posts_clean, posts_nulls = validate_posts_data(df_batch_posts)
+        if posts_nulls > 0:
+            print(f"   Removed {posts_nulls} posts with NULL critical values")
+        
+        # Validate comments
+        if df_batch_comments:
+            print(f"🔍 Validating comments...")
+            df_batch_comments_clean, comments_nulls = validate_comments_data(df_batch_comments)
+            if comments_nulls > 0:
+                print(f"   Removed {comments_nulls} comments with NULL critical values")
+        else:
+            df_batch_comments_clean = None
+        
+        # Write batch to Scratch (append mode after first batch)
+        write_mode = "overwrite" if batch_num == 1 else "append"
+        
+        print(f"\n💾 Writing batch {batch_num} to Scratch ({write_mode} mode)...")
+        
+        # Write posts
+        posts_in_batch = df_batch_posts_clean.count()
+        df_batch_posts_clean.write \
+            .mode(write_mode) \
+            .partitionBy("post_url") \
+            .parquet(output_path_posts)
+        
+        total_posts_written += posts_in_batch
+        print(f"   ✅ Posts: +{posts_in_batch:,} (total: {total_posts_written:,})")
+        
+        # Write comments
+        if df_batch_comments_clean:
+            comments_in_batch = df_batch_comments_clean.count()
+            df_batch_comments_clean.write \
+                .mode(write_mode) \
+                .partitionBy("post_url") \
+                .parquet(output_path_comments)
+            
+            total_comments_written += comments_in_batch
+            print(f"   ✅ Comments: +{comments_in_batch:,} (total: {total_comments_written:,})")
+        
+        print(f"\n✅ Batch {batch_num}/{num_batches} completed and written!")
     
     print(f"\n" + "=" * 80)
-    print(f"📊 PARSING SUMMARY:")
-    print(f"   Total posts: {total_posts:,}")
-    print(f"   Total comments: {total_comments:,}")
+    print(f"📊 TRANSFORM SUMMARY:")
+    print(f"   Total posts written: {total_posts_written:,}")
+    print(f"   Total comments written: {total_comments_written:,}")
+    print(f"   Output run ID: {run_id}")
     print(f"=" * 80)
     
-    if total_posts == 0:
-        print(f"⚠️  No data parsed - nothing to write")
-        return 0, 0
-    
-    # Create posts DataFrame
-    print(f"\n🔨 Creating posts DataFrame...")
-    df_posts = spark.createDataFrame(all_posts)
-    
-    # Add ingestion_timestamp (same for all posts in this batch)
-    print(f"🔧 Adding ingestion_timestamp (TimestampType)...")
-    df_posts = df_posts.withColumn("ingestion_timestamp", F.lit(datetime.now()))
-    
-    # Validate posts data
-    df_posts_clean, posts_nulls = validate_posts_data(df_posts)
-    
-    if posts_nulls > 0:
-        clean_posts = df_posts_clean.count()
-        print(f"   Records after validation: {clean_posts:,} (removed {posts_nulls})")
-        df_posts = df_posts_clean
-    
-    # Create comments DataFrame
-    print(f"\n🔨 Creating comments DataFrame...")
-    df_comments = spark.createDataFrame(all_comments)
-    
-    # Add ingestion_timestamp (same for all comments in this batch)
-    print(f"🔧 Adding ingestion_timestamp (TimestampType)...")
-    df_comments = df_comments.withColumn("ingestion_timestamp", F.lit(datetime.now()))
-    
-    # Validate comments data
-    df_comments_clean, comments_nulls = validate_comments_data(df_comments)
-    
-    if comments_nulls > 0:
-        clean_comments = df_comments_clean.count()
-        print(f"   Records after validation: {clean_comments:,} (removed {comments_nulls})")
-        df_comments = df_comments_clean
-    
-    # Generate unique run ID
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Write posts to Scratch (partitioned by post_url)
-    output_path_posts = f"{SCRATCH_BASE_PATH_POSTS}/run_{run_id}"
-    
-    print(f"\n💾 Writing posts to Scratch bucket...")
-    print(f"   Path: {output_path_posts}")
-    print(f"   Format: Parquet (Snappy compression)")
-    print(f"   Partitioning: post_url")
-    
-    df_posts.write \
-        .mode("overwrite") \
-        .partitionBy("post_url") \
-        .parquet(output_path_posts)
-    
-    final_posts_count = df_posts.count()
-    print(f"   ✅ {final_posts_count:,} posts written")
-    
-    # Write comments to Scratch (partitioned by post_url)
-    output_path_comments = f"{SCRATCH_BASE_PATH_COMMENTS}/run_{run_id}"
-    
-    print(f"\n💾 Writing comments to Scratch bucket...")
-    print(f"   Path: {output_path_comments}")
-    print(f"   Format: Parquet (Snappy compression)")
-    print(f"   Partitioning: post_url")
-    
-    df_comments.write \
-        .mode("overwrite") \
-        .partitionBy("post_url") \
-        .parquet(output_path_comments)
-    
-    final_comments_count = df_comments.count()
-    print(f"   ✅ {final_comments_count:,} comments written")
-    
-    return final_posts_count, final_comments_count
+    return total_posts_written, total_comments_written
 
 
 def main():

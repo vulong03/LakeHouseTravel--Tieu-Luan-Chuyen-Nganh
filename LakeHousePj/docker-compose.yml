@@ -96,10 +96,19 @@ services:
       - lakehouse_network
     ports:
       - "${HIVE_METASTORE_PORT}:9083"
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
     environment:
       SERVICE_NAME: metastore
       DB_DRIVER: postgres
+      HADOOP_HEAPSIZE: 3072
       SERVICE_OPTS: >-
+        -Xmx3072m
+        -Xms2048m
         -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
         -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://postgres:5432/${POSTGRES_DB}
         -Djavax.jdo.option.ConnectionUserName=${POSTGRES_USER}
