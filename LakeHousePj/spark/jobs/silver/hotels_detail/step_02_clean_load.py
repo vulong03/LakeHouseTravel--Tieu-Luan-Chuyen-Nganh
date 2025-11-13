@@ -8,20 +8,22 @@ Based on original transform_booking_hotels_detail.py:
 - Business key: hotel_url
 - Partition by province
 """
-
+# Standard library imports
 import sys
 import os
 from datetime import datetime
 
-sys.path.append('/opt/spark/jobs')
+# Third-party imports
+from pyspark.sql.functions import udf
+from pyspark.sql import functions as F
+from pyspark.sql.types import StructType, StructField, StringType, TimestampType, DoubleType, IntegerType, MapType
 
+# Internal imports
+sys.path.append('/opt/spark/jobs')
 from utils.spark_session import get_spark_session
 from utils.iceberg_utils import create_iceberg_table_if_not_exists
 from utils.merge_utils import calculate_row_checksum, merge_into_bronze
 from utils.file_tracker import log_ingestion_to_postgres
-
-from pyspark.sql import functions as F
-from pyspark.sql.types import StructType, StructField, StringType, TimestampType, DoubleType, IntegerType
 
 # Import config
 from silver.hotels_detail.config import (
@@ -36,7 +38,6 @@ from silver.hotels_detail.config import (
     POSTGRES_CONN
 )
 
-
 def create_silver_table_if_needed(spark):
     """
     Create Silver Iceberg table if not exists
@@ -49,22 +50,18 @@ def create_silver_table_if_needed(spark):
         StructField("province", StringType(), False),
         StructField("description", StringType(), True),
         StructField("top_amenities", StringType(), True),
-        StructField("rating_score", DoubleType(), True),  # Changed to Double
-        StructField("review_count_text", StringType(), True),
-        StructField("review_count", IntegerType(), True),  # NEW: Extracted number
+        StructField("rating_score", DoubleType(), True),
+        StructField("review_count", IntegerType(), True),
         StructField("rating_breakdown", StringType(), True),
-        StructField("activities", StringType(), True),
-        
         # Row checksum for change detection
         StructField("row_checksum", StringType(), False),
-        
         # Metadata columns
         StructField("ingestion_timestamp", TimestampType(), False),
         StructField("source_file", StringType(), False),
         StructField("source_file_checksum", StringType(), False)
     ])
     
-    print(f"📋 Creating Silver table if not exists: {SILVER_TABLE}")
+    print(f"Creating Silver table if not exists: {SILVER_TABLE}")
     
     create_iceberg_table_if_not_exists(
         spark=spark,
@@ -115,7 +112,7 @@ def get_latest_scratch_run(spark):
         latest_run = run_dirs[0]
         
         latest_path = f"{SCRATCH_BASE_PATH}/{latest_run}"
-        print(f"📂 Latest Scratch run: {latest_run}")
+        print(f"Latest Scratch run: {latest_run}")
         print(f"   Path: {latest_path}")
         
         return latest_path, latest_run
@@ -130,24 +127,24 @@ def clean_and_load_to_silver(spark):
     Read from Scratch, apply cleaning, and MERGE into Silver
     Based on original UPSERT logic
     """
-    print(f"🚀 Starting Clean & Load: Scratch → Silver")
+    print(f"Starting Clean & Load: Scratch → Silver")
     
     # Get latest Scratch run
     scratch_path, run_id = get_latest_scratch_run(spark)
     
     # Read from Scratch
-    print(f"\n📖 Reading from Scratch bucket...")
+    print(f"\nReading from Scratch bucket...")
     df = spark.read.parquet(scratch_path)
     
     original_count = df.count()
-    print(f"📝 Records from Scratch: {original_count:,}")
+    print(f"Records from Scratch: {original_count:,}")
     
     # Show sample before cleaning
-    print(f"\n📋 Sample data before cleaning (first 3 rows):")
+    print(f"\nSample data before cleaning (first 3 rows):")
     df.select("hotel_name", "province", "rating_score", "top_amenities").show(3, truncate=50)
     
     # CLEANING LOGIC - Advanced transformations
-    print(f"\n🧹 Applying data cleaning...")
+    print(f"\nApplying data cleaning...")
     
     # 1. Trim whitespace from string columns
     string_columns = ["hotel_name", "description", "top_amenities", 
@@ -158,7 +155,7 @@ def clean_and_load_to_silver(spark):
             df = df.withColumn(col, F.trim(F.col(col)))
     
     # 2. Parse rating_score to Double (remove non-numeric characters)
-    print(f"   📊 Converting rating_score to Double...")
+    print(f"   Converting rating_score to Double...")
     df = df.withColumn(
         "rating_score",
         F.when(
@@ -167,18 +164,23 @@ def clean_and_load_to_silver(spark):
         ).otherwise(None)
     )
     
-    # 3. Extract review_count number from review_count_text (e.g., "· 3 đánh giá" → 3)
-    print(f"   🔢 Extracting review_count from review_count_text...")
+    # 3. Làm sạch review_count_text: chỉ lấy số, sau đó đổi tên thành review_count
+    print(f"   Extracting review_count from review_count_text và thay thế trực tiếp...")
     df = df.withColumn(
-        "review_count",
+        "review_count_text",
         F.when(
             F.col("review_count_text").isNotNull(),
             F.regexp_extract(F.col("review_count_text"), r"(\d+)", 1).cast(IntegerType())
         ).otherwise(None)
     )
+    # Đổi tên cột review_count_text thành review_count
+    df = df.withColumnRenamed("review_count_text", "review_count")
+    # Xóa cột review_count_text nếu vẫn còn tồn tại (phòng trường hợp lỗi rename hoặc các bước khác)
+    if "review_count_text" in df.columns:
+        df = df.drop("review_count_text")
     
     # 4. Clean top_amenities - remove duplicate commas and spaces
-    print(f"   🧹 Cleaning top_amenities...")
+    print(f"   Cleaning top_amenities...")
     df = df.withColumn(
         "top_amenities",
         F.when(
@@ -195,34 +197,74 @@ def clean_and_load_to_silver(spark):
         ).otherwise(None)
     )
     
+
     # 5. Replace empty strings with NULL for optional fields
     optional_fields = ["description", "top_amenities", "review_count_text", 
                       "rating_breakdown", "activities"]
-    
     for col in optional_fields:
         if col in df.columns:
             df = df.withColumn(
                 col,
                 F.when(F.col(col) == "", None).otherwise(F.col(col))
             )
-    
+
+    # 6. Làm phẳng cột rating_breakdown thành chuỗi: 'Nhân viên phục vụ: 8,0, Tiện nghi: 8,1, ...'
+    print("\nLàm phẳng cột rating_breakdown thành chuỗi mô tả...")
+    from pyspark.sql.functions import udf
+    def flatten_rating_breakdown(s):
+        try:
+            import ast
+            if s is None or s.strip() == '' or s.strip() == '{}':
+                return None
+            d = ast.literal_eval(s)
+            if not isinstance(d, dict):
+                return None
+            # Loại bỏ các key có giá trị rỗng/null
+            items = [f"{k}: {v}" for k, v in d.items() if v is not None and str(v).strip() != '']
+            return ', '.join(items)
+        except Exception:
+            return None
+    flatten_udf = udf(flatten_rating_breakdown, StringType())
+    df = df.withColumn("rating_breakdown", flatten_udf(F.col("rating_breakdown")))
+    print("Mẫu rating_breakdown sau khi làm phẳng:")
+    df.select("rating_breakdown").show(5, truncate=False)
+
+    # Drop cột 'activities'
+    print("\nDrop cột 'activities'...")
+    df = df.drop("activities")
+
+    # Chỉ giữ lại các dòng mà rating_score, review_count, rating_breakdown đều KHÔNG null
+    print("\nLọc các dòng có đủ dữ liệu ở rating_score, review_count, rating_breakdown...")
+    df = df.filter(
+        F.col('rating_score').isNotNull() &
+        F.col('review_count').isNotNull() &
+        F.col('rating_breakdown').isNotNull()
+    )
+
     cleaned_count = df.count()
     removed_count = original_count - cleaned_count
-    
+
+    # Làm sạch cụm “Xem tất cả ... tiện nghi” ở cuối cột top_amenities
+    print("\nLoại bỏ cụm 'Xem tất cả ... tiện nghi' ở cuối cột top_amenities...")
+    df = df.withColumn(
+        "top_amenities",
+        F.regexp_replace(F.col("top_amenities"), r",?\s*Xem tất cả \d+ tiện nghi\.?$", "")
+    )
+
     print(f"   Original records: {original_count:,}")
     print(f"   Cleaned records: {cleaned_count:,}")
     print(f"   Removed: {removed_count:,}")
     
     # Calculate row checksum for change detection (PRESERVED FROM ORIGINAL)
-    print(f"\n🔐 Calculating row checksums for change detection...")
+    print(f"\nCalculating row checksums for change detection...")
     df_with_checksum = calculate_row_checksum(df, BUSINESS_COLUMNS)
     
     # Show sample after cleaning
-    print(f"\n📋 Sample data after cleaning (first 3 rows):")
+    print(f"\nSample data after cleaning (first 3 rows):")
     df_with_checksum.select("hotel_name", "province", "rating_score", "row_checksum").show(3, truncate=False)
     
     # MERGE into Silver table (UPSERT mode - PRESERVED FROM ORIGINAL)
-    print(f"\n🔄 MERGE into Silver table (UPSERT mode)...")
+    print(f"\nMERGE into Silver table (UPSERT mode)...")
     print(f"   Target: {SILVER_TABLE}")
     print(f"   Business Key: {BUSINESS_KEY}")
     print(f"   Strategy: UPDATE if changed, INSERT if new, SKIP if unchanged")
@@ -236,11 +278,11 @@ def clean_and_load_to_silver(spark):
     )
     
     # Print statistics
-    print(f"\n📊 MERGE Results:")
+    print(f"\nMERGE Results:")
     print(f"   ✅ Inserted: {stats['inserted']:,} new records")
-    print(f"   🔄 Updated: {stats['updated']:,} changed records")
-    print(f"   ⏭️  Skipped: {stats['skipped']:,} unchanged records")
-    print(f"   📈 Total processed: {stats['inserted'] + stats['updated'] + stats['skipped']:,}")
+    print(f"   Updated: {stats['updated']:,} changed records")
+    print(f"   Skipped: {stats['skipped']:,} unchanged records")
+    print(f"   Total processed: {stats['inserted'] + stats['updated'] + stats['skipped']:,}")
     
     # Get source file info for tracking (added by Step 1)
     source_file_info = df.select("source_file", "source_file_checksum", "source_file_size_bytes").first()
@@ -283,32 +325,30 @@ def clean_and_load_to_silver(spark):
     
     return stats
 
-
 def main():
     print("=" * 80)
-    print("🔄 SILVER HOTELS DETAIL - STEP 2: CLEAN & LOAD (Scratch → Silver)")
+    print("SILVER HOTELS DETAIL - STEP 2: CLEAN & LOAD (Scratch → Silver)")
     print("=" * 80)
     
     spark = None
-    
     try:
         spark = get_spark_session(app_name="Silver_Hotels_Detail_Step2_Clean_Load")
         
         # Create Silver table if needed
-        print("\n1️⃣  Ensuring Silver table exists...")
+        print("\nEnsuring Silver table exists...")
         create_silver_table_if_needed(spark)
         
         # Clean and load
-        print("\n2️⃣  Cleaning and loading to Silver...")
+        print("\nCleaning and loading to Silver...")
         stats = clean_and_load_to_silver(spark)
         
         print("\n" + "=" * 80)
         print(f"✅ STEP 2 COMPLETED")
         print("=" * 80)
-        print(f"   Inserted: {stats['inserted']:,}")
+        print(f"   ✅ Inserted: {stats['inserted']:,}")
         print(f"   Updated: {stats['updated']:,}")
         print(f"   Skipped: {stats['skipped']:,}")
-        print(f"\n🎉 Hotels Detail pipeline finished successfully!")
+        print(f"\n✅ Hotels Detail pipeline finished successfully!")
         
     except Exception as e:
         print(f"\n❌ ERROR: {e}")
@@ -327,12 +367,10 @@ def main():
             error_message=str(e)
         )
         
-        sys.exit(1)
-        
+        sys.exit(1)     
     finally:
         if spark:
             spark.stop()
-
 
 if __name__ == "__main__":
     main()

@@ -1,7 +1,6 @@
 """
 Silver Layer - Hotels Detail - Step 1: Transform
 Transform Bronze CSV files to Parquet in Scratch bucket
-
 Based on original transform_booking_hotels_detail.py:
 - Handle multi-line CSV values (descriptions with line breaks)
 - Clean province column for S3-safe partitioning
@@ -29,7 +28,6 @@ from silver.hotels_detail.config import (
     POSTGRES_CONN
 )
 
-
 # ============================================================================
 # S3 FILE SIZE UTILITY
 # ============================================================================
@@ -44,17 +42,16 @@ def get_s3_file_size(spark, file_path):
             spark._jvm.java.net.URI(file_path), 
             hadoop_conf
         )
-        
         path = spark._jvm.org.apache.hadoop.fs.Path(file_path)
         file_status = fs.getFileStatus(path)
         size_bytes = file_status.getLen()
         
         size_mb = size_bytes / (1024 * 1024)
-        print(f"📦 File size: {size_mb:.2f} MB ({size_bytes:,} bytes)")
+        print(f"File size: {size_mb:.2f} MB ({size_bytes:,} bytes)")
         
         return size_bytes
     except Exception as e:
-        print(f"⚠️  Could not get file size: {e}")
+        print(f"Could not get file size: {e}")
         return 0
 
 
@@ -90,9 +87,9 @@ def get_latest_bronze_file(spark, bronze_base_path):
         files_with_ts.sort(reverse=True, key=lambda x: x[0])
         
         latest = files_with_ts[0]
-        print(f"📂 Found {len(files_with_ts)} Bronze files")
-        print(f"🔍 Latest file: {latest[3]} (timestamp: {latest[0]})")
-        print(f"📄 Checksum from filename: {latest[1]}")
+        print(f"Found {len(files_with_ts)} Bronze files")
+        print(f"Latest file: {latest[3]} (timestamp: {latest[0]})")
+        print(f"Checksum from filename: {latest[1]}")
         
         return latest[2], latest[1], latest[3]  # file_path, checksum, file_name
         
@@ -161,20 +158,20 @@ def transform_to_scratch(spark):
     Transform Bronze CSV to Parquet in Scratch bucket
     Based on original transform logic
     """
-    print(f"🚀 Starting transformation: Bronze → Scratch")
+    print(f"Starting transformation: Bronze → Scratch")
     print(f"   Source: {BRONZE_BASE_PATH}")
     print(f"   Target: {SCRATCH_BASE_PATH}")
     
     # Find latest Bronze file
     latest_file_path, file_checksum, file_name = get_latest_bronze_file(spark, BRONZE_BASE_PATH)
     
-    print(f"\n📄 Processing: {file_name}")
+    print(f"\nProcessing: {file_name}")
     print(f"   Checksum: {file_checksum}")
     
     # Check if already processed in Silver layer
-    print(f"\n🔍 Checking tracking database...")
+    print(f"\nChecking tracking database...")
     if check_if_file_ingested(file_checksum, POSTGRES_CONN, layer='silver'):
-        print(f"   ⏭️  Already processed in Silver layer")
+        print(f"   Already processed in Silver layer")
         print(f"      Checksum: {file_checksum}")
         print(f"      Skipping transformation")
         return 0
@@ -184,7 +181,7 @@ def transform_to_scratch(spark):
     file_size_bytes = get_s3_file_size(spark, latest_file_path)
     
     # Read CSV from Bronze with multiLine option (PRESERVED FROM ORIGINAL)
-    print(f"\n📖 Reading CSV from Bronze (with multiLine support for descriptions)...")
+    print(f"\nReading CSV from Bronze (with multiLine support for descriptions)...")
     df = spark.read \
         .option("header", "true") \
         .option("inferSchema", "false") \
@@ -194,7 +191,7 @@ def transform_to_scratch(spark):
         .csv(latest_file_path)
     
     total_records = df.count()
-    print(f"📝 Total records from Bronze: {total_records:,}")
+    print(f"Total records from Bronze: {total_records:,}")
     
     # Validate NOT NULL constraints
     df = validate_data(df)
@@ -203,11 +200,11 @@ def transform_to_scratch(spark):
     df = clean_province_column(df)
     
     # Show cleaned province distribution
-    print(f"\n📊 Cleaned province distribution (top 20):")
+    print(f"\nCleaned province distribution (top 20):")
     df.groupBy("province").count().orderBy(F.desc("count")).show(20, truncate=50)
     
     # Show data quality stats (PRESERVED FROM ORIGINAL)
-    print(f"\n📊 Data quality stats:")
+    print(f"\nData quality stats:")
     print(f"   - Hotels with rating: {df.filter(F.col('rating_score').isNotNull() & (F.col('rating_score') != '')).count():,}")
     print(f"   - Hotels with reviews: {df.filter(F.col('review_count_text').isNotNull() & (F.col('review_count_text') != '')).count():,}")
     print(f"   - Hotels with activities: {df.filter(F.col('activities').isNotNull() & (F.col('activities') != '')).count():,}")
@@ -220,7 +217,7 @@ def transform_to_scratch(spark):
         .withColumn("source_file_size_bytes", F.lit(file_size_bytes))
     
     # Show sample data
-    print(f"\n📋 Sample data (first 3 rows):")
+    print(f"\nSample data (first 3 rows):")
     df_with_metadata.select("hotel_name", "province", "rating_score", "review_count_text").show(3, truncate=False)
     
     # Generate unique run ID
@@ -228,7 +225,7 @@ def transform_to_scratch(spark):
     output_path = f"{SCRATCH_BASE_PATH}/run_{run_id}"
     
     # Write to Scratch bucket (Parquet format, partitioned by province)
-    print(f"\n💾 Writing to Scratch bucket...")
+    print(f"\nWriting to Scratch bucket...")
     print(f"   Path: {output_path}")
     print(f"   Format: Parquet (Snappy compression)")
     print(f"   Partitioned by: province")
