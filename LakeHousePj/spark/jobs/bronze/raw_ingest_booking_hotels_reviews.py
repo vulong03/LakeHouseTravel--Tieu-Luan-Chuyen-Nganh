@@ -111,7 +111,8 @@ def ingest_raw_csv_to_bronze(source_path: str, bronze_bucket: str, source_type: 
                 "multiline_support": True,
                 "original_filename": file_name,
                 "bronze_location": bronze_output
-            }
+            },
+            file_size_bytes=file_size
         )
         
         print(f"\n✅ COMPLETED: {record_count} records ingested")

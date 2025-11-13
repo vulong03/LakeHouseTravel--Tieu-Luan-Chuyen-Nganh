@@ -166,6 +166,7 @@ def create_silver_table(spark):
     schema = StructType([
         # Original CSV columns
         StructField("hotel_name", StringType(), False),
+        StructField("hotel_url", StringType(), True), 
         StructField("reviewer_name", StringType(), True),
         StructField("reviewer_country", StringType(), True),
         StructField("room_type", StringType(), True),
@@ -258,6 +259,11 @@ def transform_hotels_reviews(spark, bronze_base_path, verify_checksum=False):
         if normalized != col_name:
             df = df.withColumnRenamed(col_name, normalized)
     
+    # Drop 'province' column if it exists (it belongs to hotels_list, not reviews)
+    if "province" in df.columns:
+        print(f"⚠️  Dropping 'province' column (not part of reviews schema)")
+        df = df.drop("province")
+    
     total_records = df.count()
     print(f"📝 Total records from Bronze: {total_records:,}")
     
@@ -277,7 +283,7 @@ def transform_hotels_reviews(spark, bronze_base_path, verify_checksum=False):
     
     # Calculate row checksum
     business_columns = [
-        "hotel_name", "reviewer_name", "reviewer_country",
+        "hotel_name", "hotel_url", "reviewer_name", "reviewer_country",
         "room_type", "stay_date", "traveler_type", "review_date",
         "review_title", "review_score", "review_positive", "review_negative"
     ]

@@ -113,7 +113,8 @@ def ingest_raw_csv_to_bronze(source_path: str, bronze_bucket: str, source_type: 
                 "original_filename": file_name,
                 "bronze_location": bronze_output,
                 "file_size_mb": round(file_size / 1024 / 1024, 2)
-            }
+            },
+            file_size_bytes=file_size
         )
         
         print(f"\n" + "=" * 80)
@@ -134,7 +135,8 @@ def ingest_raw_csv_to_bronze(source_path: str, bronze_bucket: str, source_type: 
                 status='failed',
                 layer='bronze',
                 error_message=str(e),
-                postgres_conn_params=POSTGRES_CONN
+                postgres_conn_params=POSTGRES_CONN,
+                file_size_bytes=file_size if 'file_size' in locals() else 0
             )
         except:
             pass

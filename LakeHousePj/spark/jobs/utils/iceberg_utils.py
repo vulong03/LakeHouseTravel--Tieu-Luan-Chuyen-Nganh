@@ -31,19 +31,20 @@ def create_database(spark, database_name, location=None):
         raise
 
 
-def create_iceberg_table_if_not_exists(spark, database, table_name, schema, partition_by=None, table_properties=None):
+def create_iceberg_table_if_not_exists(spark, database, table_name, schema, partition_by=None, table_properties=None, catalog="lakehouse"):
     """
     Create an Iceberg table if it doesn't exist
     
     Args:
         spark: SparkSession
-        database (str): Database name (e.g., 'bronze')
+        database (str): Database name (e.g., 'bronze', 'silver')
         table_name (str): Table name (e.g., 'tiktok_videos_metadata')
         schema: StructType schema for the table
         partition_by (list): List of column names to partition by
         table_properties (dict): Additional table properties
+        catalog (str): Catalog name (default: 'lakehouse' for Bronze, use 'silver' for Silver layer)
     """
-    full_table_name = f"lakehouse.{database}.{table_name}"
+    full_table_name = f"{catalog}.{database}.{table_name}"
     
     # Try to check if table exists and is accessible
     try:
@@ -61,7 +62,7 @@ def create_iceberg_table_if_not_exists(spark, database, table_name, schema, part
     # At this point, either table doesn't exist OR has corrupted metadata
     # Create database if not exists
     try:
-        spark.sql(f"CREATE DATABASE IF NOT EXISTS lakehouse.{database}")
+        spark.sql(f"CREATE DATABASE IF NOT EXISTS {catalog}.{database}")
     except Exception as e:
         logger.warning(f"⚠️  Database creation warning: {str(e)[:200]}")
     
@@ -82,6 +83,23 @@ def create_iceberg_table_if_not_exists(spark, database, table_name, schema, part
         props = [f"'{k}' = '{v}'" for k, v in table_properties.items()]
         properties_clause = f"TBLPROPERTIES ({', '.join(props)})"
     
+    # Get warehouse location for the catalog
+    warehouse_location = None
+    try:
+        if catalog == "silver":
+            warehouse_location = "s3a://silver/lakehouse"
+        elif catalog == "gold":
+            warehouse_location = "s3a://gold/lakehouse"
+        elif catalog == "bronze" or catalog == "lakehouse":
+            warehouse_location = "s3a://bronze/lakehouse"
+    except:
+        pass
+    
+    location_clause = ""
+    if warehouse_location:
+        table_location = f"{warehouse_location}/{database}.db/{table_name}"
+        location_clause = f"LOCATION '{table_location}'"
+    
     # Try CREATE TABLE IF NOT EXISTS first
     create_table_sql = f"""
     CREATE TABLE IF NOT EXISTS {full_table_name} (
@@ -89,6 +107,7 @@ def create_iceberg_table_if_not_exists(spark, database, table_name, schema, part
     )
     USING iceberg
     {partition_clause}
+    {location_clause}
     {properties_clause}
     """
     
@@ -109,6 +128,7 @@ def create_iceberg_table_if_not_exists(spark, database, table_name, schema, part
         )
         USING iceberg
         {partition_clause}
+        {location_clause}
         {properties_clause}
         """
         

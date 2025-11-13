@@ -119,7 +119,8 @@ def ingest_single_comment_file(spark, source_path: str, bronze_bucket: str, sour
             status='success',
             layer='bronze',
             postgres_conn_params=POSTGRES_CONN,
-            ingestion_details=ingestion_details
+            ingestion_details=ingestion_details,
+            file_size_bytes=file_size  # Pass file size in bytes
         )
         
         print(f"   ✅ SUCCESS - {total_lines} lines ingested")
@@ -144,7 +145,8 @@ def ingest_single_comment_file(spark, source_path: str, bronze_bucket: str, sour
                 status='failed',
                 layer='bronze',
                 error_message=str(e),
-                postgres_conn_params=POSTGRES_CONN
+                postgres_conn_params=POSTGRES_CONN,
+                file_size_bytes=file_size if 'file_size' in locals() else 0
             )
         except:
             pass
