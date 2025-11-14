@@ -211,12 +211,12 @@ def create_silver_table(spark):
     ])
     
     create_iceberg_table_if_not_exists(
-        spark=spark,
-        catalog="silver",
+        spark=spark,      
         database=SILVER_DATABASE,
         table_name=TABLE_NAME,
         schema=schema,
         partition_by=PARTITION_COLUMNS,
+        catalog="silver",
         table_properties={
             "write.format.default": "parquet",
             "write.parquet.compression-codec": "snappy"
