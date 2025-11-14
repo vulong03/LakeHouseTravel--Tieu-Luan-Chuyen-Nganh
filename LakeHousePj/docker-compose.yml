@@ -221,8 +221,14 @@ services:
       SPARK_MODE: worker
       SPARK_MASTER_URL: spark://spark-master:7077
       SPARK_WORKER_CORES: 4
-      SPARK_WORKER_MEMORY: 4g
+      SPARK_WORKER_MEMORY: 3g
       SPARK_WORKER_WEBUI_PORT: 8081
+    deploy:
+      resources:
+        limits:
+          memory: 3.5g    # Hard limit: Container bị kill nếu vượt 3.5GB (an toàn với 9.6GB free)
+        reservations:
+          memory: 2g      # Soft limit: Đảm bảo có ít nhất 2GB khi start
     depends_on:
       spark-master:
         condition: service_healthy

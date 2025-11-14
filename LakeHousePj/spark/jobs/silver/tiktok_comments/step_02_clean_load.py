@@ -548,11 +548,11 @@ def create_silver_comments_table(spark):
 # REMOVED: prepare_unprocessed_partitions() - No longer needed with new approach
 
 
-def process_batches(spark, unprocessed_urls, mapping, scratch_path_posts, scratch_path_comments):
+def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_comments):
     """
     PHASE 2: PER-FILE PROCESSING - Process each file completely (posts + comments).
     
-    Strategy: For each post_url in batch:
+    Strategy: For each item (metadata dict) in batch:
       1. Read partition for posts
       2. Clean & append posts (with duplicate check)
       3. Read partition for comments
@@ -561,8 +561,7 @@ def process_batches(spark, unprocessed_urls, mapping, scratch_path_posts, scratc
     
     Args:
         spark: SparkSession instance
-        unprocessed_urls: List of post_urls to process
-        mapping: Partition → source file mapping
+        unprocessed_items: List of metadata dicts (each has post_url, checksum, etc.)
         scratch_path_posts: Scratch path for posts
         scratch_path_comments: Scratch path for comments
     
@@ -570,11 +569,11 @@ def process_batches(spark, unprocessed_urls, mapping, scratch_path_posts, scratc
         Dict with statistics: posts_loaded, comments_loaded, files_success, files_failed
     """
     print(f"\n{'='*80}")
-    print(f"📦 PHASE 2: PER-FILE PROCESSING - Processing {len(unprocessed_urls)} files")
+    print(f"📦 PHASE 2: PER-FILE PROCESSING - Processing {len(unprocessed_items)} files")
     print(f"{'='*80}")
     
     # Create batches (for organized display, not for bulk processing)
-    batches = create_batches(unprocessed_urls, BATCH_SIZE)
+    batches = create_batches(unprocessed_items, BATCH_SIZE)
     
     stats = {
         "posts_loaded": 0,
@@ -594,14 +593,30 @@ def process_batches(spark, unprocessed_urls, mapping, scratch_path_posts, scratc
         batch_failed = 0
         
         # Process each file in batch
-        for idx, post_url in enumerate(batch_urls, 1):
+        for idx, item_metadata in enumerate(batch_urls, 1):
             print(f"\n[{idx}/{len(batch_urls)}]", end=" ")
             
+            # Check if SparkContext is still alive before processing
+            if spark.sparkContext._jsc is None or spark.sparkContext._jsc.sc().isStopped():
+                print(f"❌ SparkContext stopped - aborting remaining files")
+                print(f"   Already processed: {batch_success} files")
+                print(f"   Remaining in batch: {len(batch_urls) - idx + 1} files")
+                stats["files_failed"] += len(batch_urls) - idx + 1
+                break
+            
             try:
+                # Extract metadata from item
+                post_url = item_metadata["post_url"]
+                file_meta = {
+                    "source_file": item_metadata["source_file"],
+                    "source_file_checksum": item_metadata["source_file_checksum"],
+                    "source_file_size_bytes": item_metadata["source_file_size_bytes"]
+                }
+                
                 posts_count, comments_count, status, error_msg = process_single_post_url(
                     spark=spark,
                     post_url=post_url,
-                    mapping=mapping,
+                    file_meta=file_meta,
                     scratch_path_posts=scratch_path_posts,
                     scratch_path_comments=scratch_path_comments,
                     silver_table_posts=SILVER_TABLE_POSTS,
@@ -703,29 +718,31 @@ def clean_and_load_to_silver(spark):
     print(f"{'='*80}")
     
     # List partitions from posts
-    posts_partitions = list_scratch_partitions(spark, scratch_path_posts)
-    
+    # posts_partitions = list_scratch_partitions(spark, scratch_path_posts)
+    file_combinations = list_scratch_partitions(spark, scratch_path_posts)
+
     # Build mapping (includes debug info for 1502 vs 1400 issue)
-    mapping = build_partition_to_file_mapping(spark, scratch_path_posts, posts_partitions)
-    
+    # mapping = build_partition_to_file_mapping(spark, scratch_path_posts, posts_partitions)
+    mapping = build_partition_to_file_mapping(spark, scratch_path_posts, file_combinations)
     # Filter unprocessed
-    unprocessed_urls = filter_unprocessed_partitions(spark, mapping, POSTGRES_CONN, layer='silver')
+    unprocessed_items = filter_unprocessed_partitions(spark, mapping, POSTGRES_CONN, layer='silver')
     
-    if not unprocessed_urls:
+    if not unprocessed_items:
         print(f"\n✅ All files already processed!")
         return 0, 0
     
     # Phase 2: PER-FILE PROCESSING
     stats = process_batches(
         spark,
-        unprocessed_urls,
-        mapping,
+        unprocessed_items,
         scratch_path_posts,
         scratch_path_comments
     )
     
     # Phase 3: SUMMARY
-    print_summary(stats, len(unprocessed_urls))
+    # print_summary(stats, len(unprocessed_urls))
+    print_summary(stats, len(unprocessed_items))
+
     
     return stats["posts_loaded"], stats["comments_loaded"]
 
