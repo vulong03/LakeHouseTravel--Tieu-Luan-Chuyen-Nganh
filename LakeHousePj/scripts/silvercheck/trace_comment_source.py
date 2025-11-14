@@ -14,7 +14,7 @@ from utils.spark_session import get_spark_session
 def main():
     spark = get_spark_session("Trace_Comment_Source")
     
-    target_url = "https://www.tiktok.com/@_nguyen.hoa2403_/video/7545117738658761991"
+    target_url = "https://www.tiktok.com/@halleygoround/video/7344974438342905089"
     
     print("=" * 80)
     print("🔍 TRACING COMMENT DATA SOURCE")
@@ -28,8 +28,39 @@ def main():
     print("📂 LAYER 1: SCRATCH (Parquet - after Step 1)")
     print("=" * 80)
     
-    scratch_path = "s3a://scratch/pipeline/silver/tiktok_post_comments/run_20251111_150809"
-    print(f"\n📁 Path: {scratch_path}")
+    # Find latest Scratch run folder dynamically
+    scratch_base = "s3a://scratch/pipeline/silver/tiktok_post_comments"
+    hadoop_conf = spark._jsc.hadoopConfiguration()
+    fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(
+        spark._jvm.java.net.URI(scratch_base),
+        hadoop_conf
+    )
+    base_path = spark._jvm.org.apache.hadoop.fs.Path(scratch_base)
+    
+    if not fs.exists(base_path):
+        print(f"❌ Scratch path not found: {scratch_base}")
+        return
+    
+    # List all run_* folders
+    run_folders = []
+    status_list = fs.listStatus(base_path)
+    for status in status_list:
+        path = str(status.getPath())
+        folder_name = path.split("/")[-1]
+        if folder_name.startswith("run_"):
+            run_folders.append(folder_name)
+    
+    if not run_folders:
+        print(f"❌ No run folders found in {scratch_base}")
+        return
+    
+    # Get latest run
+    latest_run = sorted(run_folders)[-1]
+    scratch_path = f"{scratch_base}/{latest_run}"
+    
+    print(f"\n📁 Found {len(run_folders)} run(s)")
+    print(f"🔍 Latest run: {latest_run}")
+    print(f"📂 Path: {scratch_path}")
     
     df_scratch = spark.read.parquet(scratch_path)
     df_scratch_filtered = df_scratch.filter(F.col("post_url") == target_url)
