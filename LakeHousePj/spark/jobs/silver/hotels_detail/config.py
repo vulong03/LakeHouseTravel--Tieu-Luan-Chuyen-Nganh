@@ -19,16 +19,14 @@ BUSINESS_KEY = "hotel_url"
 
 # Business columns for checksum calculation (change detection)
 BUSINESS_COLUMNS = [
-    "hotel_name",
+    "hotel_name", 
     "hotel_url", 
-    "province",
-    "description",
-    "top_amenities",
-    "rating_score",
-    "review_count_text",
-    "review_count",  # NEW: Extracted review count
-    "rating_breakdown",
-    "activities"
+    "province", 
+    "description", 
+    "top_amenities", 
+    "rating_score", 
+    "review_count",  
+    "rating_breakdown", 
 ]
 
 # Partition columns (S3-safe cleaned province)

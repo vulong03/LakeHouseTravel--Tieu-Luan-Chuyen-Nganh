@@ -11,7 +11,7 @@ from datetime import datetime
 TABLE_NAME = "hotels_list"
 LAYER = "silver"
 BUSINESS_KEY = "hotel_url"  # Primary key for MERGE operation
-BUSINESS_COLUMNS = ["stt", "hotel_name", "hotel_url", "province"]
+BUSINESS_COLUMNS = ["hotel_name", "hotel_url", "province"]
 REQUIRED_COLUMNS = ["hotel_name", "hotel_url", "province"]  # NOT NULL columns
 
 # ============================================================================

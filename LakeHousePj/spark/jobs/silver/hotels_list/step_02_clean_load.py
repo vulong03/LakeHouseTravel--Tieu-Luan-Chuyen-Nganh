@@ -106,14 +106,11 @@ def create_silver_table(spark):
     """Create Silver table for hotels list if not exists"""
     schema = StructType([
         # Business columns
-        StructField("stt", StringType(), True),
         StructField("hotel_name", StringType(), False),
         StructField("hotel_url", StringType(), False),
         StructField("province", StringType(), False),
-        
         # Row checksum for change detection
         StructField("row_checksum", StringType(), False),
-        
         # Metadata columns
         StructField("ingestion_timestamp", TimestampType(), False),
         StructField("source_file", StringType(), False),
@@ -232,13 +229,14 @@ def clean_and_load(spark):
     
     # 4. Prepare for Silver (add ingestion timestamp, calculate checksum)
     print(f"\n4️⃣  Preparing for Silver table...")
-    
+    # Xóa cột 'stt' nếu tồn tại
+    if 'stt' in df.columns:
+        df = df.drop('stt')
     # Add/update ingestion timestamp
     df = df.withColumn("ingestion_timestamp", F.lit(datetime.now()))
-    
     # Calculate row checksum for change detection
     df = calculate_row_checksum(df, BUSINESS_COLUMNS)
-    
+    print(f"   ✓ Đã xóa cột 'stt' (nếu có)")
     print(f"   ✓ Added ingestion_timestamp")
     print(f"   ✓ Calculated row_checksum for {cleaned_count:,} records")
     
