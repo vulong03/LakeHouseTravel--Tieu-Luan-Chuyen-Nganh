@@ -128,18 +128,130 @@ def clean_and_transform(df):
                    F.regexp_replace(F.col("review_score"), ",", ".").cast(DoubleType())
             ).otherwise(F.lit(None).cast(DoubleType()))
         )
-    
-    # 3. Update ingestion_timestamp to current datetime (TimestampType)
+    # Normalize stay_date: lowercase and remove 'tháng' (and optional ':'), then format MM/YYYY
+    print(f"\n🔧 Normalizing stay_date: lowercase and remove 'tháng' before extracting month/year...")
+    df_cleaned = df_cleaned.withColumn("_stay_raw", F.lower(F.coalesce(F.col("stay_date"), F.lit(""))))
+    # remove the literal 'tháng' and any following ':' or spaces
+    df_cleaned = df_cleaned.withColumn("_stay_raw", F.regexp_replace(F.col("_stay_raw"), r"tháng[:\s]*", ""))
+
+    # Extract month and year from cleaned stay string
+    df_cleaned = df_cleaned.withColumn("_stay_month", F.regexp_extract(F.col("_stay_raw"), r"(\d{1,2})(?=/|\s|$)", 1)) \
+                         .withColumn("_stay_year", F.regexp_extract(F.col("_stay_raw"), r"(\d{4})", 1))
+
+# Build a proper DateType with day=1 when month/year are available
+    df_cleaned = df_cleaned.withColumn(
+        "stay_date",
+        F.when(
+            (F.col("_stay_month") != "") & (F.col("_stay_year") != ""),
+            F.make_date(F.col("_stay_year").cast("int"), F.col("_stay_month").cast("int"), F.lit(1))
+        ).otherwise(F.lit(None).cast(DateType()))
+    )
+
+    # Log normalization stats
+    try:
+        total_stay = df_cleaned.count()
+        parsed_stay = df_cleaned.filter((F.col("_stay_month") != "") & (F.col("_stay_year") != "")).count()
+        print(f"   stay_date total: {total_stay:,}, parsed -> MM/YYYY: {parsed_stay:,}")
+    except Exception:
+        pass
+
+    # Drop helper columns
+    df_cleaned = df_cleaned.drop("_stay_raw", "_stay_month", "_stay_year")
+
+    # CLEAN TEXT COLUMNS: lowercase, remove HTML, URLs, newlines, strange chars and icons
+    print(f"\n🧼 Cleaning text columns `review_positive` and `review_negative` (lowercase, strip weird chars)...")
+    try:
+        before_pos_null = df_cleaned.filter(F.col("review_positive").isNull()).count()
+        before_neg_null = df_cleaned.filter(F.col("review_negative").isNull()).count()
+        before_title_null = df_cleaned.filter(F.col("review_title").isNull()).count()
+    except Exception:
+        before_pos_null = before_neg_null = before_title_null = None
+
+    df_cleaned = df_cleaned \
+        .withColumn("review_positive",
+            F.when(F.col("review_positive").isNotNull(),
+                F.lower(
+                    F.regexp_replace(
+                        F.regexp_replace(
+                            F.regexp_replace(
+                                F.regexp_replace(F.trim(F.col("review_positive")), r"<[^>]+>", " "),
+                            r"http\S+|www\.[^\s]+", " "),
+                        r"[\r\n]+", " "),
+                    r"[^\p{L}\p{N}\p{P}\p{Z}]+", " ")
+                )
+            ).otherwise(F.lit(None))
+        ) \
+        .withColumn("review_negative",
+            F.when(F.col("review_negative").isNotNull(),
+                F.lower(
+                    F.regexp_replace(
+                        F.regexp_replace(
+                            F.regexp_replace(
+                                F.regexp_replace(F.trim(F.col("review_negative")), r"<[^>]+>", " "),
+                            r"http\S+|www\.[^\s]+", " "),
+                        r"[\r\n]+", " "),
+                    r"[^\p{L}\p{N}\p{P}\p{Z}]+", " ")
+                )
+            ).otherwise(F.lit(None))
+        ) \
+        .withColumn("review_title",
+            F.when(F.col("review_title").isNotNull(),
+                F.lower(
+                    F.regexp_replace(
+                        F.regexp_replace(
+                            F.regexp_replace(
+                                F.regexp_replace(F.trim(F.col("review_title")), r"<[^>]+>", " "),
+                            r"http\S+|www\.[^\s]+", " "),
+                        r"[\r\n]+", " "),
+                    r"[^\p{L}\p{N}\p{P}\p{Z}]+", " ")
+                )
+            ).otherwise(F.lit(None))
+        )
+
+    # collapse multiple spaces to single
+    df_cleaned = df_cleaned \
+        .withColumn("review_positive", F.regexp_replace(F.col("review_positive"), r"\s+", " ")) \
+        .withColumn("review_negative", F.regexp_replace(F.col("review_negative"), r"\s+", " ")) \
+        .withColumn("review_title", F.regexp_replace(F.col("review_title"), r"\s+", " "))
+
+    try:
+        after_pos_null = df_cleaned.filter(F.col("review_positive").isNull()).count()
+        after_neg_null = df_cleaned.filter(F.col("review_negative").isNull()).count()
+        after_title_null = df_cleaned.filter(F.col("review_title").isNull()).count()
+        if before_pos_null is not None:
+            print(f"   review_positive NULLs before: {before_pos_null}, after: {after_pos_null}")
+            print(f"   review_negative NULLs before: {before_neg_null}, after: {after_neg_null}")
+            print(f"   review_title NULLs before: {before_title_null}, after: {after_title_null}")
+    except Exception:
+        pass
+
+    # 3. Remove rows with NULL in business-required columns
+    print(f"\n⚠️  Removing records with NULLs in `review_date`, `traveler_type` or `review_score`...")
+    before_null_filter = df_cleaned.count()
+    df_cleaned = df_cleaned.filter(
+        (F.col("review_date").isNotNull()) &
+        (F.col("traveler_type").isNotNull()) &
+        (F.col("review_score").isNotNull())
+    )
+    after_null_filter = df_cleaned.count()
+    removed_nulls = before_null_filter - after_null_filter
+    print(f"   Records before NULL-filter: {before_null_filter:,}")
+    print(f"   Records after NULL-filter:  {after_null_filter:,}")
+    print(f"   Removed (NULLs):           {removed_nulls:,}")
+
+    # Exact-row dedup removed here — deduplication handled later via row_checksum LEFT ANTI JOIN
+
+    # 5. Update ingestion_timestamp to current datetime (TimestampType)
     print(f"🔧 Adding ingestion_timestamp (TimestampType)...")
     df_cleaned = df_cleaned \
         .withColumn("ingestion_timestamp", F.lit(datetime.now()))
-    
+
     # Show sample after cleaning
     print(f"\n📋 Sample cleaned data:")
     df_cleaned.select(
         "hotel_name", "review_date", "review_score", "traveler_type"
     ).show(5, truncate=False)
-    
+
     return df_cleaned
 
 
@@ -192,7 +304,7 @@ def create_silver_table(spark):
         StructField("reviewer_name", StringType(), True),
         StructField("reviewer_country", StringType(), True),
         StructField("room_type", StringType(), True),
-        StructField("stay_date", StringType(), True),
+        StructField("stay_date", DateType(), True),
         StructField("traveler_type", StringType(), True),
         StructField("review_date", DateType(), True),  # ✅ DateType (business date)
         StructField("review_title", StringType(), True),
