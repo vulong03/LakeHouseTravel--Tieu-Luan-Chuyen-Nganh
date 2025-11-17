@@ -1,16 +1,16 @@
 """
-Step 2: Clean & Load - Hotels Reviews (Scratch → Silver)
+Bước 2: Clean & Load - Hotels Reviews (Scratch → Silver)
 
-Purpose: Apply data cleaning, type conversion, deduplication, and load to Silver
-Strategy:
-  - Read from Scratch Parquet files
-  - Parse review_date: Vietnamese format → DateType (yyyy-MM-dd)
+Mục đích: Làm sạch dữ liệu, convert kiểu dữ liệu, deduplication và load vào Silver
+Chiến lược:
+  - Đọc từ Scratch Parquet files
+  - Parse review_date: định dạng tiếng Việt → DateType (yyyy-MM-dd)
   - Convert review_score: String → DoubleType
-  - Add ingestion_timestamp: TimestampType
-  - Calculate row_checksum (all 12 business columns)
-  - Deduplicate: LEFT ANTI JOIN on row_checksum (remove existing records)
-  - APPEND to Silver Iceberg table
-  - Log to PostgreSQL tracking table
+  - Thêm ingestion_timestamp: TimestampType
+  - Tính row_checksum (12 cột business)
+  - Deduplicate: LEFT ANTI JOIN trên row_checksum (loại bỏ bản ghi đã tồn tại)
+  - APPEND vào Silver Iceberg table
+  - Ghi log vào PostgreSQL tracking table
 
 Input: Scratch Parquet files (s3a://scratch/pipeline/silver/hotels_reviews/run_*/)
 Output: Silver Iceberg table (silver.silver.hotels_reviews)
@@ -45,23 +45,23 @@ from silver.hotels_reviews.config import (
 
 def parse_review_date(df):
     """
-    Parse Vietnamese review_date format to DateType
+    Parse review_date tiếng Việt sang DateType
     
     Format: "Ngày đánh giá: ngày DD tháng MM năm YYYY"
-    Example: "Ngày đánh giá: ngày 15 tháng 3 năm 2024"
+    Ví dụ: "Ngày đánh giá: ngày 15 tháng 3 năm 2024"
     
-    Strategy:
-    1. Extract day, month, year using regex
-    2. Use F.make_date(year, month, day) to create DateType
-    3. Handle NULL values (keep as NULL)
+    Chiến lược:
+    1. Extract day, month, year bằng regex
+    2. Dùng F.make_date(year, month, day) để tạo DateType
+    3. Xử lý NULL (giữ nguyên NULL)
     
     Args:
-        df: Input DataFrame with review_date as StringType
+        df: DataFrame input có cột review_date dạng StringType
     
     Returns:
-        DataFrame with review_date as DateType
+        DataFrame với review_date dạng DateType
     """
-    print(f"🔧 Parsing review_date (Vietnamese format → DateType)...")
+    print("Đang parse review_date (định dạng tiếng Việt → DateType)...")
     
     # Regex pattern: "ngày DD tháng MM năm YYYY"
     pattern = r"ngày (\d+) tháng (\d+) năm (\d{4})"
@@ -72,7 +72,7 @@ def parse_review_date(df):
         .withColumn("_month", F.regexp_extract(F.col("review_date"), pattern, 2).cast("int")) \
         .withColumn("_year", F.regexp_extract(F.col("review_date"), pattern, 3).cast("int"))
     
-    # Create DateType using F.make_date (handles NULL automatically)
+    # Tạo DateType bằng F.make_date (tự xử lý NULL)
     df_with_date = df_parsed \
         .withColumn("review_date_parsed", 
             F.when(
@@ -85,60 +85,61 @@ def parse_review_date(df):
         .drop("review_date", "_day", "_month", "_year") \
         .withColumnRenamed("review_date_parsed", "review_date")
     
-    # Validate parsing results
+    # Kiểm tra kết quả parsing
     total_count = df.count()
     null_count = df.filter(F.col("review_date").isNull()).count()
     parsed_count = df_with_date.filter(F.col("review_date").isNotNull()).count()
     
-    print(f"   Total records: {total_count:,}")
-    print(f"   NULL before parsing: {null_count:,}")
-    print(f"   Successfully parsed: {parsed_count:,}")
-    print(f"   Parse rate: {(parsed_count / (total_count - null_count) * 100):.2f}%")
+    print(f"   Tổng số bản ghi: {total_count:,}")
+    print(f"   NULL trước khi parse: {null_count:,}")
+    print(f"   Parse thành công: {parsed_count:,}")
+    print(f"   Tỷ lệ parse: {(parsed_count / (total_count - null_count) * 100):.2f}%")
     
     return df_with_date
 
 
 def clean_and_transform(df):
     """
-    Apply data cleaning and type conversions
+    Làm sạch dữ liệu và convert kiểu dữ liệu
     
     Transformations:
-    1. Parse review_date: String → DateType (Vietnamese format)
+    1. Parse review_date: String → DateType (định dạng tiếng Việt)
     2. Convert review_score: String → DoubleType
-    3. Keep all other columns as-is (String types)
-    4. Add ingestion_timestamp: TimestampType (current datetime)
+    3. Giữ các cột khác dạng String
+    4. Thêm ingestion_timestamp: TimestampType (thời gian hiện tại)
     
     Args:
-        df: Input DataFrame from Scratch
+        df: DataFrame input từ Scratch
     
     Returns:
-        Cleaned DataFrame with proper types
+        DataFrame đã làm sạch với kiểu dữ liệu đúng
     """
-    print(f"\n🧹 Applying data cleaning and transformations...")
+    print("\nĐang áp dụng bước làm sạch dữ liệu và transform...")
     
-    # 1. Parse review_date (Vietnamese format → DateType)
+    # 1. Parse review_date (định dạng tiếng Việt → DateType)
     df_cleaned = parse_review_date(df)
     
     # 2. Convert review_score: String → DoubleType
-    # ✅ FIX: Replace comma with dot (Vietnamese format: "8,5" → "8.5")
-    print(f"🔧 Converting review_score (String → Double)...")
+    # Thay dấu phẩy bằng dấu chấm (định dạng VN: "8,5" → "8.5")
+    print("Đang convert review_score (String → Double)...")
     df_cleaned = df_cleaned \
         .withColumn("review_score", 
             F.when(F.col("review_score").isNotNull(), 
                    F.regexp_replace(F.col("review_score"), ",", ".").cast(DoubleType())
             ).otherwise(F.lit(None).cast(DoubleType()))
         )
-    # Normalize stay_date: lowercase and remove 'tháng' (and optional ':'), then format MM/YYYY
-    print(f"\n🔧 Normalizing stay_date: lowercase and remove 'tháng' before extracting month/year...")
+    
+    # Chuẩn hoá stay_date: lowercase, bỏ chữ 'tháng', sau đó build MM/YYYY
+    print("\nĐang chuẩn hoá stay_date: lowercase và bỏ 'tháng' trước khi extract month/year...")
     df_cleaned = df_cleaned.withColumn("_stay_raw", F.lower(F.coalesce(F.col("stay_date"), F.lit(""))))
-    # remove the literal 'tháng' and any following ':' or spaces
+    # Bỏ literal 'tháng' và phần ':' hoặc khoảng trắng sau đó
     df_cleaned = df_cleaned.withColumn("_stay_raw", F.regexp_replace(F.col("_stay_raw"), r"tháng[:\s]*", ""))
 
-    # Extract month and year from cleaned stay string
+    # Extract month và year từ chuỗi stay đã làm sạch
     df_cleaned = df_cleaned.withColumn("_stay_month", F.regexp_extract(F.col("_stay_raw"), r"(\d{1,2})(?=/|\s|$)", 1)) \
                          .withColumn("_stay_year", F.regexp_extract(F.col("_stay_raw"), r"(\d{4})", 1))
 
-# Build a proper DateType with day=1 when month/year are available
+    # Build DateType với day=1 khi có đủ month/year
     df_cleaned = df_cleaned.withColumn(
         "stay_date",
         F.when(
@@ -147,19 +148,19 @@ def clean_and_transform(df):
         ).otherwise(F.lit(None).cast(DateType()))
     )
 
-    # Log normalization stats
+    # Log thống kê normalize stay_date
     try:
         total_stay = df_cleaned.count()
         parsed_stay = df_cleaned.filter((F.col("_stay_month") != "") & (F.col("_stay_year") != "")).count()
-        print(f"   stay_date total: {total_stay:,}, parsed -> MM/YYYY: {parsed_stay:,}")
+        print(f"   Tổng bản ghi stay_date: {total_stay:,}, parse được MM/YYYY: {parsed_stay:,}")
     except Exception:
         pass
 
-    # Drop helper columns
+    # Drop các cột tạm
     df_cleaned = df_cleaned.drop("_stay_raw", "_stay_month", "_stay_year")
 
-    # CLEAN TEXT COLUMNS: lowercase, remove HTML, URLs, newlines, strange chars and icons
-    print(f"\n🧼 Cleaning text columns `review_positive` and `review_negative` (lowercase, strip weird chars)...")
+    # CLEAN TEXT COLUMNS: lowercase, bỏ HTML, URL, xuống dòng, ký tự lạ, icon
+    print("\nĐang làm sạch text columns `review_positive` và `review_negative` (lowercase, loại ký tự lạ)...")
     try:
         before_pos_null = df_cleaned.filter(F.col("review_positive").isNull()).count()
         before_neg_null = df_cleaned.filter(F.col("review_negative").isNull()).count()
@@ -208,7 +209,7 @@ def clean_and_transform(df):
             ).otherwise(F.lit(None))
         )
 
-    # collapse multiple spaces to single
+    # Collapse nhiều khoảng trắng thành 1
     df_cleaned = df_cleaned \
         .withColumn("review_positive", F.regexp_replace(F.col("review_positive"), r"\s+", " ")) \
         .withColumn("review_negative", F.regexp_replace(F.col("review_negative"), r"\s+", " ")) \
@@ -219,14 +220,14 @@ def clean_and_transform(df):
         after_neg_null = df_cleaned.filter(F.col("review_negative").isNull()).count()
         after_title_null = df_cleaned.filter(F.col("review_title").isNull()).count()
         if before_pos_null is not None:
-            print(f"   review_positive NULLs before: {before_pos_null}, after: {after_pos_null}")
-            print(f"   review_negative NULLs before: {before_neg_null}, after: {after_neg_null}")
-            print(f"   review_title NULLs before: {before_title_null}, after: {after_title_null}")
+            print(f"   review_positive NULL trước: {before_pos_null}, sau: {after_pos_null}")
+            print(f"   review_negative NULL trước: {before_neg_null}, sau: {after_neg_null}")
+            print(f"   review_title NULL trước: {before_title_null}, sau: {after_title_null}")
     except Exception:
         pass
 
-    # 3. Remove rows with NULL in business-required columns
-    print(f"\n⚠️  Removing records with NULLs in `review_date`, `traveler_type` or `review_score`...")
+    # 3. Loại bản ghi có NULL ở các cột business quan trọng
+    print("\n⚠️  Đang loại các bản ghi có NULL ở `review_date`, `traveler_type` hoặc `review_score`...")
     before_null_filter = df_cleaned.count()
     df_cleaned = df_cleaned.filter(
         (F.col("review_date").isNotNull()) &
@@ -235,19 +236,19 @@ def clean_and_transform(df):
     )
     after_null_filter = df_cleaned.count()
     removed_nulls = before_null_filter - after_null_filter
-    print(f"   Records before NULL-filter: {before_null_filter:,}")
-    print(f"   Records after NULL-filter:  {after_null_filter:,}")
-    print(f"   Removed (NULLs):           {removed_nulls:,}")
+    print(f"   Số bản ghi trước khi filter NULL: {before_null_filter:,}")
+    print(f"   Số bản ghi sau khi filter NULL:  {after_null_filter:,}")
+    print(f"   Số bản ghi bị loại (NULL):       {removed_nulls:,}")
 
-    # Exact-row dedup removed here — deduplication handled later via row_checksum LEFT ANTI JOIN
+    # Exact-row dedup đã được xử lý bằng row_checksum LEFT ANTI JOIN ở bước sau
 
-    # 5. Update ingestion_timestamp to current datetime (TimestampType)
-    print(f"🔧 Adding ingestion_timestamp (TimestampType)...")
+    # 5. Cập nhật ingestion_timestamp theo datetime hiện tại (TimestampType)
+    print("Đang thêm cột ingestion_timestamp (TimestampType)...")
     df_cleaned = df_cleaned \
         .withColumn("ingestion_timestamp", F.lit(datetime.now()))
 
-    # Show sample after cleaning
-    print(f"\n📋 Sample cleaned data:")
+    # Hiển thị sample sau khi clean
+    print("\nSample dữ liệu sau khi làm sạch:")
     df_cleaned.select(
         "hotel_name", "review_date", "review_score", "traveler_type"
     ).show(5, truncate=False)
@@ -256,7 +257,7 @@ def clean_and_transform(df):
 
 
 def get_latest_scratch_run(spark):
-    """Get the latest run folder from Scratch bucket"""
+    """Lấy run folder mới nhất từ Scratch bucket"""
     try:
         hadoop_conf = spark._jsc.hadoopConfiguration()
         fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(
@@ -267,9 +268,9 @@ def get_latest_scratch_run(spark):
         base_path = spark._jvm.org.apache.hadoop.fs.Path(SCRATCH_BASE_PATH)
         
         if not fs.exists(base_path):
-            raise Exception(f"Scratch path does not exist: {SCRATCH_BASE_PATH}")
+            raise Exception(f"Scratch path không tồn tại: {SCRATCH_BASE_PATH}")
         
-        # List all run directories
+        # List tất cả run directories
         file_statuses = fs.listStatus(base_path)
         run_dirs = [
             status.getPath().getName()
@@ -278,27 +279,27 @@ def get_latest_scratch_run(spark):
         ]
         
         if not run_dirs:
-            raise Exception(f"No run directories found in {SCRATCH_BASE_PATH}")
+            raise Exception(f"Không tìm thấy run directory nào trong {SCRATCH_BASE_PATH}")
         
-        # Sort by timestamp (run_YYYYMMDD_HHMMSS) and get latest
+        # Sort theo timestamp (run_YYYYMMDD_HHMMSS) và lấy run mới nhất
         run_dirs.sort(reverse=True)
         latest_run = run_dirs[0]
         
         latest_path = f"{SCRATCH_BASE_PATH}/{latest_run}"
-        print(f"📂 Latest Scratch run: {latest_run}")
+        print(f"Run Scratch mới nhất: {latest_run}")
         print(f"   Path: {latest_path}")
         
         return latest_path, latest_run
         
     except Exception as e:
-        print(f"❌ Error finding latest Scratch run: {e}")
+        print(f"❌ Lỗi khi tìm Scratch run mới nhất: {e}")
         raise
 
 
 def create_silver_table(spark):
-    """Create Silver table if not exists"""
+    """Tạo Silver table nếu chưa tồn tại"""
     schema = StructType([
-        # Business columns (cleaned types)
+        # Business columns (kiểu dữ liệu đã làm sạch)
         StructField("hotel_name", StringType(), False),
         StructField("hotel_url", StringType(), True),
         StructField("reviewer_name", StringType(), True),
@@ -306,17 +307,17 @@ def create_silver_table(spark):
         StructField("room_type", StringType(), True),
         StructField("stay_date", DateType(), True),
         StructField("traveler_type", StringType(), True),
-        StructField("review_date", DateType(), True),  # ✅ DateType (business date)
+        StructField("review_date", DateType(), True),  # DateType (business date)
         StructField("review_title", StringType(), True),
-        StructField("review_score", DoubleType(), True),  # ✅ DoubleType
+        StructField("review_score", DoubleType(), True),  # DoubleType
         StructField("review_positive", StringType(), True),
         StructField("review_negative", StringType(), True),
         
-        # Checksum for deduplication
+        # Checksum dùng cho deduplication
         StructField("row_checksum", StringType(), False),
         
         # Metadata columns
-        StructField("ingestion_timestamp", TimestampType(), False),  # ✅ TimestampType
+        StructField("ingestion_timestamp", TimestampType(), False),  # TimestampType
         StructField("source_file", StringType(), False),
         StructField("source_file_checksum", StringType(), False),
         StructField("source_file_size_bytes", LongType(), False)
@@ -338,32 +339,31 @@ def create_silver_table(spark):
 
 def deduplicate_with_left_anti_join(spark, df_new):
     """
-    Deduplicate using LEFT ANTI JOIN on row_checksum
+    Deduplicate bằng LEFT ANTI JOIN trên row_checksum
     
-    Strategy:
-    - Read existing Silver table
-    - LEFT ANTI JOIN: Keep only new records NOT in Silver
-    - Optimized: Repartition both DataFrames on hotel_name before join
+    Chiến lược:
+    - Đọc Silver table hiện tại
+    - LEFT ANTI JOIN: Giữ lại bản ghi mới chưa có trong Silver
+    - Tối ưu: Chỉ lấy cột row_checksum khi join
     
     Args:
         spark: SparkSession
-        df_new: New records from Scratch (with row_checksum)
+        df_new: Bản ghi mới từ Scratch (đã có row_checksum)
     
     Returns:
-        DataFrame with only new records (deduplicated)
+        DataFrame chỉ còn bản ghi mới (đã deduplicated)
     """
-    print(f"\n🔄 Deduplicating using LEFT ANTI JOIN...")
+    print("\nĐang deduplicate bằng LEFT ANTI JOIN...")
     
     try:
-        # ✅ OPTIMIZATION: Only select row_checksum column (not entire table)
-        print(f"� Reading existing checksums from Silver table...")
+        # Tối ưu: chỉ select cột row_checksum (không load toàn bảng)
+        print("Đang đọc existing row_checksum từ Silver table...")
         existing_checksums = spark.table(SILVER_TABLE).select("row_checksum")
         existing_count = existing_checksums.count()
-        print(f"📊 Existing records in Silver: {existing_count:,}")
+        print(f"Số bản ghi hiện có trong Silver: {existing_count:,}")
         
-        # LEFT ANTI JOIN: Keep only rows from df_new NOT in existing
-        # Spark will auto-optimize this join (may broadcast if small enough)
-        print(f"🔍 Performing LEFT ANTI JOIN on row_checksum...")
+        # LEFT ANTI JOIN: giữ lại bản ghi ở df_new chưa có trong existing
+        print("Đang thực hiện LEFT ANTI JOIN trên row_checksum...")
         df_deduplicated = df_new.join(
             existing_checksums,
             on="row_checksum",
@@ -374,54 +374,54 @@ def deduplicate_with_left_anti_join(spark, df_new):
         total_count = df_new.count()
         duplicate_count = total_count - new_count
         
-        print(f"\n📊 Deduplication results:")
-        print(f"   Total from Scratch: {total_count:,}")
-        print(f"   New records: {new_count:,}")
-        print(f"   Duplicates (skipped): {duplicate_count:,}")
+        print("\nKết quả deduplication:")
+        print(f"   Tổng từ Scratch: {total_count:,}")
+        print(f"   Bản ghi mới: {new_count:,}")
+        print(f"   Bản ghi trùng (bỏ qua): {duplicate_count:,}")
         
         return df_deduplicated, new_count, duplicate_count
         
     except Exception as e:
-        print(f"📊 Silver table empty or doesn't exist yet ({e})")
-        print(f"   All records are new (first ingestion)")
+        print(f"Silver table rỗng hoặc chưa tồn tại ({e})")
+        print("   Tất cả bản ghi đều là mới (lần ingest đầu tiên)")
         new_count = df_new.count()
         return df_new, new_count, 0
 
 
 def clean_and_load_to_silver(spark):
     """
-    Main ETL: Read Scratch Parquet → Clean → Deduplicate → Load to Silver
+    Main ETL: Đọc Scratch Parquet → Clean → Deduplicate → Load vào Silver
     
-    Steps:
-    1. Read from Scratch Parquet files
-    2. Apply data cleaning (date parsing, type conversion)
-    3. Calculate row_checksum (all 12 business columns)
-    4. Deduplicate using LEFT ANTI JOIN
-    5. APPEND to Silver table
-    6. Log to PostgreSQL tracking table
+    Các bước:
+    1. Đọc từ Scratch Parquet files
+    2. Làm sạch dữ liệu (parse date, convert kiểu)
+    3. Tính row_checksum (12 business columns)
+    4. Deduplicate bằng LEFT ANTI JOIN
+    5. APPEND vào Silver table
+    6. Ghi log vào PostgreSQL tracking table
     
     Returns:
-        int: Number of records loaded to Silver
+        int: Số bản ghi được load vào Silver
     """
-    print(f"🚀 STEP 2: Clean & Load (Scratch → Silver)")
-    print(f"   Source: {SCRATCH_BASE_PATH}")
-    print(f"   Target: {SILVER_TABLE}")
+    print("STEP 2: Clean & Load (Scratch → Silver)")
+    print(f"   Source (Scratch): {SCRATCH_BASE_PATH}")
+    print(f"   Target (Silver): {SILVER_TABLE}")
     
-    # Get latest Scratch run
+    # Lấy Scratch run mới nhất
     scratch_path, run_id = get_latest_scratch_run(spark)
     
-    # Read from Scratch Parquet
-    print(f"\n📖 Reading from Scratch bucket...")
+    # Đọc từ Scratch Parquet
+    print("\nĐang đọc dữ liệu từ Scratch bucket...")
     df_scratch = spark.read.parquet(scratch_path)
     
     scratch_count = df_scratch.count()
-    print(f"📝 Records from Scratch: {scratch_count:,}")
+    print(f"Số bản ghi đọc từ Scratch: {scratch_count:,}")
     
     if scratch_count == 0:
-        print(f"⚠️  No data in Scratch - nothing to process")
+        print("⚠️  Không có dữ liệu trong Scratch - không có gì để xử lý")
         return 0
     
-    # Get source file metadata (from first record - all same file)
+    # Lấy metadata file nguồn (từ bản ghi đầu tiên - tất cả cùng file)
     source_metadata = df_scratch.select(
         "source_file", 
         "source_file_checksum", 
@@ -432,24 +432,24 @@ def clean_and_load_to_silver(spark):
     source_checksum = source_metadata["source_file_checksum"]
     source_size_bytes = source_metadata["source_file_size_bytes"]
     
-    print(f"\n📄 Source file info:")
-    print(f"   Name: {source_file}")
+    print("\nThông tin file nguồn:")
+    print(f"   Tên file: {source_file}")
     print(f"   Checksum: {source_checksum}")
-    print(f"   Size: {source_size_bytes / (1024 * 1024):.2f} MB")
+    print(f"   Kích thước: {source_size_bytes / (1024 * 1024):.2f} MB")
     
-    # Apply cleaning and transformations
+    # Làm sạch và transform dữ liệu
     df_cleaned = clean_and_transform(df_scratch)
     
-    # Apply year/month filter if in batch mode (after date parsing)
+    # Áp dụng filter theo year/month nếu chạy batch (sau khi parse date)
     year_filter = spark.conf.get("spark.sql.year_filter", None)
     month_filter = spark.conf.get("spark.sql.month_filter", None)
     
     if year_filter:
-        print(f"🔍 Filtering by year: {year_filter}")
+        print(f"Đang filter theo năm: {year_filter}")
         df_cleaned = df_cleaned.filter(F.year(F.col("review_date")) == int(year_filter))
         
         if month_filter:
-            print(f"🔍 Filtering by month: {month_filter}")
+            print(f"Đang filter theo tháng: {month_filter}")
             df_cleaned = df_cleaned.filter(F.month(F.col("review_date")) == int(month_filter))
         
         filtered_count = df_cleaned.count()
@@ -457,47 +457,47 @@ def clean_and_load_to_silver(spark):
             filter_desc = f"{year_filter}-{int(month_filter):02d}"
         else:
             filter_desc = f"year {year_filter}"
-        print(f"📊 Records after filter ({filter_desc}): {filtered_count:,}")
+        print(f"Số bản ghi sau filter ({filter_desc}): {filtered_count:,}")
         
         if filtered_count == 0:
-            print(f"⚠️  No records for {filter_desc} - skipping")
+            print(f"⚠️  Không có bản ghi cho {filter_desc} - bỏ qua batch này")
             return 0
     
-    # Calculate row_checksum (all 12 business columns)
-    print(f"\n🔐 Calculating row_checksum (MD5 of {len(BUSINESS_COLUMNS)} columns)...")
+    # Tính row_checksum (MD5 trên các business columns)
+    print(f"\nĐang tính row_checksum (MD5 trên {len(BUSINESS_COLUMNS)} cột business)...")
     df_with_checksum = calculate_row_checksum(df_cleaned, BUSINESS_COLUMNS)
     
-    # Deduplicate using LEFT ANTI JOIN
+    # Deduplicate bằng LEFT ANTI JOIN
     df_new, new_count, duplicate_count = deduplicate_with_left_anti_join(
         spark, df_with_checksum
     )
     
-    # Write to Silver table (APPEND mode)
+    # Ghi vào Silver table (APPEND mode)
     if new_count > 0:
-        print(f"\n💾 Appending {new_count:,} NEW records to Silver table...")
+        print(f"\nĐang append {new_count:,} bản ghi MỚI vào Silver table...")
         df_new.writeTo(SILVER_TABLE) \
             .using("iceberg") \
             .append()
         
-        print(f"   ✅ Successfully appended {new_count:,} records")
+        print(f"✅ Append thành công {new_count:,} bản ghi vào Silver")
         
-        # Show final distribution
-        print(f"\n📊 Final Silver table stats:")
+        # Thống kê final Silver
+        print("\nThống kê Silver table sau khi load:")
         silver_df = spark.table(SILVER_TABLE)
         total_silver = silver_df.count()
-        print(f"   Total records in Silver: {total_silver:,}")
+        print(f"   Tổng số bản ghi trong Silver: {total_silver:,}")
         
-        print(f"\n   Top 10 hotels by review count:")
+        print("\n   Top 10 khách sạn theo số lượng review:")
         silver_df.groupBy("hotel_name") \
             .count() \
             .orderBy(F.desc("count")) \
             .show(10, truncate=False)
         
     else:
-        print(f"\n⏭️  No new records to append (all duplicates)")
+        print("\nKhông có bản ghi mới để append (tất cả đều trùng)")
     
-    # Log to PostgreSQL tracking table
-    print(f"\n📝 Logging to PostgreSQL tracking table...")
+    # Ghi log vào PostgreSQL tracking table
+    print("\nĐang ghi log vào PostgreSQL tracking table...")
     ingestion_details = {
         "dedup_stats": {
             "new_records": new_count,
@@ -548,31 +548,31 @@ def main():
     
     spark = get_spark_session(app_name="Silver_Hotels_Reviews_Step2_Clean_Load")
     
-    # Set year/month filter as Spark config if provided
+    # Set year/month filter vào Spark config nếu có truyền tham số
     if args.year:
         spark.conf.set("spark.sql.year_filter", str(args.year))
         if args.month:
             spark.conf.set("spark.sql.month_filter", str(args.month))
-            print(f"🔍 BATCH MODE: Processing year={args.year}, month={args.month}")
+            print(f"Chế độ BATCH: Đang xử lý year={args.year}, month={args.month}")
         else:
-            print(f"🔍 BATCH MODE: Processing year={args.year} only")
+            print(f"Chế độ BATCH: Đang xử lý year={args.year} (không filter tháng)")
     
     try:
-        print("\n1️⃣  Creating Silver table schema...")
+        print("\nĐang tạo Silver table schema (nếu chưa tồn tại)...")
         create_silver_table(spark)
         
-        print("\n2️⃣  Cleaning and loading to Silver...")
+        print("\nĐang thực thi bước Clean & Load vào Silver...")
         record_count = clean_and_load_to_silver(spark)
         
         print("\n" + "=" * 80)
         if record_count > 0:
-            print(f"✅ STEP 2 COMPLETED: Loaded {record_count:,} records to Silver")
+            print(f"✅ STEP 2 HOÀN TẤT: Đã load {record_count:,} bản ghi vào Silver")
         else:
-            print(f"✅ STEP 2 COMPLETED: No new records to load")
+            print("✅ STEP 2 HOÀN TẤT: Không có bản ghi mới để load")
         print("=" * 80)
         
     except Exception as e:
-        print(f"\n❌ ERROR: {e}")
+        print(f"\n❌ LỖI: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

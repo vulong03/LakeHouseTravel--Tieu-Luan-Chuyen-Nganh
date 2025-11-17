@@ -1,12 +1,12 @@
 """
-Silver Layer - Hotels Detail - Step 1: Transform
-Transform Bronze CSV files to Parquet in Scratch bucket
-Based on original transform_booking_hotels_detail.py:
-- Handle multi-line CSV values (descriptions with line breaks)
-- Clean province column for S3-safe partitioning
-- Validate NOT NULL constraints
-- Add metadata columns
-- Save to Scratch bucket for Step 2 processing
+Lớp Silver - Hotels Detail - Bước 1: Transform
+Chuyển đổi file CSV từ Bronze sang Parquet trong Scratch bucket
+Dựa trên transform_booking_hotels_detail.py gốc:
+- Hỗ trợ giá trị CSV nhiều dòng (description có xuống dòng)
+- Làm sạch cột `province` để phù hợp partition trên S3
+- Kiểm tra ràng buộc NOT NULL
+- Thêm các cột metadata
+- Ghi ra Scratch bucket để bước 2 tiếp tục xử lý
 """
 
 import sys
@@ -47,7 +47,7 @@ def get_s3_file_size(spark, file_path):
         size_bytes = file_status.getLen()
         
         size_mb = size_bytes / (1024 * 1024)
-        print(f"File size: {size_mb:.2f} MB ({size_bytes:,} bytes)")
+        print(f"Kích thước file: {size_mb:.2f} MB ({size_bytes:,} bytes)")
         
         return size_bytes
     except Exception as e:
@@ -94,7 +94,7 @@ def get_latest_bronze_file(spark, bronze_base_path):
         return latest[2], latest[1], latest[3]  # file_path, checksum, file_name
         
     except Exception as e:
-        print(f"❌ Error finding latest Bronze file: {e}")
+        print(f"❌ LỖI khi tìm file Bronze mới nhất: {e}")
         raise
 
 
@@ -110,12 +110,12 @@ def validate_data(df):
     total_nulls = sum(null_checks.values())
     
     if total_nulls > 0:
-        print(f"⚠️  Warning: Found NULL values in critical columns:")
+        print(f"⚠️  Cảnh báo: Tìm thấy giá trị NULL trong các cột quan trọng:")
         for col_name, null_count in null_checks.items():
             if null_count > 0:
                 print(f"   - {col_name}: {null_count} NULLs")
         
-        print(f"   ✅ Filtering out {total_nulls} records with NULL critical fields (Silver data quality)")
+        print(f"   ✅ Lọc bỏ {total_nulls} bản ghi có NULL ở các trường quan trọng (yêu cầu chất lượng Silver)")
         
         # Build filter condition
         filter_conditions = [F.col(col).isNotNull() for col in NOT_NULL_COLUMNS]
@@ -126,10 +126,10 @@ def validate_data(df):
         df_clean = df.filter(combined_filter)
         
         clean_count = df_clean.count()
-        print(f"   ✅ Remaining clean records: {clean_count}")
+        print(f"   ✅ Số bản ghi sạch còn lại: {clean_count}")
         return df_clean
     else:
-        print(f"✅ Data validation passed - no NULL critical values")
+        print(f"✅ Kiểm tra dữ liệu hợp lệ - không có NULL trong các cột quan trọng")
         return df
 
 
@@ -140,7 +140,7 @@ def clean_province_column(df):
     
     PRESERVED FROM ORIGINAL LOGIC
     """
-    print(f"\n🧹 Cleaning province column for S3-safe partition names...")
+    print(f"\nLàm sạch cột 'province' để đặt tên partition an toàn cho S3...")
     
     df_cleaned = df.withColumn(
         "province",
@@ -158,30 +158,30 @@ def transform_to_scratch(spark):
     Transform Bronze CSV to Parquet in Scratch bucket
     Based on original transform logic
     """
-    print(f"Starting transformation: Bronze → Scratch")
-    print(f"   Source: {BRONZE_BASE_PATH}")
-    print(f"   Target: {SCRATCH_BASE_PATH}")
+    print(f"Bắt đầu chuyển đổi: Bronze → Scratch")
+    print(f"   Nguồn: {BRONZE_BASE_PATH}")
+    print(f"   Đích: {SCRATCH_BASE_PATH}")
     
     # Find latest Bronze file
     latest_file_path, file_checksum, file_name = get_latest_bronze_file(spark, BRONZE_BASE_PATH)
     
-    print(f"\nProcessing: {file_name}")
+    print(f"\nĐang xử lý: {file_name}")
     print(f"   Checksum: {file_checksum}")
     
     # Check if already processed in Silver layer
-    print(f"\nChecking tracking database...")
+    print(f"\nKiểm tra tracking database...")
     if check_if_file_ingested(file_checksum, POSTGRES_CONN, layer='silver'):
-        print(f"   Already processed in Silver layer")
+        print(f"   Đã được xử lý trong lớp Silver")
         print(f"      Checksum: {file_checksum}")
-        print(f"      Skipping transformation")
+        print(f"      Bỏ qua bước transform")
         return 0
-    print(f"   ✓ New file, proceeding with transformation")
+    print(f"   Tệp mới, tiến hành chuyển đổi")
     
     # Get file size
     file_size_bytes = get_s3_file_size(spark, latest_file_path)
     
     # Read CSV from Bronze with multiLine option (PRESERVED FROM ORIGINAL)
-    print(f"\nReading CSV from Bronze (with multiLine support for descriptions)...")
+    print(f"\nĐang đọc CSV từ Bronze (hỗ trợ multiLine cho description)...")
     df = spark.read \
         .option("header", "true") \
         .option("inferSchema", "false") \
@@ -191,7 +191,7 @@ def transform_to_scratch(spark):
         .csv(latest_file_path)
     
     total_records = df.count()
-    print(f"Total records from Bronze: {total_records:,}")
+    print(f"Tổng số bản ghi từ Bronze: {total_records:,}")
     
     # Validate NOT NULL constraints
     df = validate_data(df)
@@ -200,14 +200,14 @@ def transform_to_scratch(spark):
     df = clean_province_column(df)
     
     # Show cleaned province distribution
-    print(f"\nCleaned province distribution (top 20):")
+    print(f"\nPhân bố province sau khi làm sạch (top 20):")
     df.groupBy("province").count().orderBy(F.desc("count")).show(20, truncate=50)
     
     # Show data quality stats (PRESERVED FROM ORIGINAL)
-    print(f"\nData quality stats:")
-    print(f"   - Hotels with rating: {df.filter(F.col('rating_score').isNotNull() & (F.col('rating_score') != '')).count():,}")
-    print(f"   - Hotels with reviews: {df.filter(F.col('review_count_text').isNotNull() & (F.col('review_count_text') != '')).count():,}")
-    print(f"   - Hotels with activities: {df.filter(F.col('activities').isNotNull() & (F.col('activities') != '')).count():,}")
+    print(f"\nThống kê chất lượng dữ liệu:")
+    print(f"   - Hotels có rating: {df.filter(F.col('rating_score').isNotNull() & (F.col('rating_score') != '')).count():,}")
+    print(f"   - Hotels có review: {df.filter(F.col('review_count_text').isNotNull() & (F.col('review_count_text') != '')).count():,}")
+    print(f"   - Hotels có activities: {df.filter(F.col('activities').isNotNull() & (F.col('activities') != '')).count():,}")
     
     # Add metadata columns (for tracking in Step 2)
     df_with_metadata = df \
@@ -217,7 +217,7 @@ def transform_to_scratch(spark):
         .withColumn("source_file_size_bytes", F.lit(file_size_bytes))
     
     # Show sample data
-    print(f"\nSample data (first 3 rows):")
+    print(f"\nVí dụ dữ liệu (3 dòng đầu):")
     df_with_metadata.select("hotel_name", "province", "rating_score", "review_count_text").show(3, truncate=False)
     
     # Generate unique run ID
@@ -225,10 +225,10 @@ def transform_to_scratch(spark):
     output_path = f"{SCRATCH_BASE_PATH}/run_{run_id}"
     
     # Write to Scratch bucket (Parquet format, partitioned by province)
-    print(f"\nWriting to Scratch bucket...")
-    print(f"   Path: {output_path}")
-    print(f"   Format: Parquet (Snappy compression)")
-    print(f"   Partitioned by: province")
+    print(f"\nGhi ra Scratch bucket...")
+    print(f"   Đường dẫn: {output_path}")
+    print(f"   Định dạng: Parquet (nén Snappy)")
+    print(f"   Partition theo: province")
     
     df_with_metadata.write \
         .mode("overwrite") \
@@ -237,8 +237,8 @@ def transform_to_scratch(spark):
     
     final_count = df_with_metadata.count()
     
-    print(f"\n✅ Transform completed!")
-    print(f"   Records written: {final_count:,}")
+    print(f"\n✅ Chuyển đổi hoàn tất!")
+    print(f"   Số bản ghi đã ghi: {final_count:,}")
     print(f"   Output: {output_path}")
     
     return output_path, final_count
@@ -246,7 +246,7 @@ def transform_to_scratch(spark):
 
 def main():
     print("=" * 80)
-    print("🔄 SILVER HOTELS DETAIL - STEP 1: TRANSFORM (Bronze → Scratch)")
+    print("SILVER HOTELS DETAIL - BƯỚC 1: TRANSFORM (Bronze → Scratch)")
     print("=" * 80)
     
     spark = None
@@ -259,20 +259,20 @@ def main():
         # Check if file was skipped (already processed)
         if result == 0:
             print("\n" + "=" * 80)
-            print("⏭️  STEP 1 SKIPPED: File already processed in Silver layer")
+            print("STEP 1 BỎ QUA: File đã được xử lý trong lớp Silver")
             print("=" * 80)
             return
         
         output_path, record_count = result
         
         print("\n" + "=" * 80)
-        print(f"✅ STEP 1 COMPLETED: {record_count:,} records transformed to Scratch")
+        print(f"✅ STEP 1 HOÀN TẤT: {record_count:,} bản ghi đã chuyển sang Scratch")
         print("=" * 80)
-        print(f"\n📂 Output location: {output_path}")
-        print(f"\n▶️  Next: Run Step 2 (Clean & Load to Silver)")
+        print(f"\n📂 Vị trí output: {output_path}")
+        print(f"\nTiếp theo: Chạy Step 2 (Clean & Load lên Silver)")
         
     except Exception as e:
-        print(f"\n❌ ERROR: {e}")
+        print(f"\n❌ LỖI: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

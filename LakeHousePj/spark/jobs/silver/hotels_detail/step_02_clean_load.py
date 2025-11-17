@@ -233,16 +233,9 @@ def clean_and_load_to_silver(spark):
     print("\nDrop cột 'activities'...")
     df = df.drop("activities")
 
-    # Chỉ giữ lại các dòng mà rating_score, review_count, rating_breakdown đều KHÔNG null
-    print("\nLọc các dòng có đủ dữ liệu ở rating_score, review_count, rating_breakdown...")
-    df = df.filter(
-        F.col('rating_score').isNotNull() &
-        F.col('review_count').isNotNull() &
-        F.col('rating_breakdown').isNotNull()
-    )
-
-    cleaned_count = df.count()
-    removed_count = original_count - cleaned_count
+    # (Đã loại bỏ) Trước đây lọc các dòng thiếu dữ liệu quan trọng.
+    # Yêu cầu hiện tại: không loại bỏ hàng thiếu dữ liệu ở bước này,
+    # chỉ thực hiện các phép biến đổi và giữ lại tất cả hàng.
 
     # Làm sạch cụm “Xem tất cả ... tiện nghi” ở cuối cột top_amenities
     print("\nLoại bỏ cụm 'Xem tất cả ... tiện nghi' ở cuối cột top_amenities...")
@@ -250,6 +243,10 @@ def clean_and_load_to_silver(spark):
         "top_amenities",
         F.regexp_replace(F.col("top_amenities"), r",?\s*Xem tất cả \d+ tiện nghi\.?$", "")
     )
+
+    # Sau các bước làm sạch chuỗi và chuẩn hoá, đếm lại số hàng
+    cleaned_count = df.count()
+    removed_count = original_count - cleaned_count
 
     print(f"   Original records: {original_count:,}")
     print(f"   Cleaned records: {cleaned_count:,}")
