@@ -96,10 +96,19 @@ services:
       - lakehouse_network
     ports:
       - "${HIVE_METASTORE_PORT}:9083"
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
     environment:
       SERVICE_NAME: metastore
       DB_DRIVER: postgres
+      HADOOP_HEAPSIZE: 3072
       SERVICE_OPTS: >-
+        -Xmx3072m
+        -Xms2048m
         -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
         -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://postgres:5432/${POSTGRES_DB}
         -Djavax.jdo.option.ConnectionUserName=${POSTGRES_USER}
@@ -133,6 +142,7 @@ services:
       JAVA_OPTS: "-Dhive.conf.dir=/opt/hive/conf"
       SERVICE_NAME: hiveserver2
       DB_DRIVER: postgres
+      SKIP_SCHEMA_INIT: "true"  # Skip schema init - already done by metastore
       SERVICE_OPTS: >-
         -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
         -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://postgres:5432/${POSTGRES_DB}
@@ -149,7 +159,6 @@ services:
       timeout: 10s
       retries: 5
     restart: unless-stopped
-    command: bash -c "export HIVE_CONF_DIR=/opt/hive/conf; /opt/hive/bin/hive --service hiveserver2"
   # ============================================
   # Spark Master - Cluster Coordinator
   # ============================================
@@ -212,8 +221,14 @@ services:
       SPARK_MODE: worker
       SPARK_MASTER_URL: spark://spark-master:7077
       SPARK_WORKER_CORES: 4
-      SPARK_WORKER_MEMORY: 4g
+      SPARK_WORKER_MEMORY: 3g
       SPARK_WORKER_WEBUI_PORT: 8081
+    deploy:
+      resources:
+        limits:
+          memory: 3.5g    # Hard limit: Container bị kill nếu vượt 3.5GB (an toàn với 9.6GB free)
+        reservations:
+          memory: 2g      # Soft limit: Đảm bảo có ít nhất 2GB khi start
     depends_on:
       spark-master:
         condition: service_healthy
@@ -279,6 +294,7 @@ services:
       - lakehouse_network
     ports:
       - "5050:80"
+    user: "5050:5050"
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@admin.com
       PGADMIN_DEFAULT_PASSWORD: admin123

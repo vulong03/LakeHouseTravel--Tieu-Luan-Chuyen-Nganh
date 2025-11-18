@@ -97,10 +97,12 @@ class SparkSubmitCommand:
     @classmethod
     def silver_job(cls, job_name: str) -> str:
         """Shortcut for Silver layer jobs with proper memory allocation"""
+        # TikTok comments needs more memory due to large file size
+        memory = '4g' if 'comment' in job_name.lower() else '2g'
         return cls.build(
             job_path=f'/opt/spark/jobs/silver/{job_name}.py',
             bucket='silver',
-            extra_conf=f'--conf spark.app.name=Silver_{job_name} --driver-memory 2g --executor-memory 2g --total-executor-cores 4'
+            extra_conf=f'--conf spark.app.name=Silver_{job_name} --conf spark.driver.memory={memory} --conf spark.executor.memory={memory} --conf spark.executor.cores=2'
         )
     
     @classmethod
