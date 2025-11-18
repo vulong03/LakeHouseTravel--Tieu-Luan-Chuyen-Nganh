@@ -59,48 +59,179 @@ def get_s3_file_size(spark, file_path):
         return 0
 
 
-def extract_value(line):
-    """Extract value after colon from metadata line"""
-    if ':' in line:
-        return line.split(':', 1)[1].strip()
-    return ''
+def extract_value(line, label):
+    """
+    Extract value after label from metadata line
+    
+    Args:
+        line: Line to parse
+        label: Label to search for (e.g., "Post URL:")
+    
+    Returns:
+        Extracted value (string or None)
+    """
+    if label not in line:
+        return None
+    
+    parts = line.split(label, 1)
+    if len(parts) != 2:
+        return None
+    
+    value = parts[1].strip()
+    
+    # Remove surrounding quotes if present
+    if value.startswith('"') and value.endswith('"'):
+        value = value[1:-1]
+    
+    return value if value else None
+
+
+def extract_multiline_description(desc_lines):
+    """
+    Extract full multiline description from all lines between anchors
+    
+    Args:
+        desc_lines: All lines from "Mô tả của bài đăng:" to before "Số bình luận cấp 1:"
+    
+    Returns:
+        Full description text (may contain newlines)
+    """
+    if not desc_lines:
+        return None
+    
+    # First line: "Mô tả của bài đăng:  "value..."
+    first_line = desc_lines[0]
+    label = 'Mô tả của bài đăng:'
+    
+    if label not in first_line:
+        return None
+    
+    parts = first_line.split(label, 1)
+    if len(parts) != 2:
+        return None
+    
+    # Start accumulating text
+    full_text = parts[1].strip()
+    
+    # Append subsequent lines (if multiline)
+    for line in desc_lines[1:]:
+        full_text += "\n" + line.strip()
+    
+    # Remove surrounding quotes if present
+    if full_text.startswith('"') and full_text.endswith('"'):
+        full_text = full_text[1:-1]
+    
+    return full_text.strip() if full_text else None
 
 
 def parse_tiktok_file_metadata(lines):
     """
-    Parse metadata from first 17 lines of TikTok file
+    Parse metadata using SEQUENTIAL PARSING approach
+    
+    Strategy:
+    1. Parse 10 single-line fields before description
+    2. Find anchors: "Mô tả của bài đăng:" and "Số bình luận cấp 1:"
+    3. Extract FULL multiline description between anchors
+    4. Parse 5 single-line fields after description
+    
+    This handles multiline descriptions robustly while maintaining
+    the exact same output format as the original implementation.
     
     Args:
         lines: List of strings (file lines)
     
     Returns:
-        dict with metadata fields (all as strings for now)
+        dict with 16 metadata fields (all as strings)
     """
     if len(lines) < 17:
+        print(f"   ⚠️  File too short: {len(lines)} lines (expected ≥17)")
         return None
     
     try:
-        metadata = {
-            'crawl_time': extract_value(lines[0]),
-            'post_url': extract_value(lines[1]),
-            'author': extract_value(lines[2]),
-            'author_tag': extract_value(lines[3]),
-            'author_url': extract_value(lines[4]),
-            'post_date': extract_value(lines[5]),
-            'likes': extract_value(lines[6]),
-            'comments_count': extract_value(lines[7]),
-            'saves': extract_value(lines[8]),
-            'shares': extract_value(lines[9]),
-            'post_description': extract_value(lines[10]),
-            'comments_level1': extract_value(lines[11]),
-            'comments_level2': extract_value(lines[12]),
-            'comments_loaded': extract_value(lines[13]),
-            'comments_displayed_tiktok': extract_value(lines[14]),
-            'comments_difference': extract_value(lines[15])
-        }
+        # ============================================
+        # STEP 1: Find two anchor points
+        # ============================================
+        desc_start_idx = None
+        comments_level1_idx = None
+        
+        for i, line in enumerate(lines):
+            if 'Mô tả của bài đăng:' in line and desc_start_idx is None:
+                desc_start_idx = i
+            if 'Số bình luận cấp 1:' in line and comments_level1_idx is None:
+                comments_level1_idx = i
+                break  # Found both anchors
+        
+        if desc_start_idx is None:
+            print(f"   ❌ Cannot find 'Mô tả của bài đăng:' label")
+            return None
+        
+        if comments_level1_idx is None:
+            print(f"   ❌ Cannot find 'Số bình luận cấp 1:' label")
+            return None
+        
+        # ============================================
+        # STEP 2: Parse fields in sequential order
+        # ============================================
+        metadata = {}
+        
+        # Part 1: 10 single-line fields BEFORE description
+        field_definitions_part1 = [
+            ('crawl_time', 'Thời gian cào:'),
+            ('post_url', 'Post URL:'),
+            ('author', 'Người đăng:'),
+            ('author_tag', 'Tag người đăng:'),
+            ('author_url', 'URL người đăng:'),
+            ('post_date', 'Thời gian đăng:'),
+            ('likes', 'Số lượt tym:'),
+            ('comments_count', 'Số lượt comment:'),
+            ('saves', 'Số lượt lưu:'),
+            ('shares', 'Số lượt share:')
+        ]
+        
+        for field_name, label in field_definitions_part1:
+            # Search in lines before description
+            value = None
+            for i in range(0, desc_start_idx):
+                if label in lines[i]:
+                    value = extract_value(lines[i], label)
+                    break
+            metadata[field_name] = value
+        
+        # Part 2: MULTILINE description field
+        desc_lines = lines[desc_start_idx:comments_level1_idx]
+        metadata['post_description'] = extract_multiline_description(desc_lines)
+        
+        # Part 3: 5 single-line fields AFTER description
+        field_definitions_part3 = [
+            ('comments_level1', 'Số bình luận cấp 1:'),
+            ('comments_level2', 'Số bình luận cấp 2:'),
+            ('comments_loaded', 'Tổng số bình luận thực tế đã load:'),
+            ('comments_displayed_tiktok', 'Số bình luận TikTok hiển thị:'),
+            ('comments_difference', 'Chênh lệch số bình luận:')
+        ]
+        
+        for field_name, label in field_definitions_part3:
+            # Search in lines from comments_level1_idx onwards
+            value = None
+            for i in range(comments_level1_idx, min(comments_level1_idx + 10, len(lines))):
+                if label in lines[i]:
+                    value = extract_value(lines[i], label)
+                    break
+            metadata[field_name] = value
+        
+        # ============================================
+        # STEP 3: Validate critical fields
+        # ============================================
+        if not metadata.get('post_url'):
+            print(f"   ❌ Critical field 'post_url' is empty or missing")
+            return None
+        
         return metadata
+        
     except Exception as e:
-        print(f"⚠️ Error parsing metadata: {e}")
+        print(f"   ❌ Error parsing metadata: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
