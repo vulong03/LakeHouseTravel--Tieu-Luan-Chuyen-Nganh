@@ -1,19 +1,16 @@
 """
-Task 1: Transform from Bronze
-- Extract latest Bronze CSV file
-- Check if already processed (tracking)
-- Parse CSV with metadata
-- Write to scratch: 01_transformed/
-
-This task reuses most logic from original transform_booking_hotels_list.py
-Only changes: Write to scratch instead of directly to Silver
+Tác vụ 1: Chuyển đổi từ Bronze
+- Lấy file CSV mới nhất từ Bronze
+- Kiểm tra đã xử lý chưa (tracking)
+- Phân tích CSV và thêm metadata
+- Ghi vào scratch: 01_transformed/
 """
 
 import sys
 import os
 from datetime import datetime
 
-# Add parent directory to path
+# Thêm đường dẫn thư mục cha vào sys.path
 sys.path.append('/opt/spark/jobs')
 sys.path.append('/opt/spark/jobs/silver/hotels_list')
 
@@ -22,120 +19,115 @@ from utils.file_tracker import check_if_file_ingested
 from pyspark.sql import functions as F
 from pyspark.sql.functions import input_file_name
 
-# Import config from same directory
+# Nhập cấu hình từ cùng thư mục
 from config import *
 
 # ============================================================================
-# HELPER FUNCTIONS (Reused from original code)
+# Functions Helpers
 # ============================================================================
 
 def get_s3_file_size(spark, file_path):
     """
-    Get file size in bytes from S3 using Hadoop FileSystem API
+    Lấy kích thước file (bytes) từ S3 bằng Hadoop FileSystem API
     """
     try:
         hadoop_conf = spark._jsc.hadoopConfiguration()
         fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(
             spark._jvm.java.net.URI(file_path), 
             hadoop_conf
-        )
-        
+        )  
         path = spark._jvm.org.apache.hadoop.fs.Path(file_path)
         file_status = fs.getFileStatus(path)
         size_bytes = file_status.getLen()
         
         size_mb = size_bytes / (1024 * 1024)
-        print(f"📦 File size: {size_mb:.2f} MB ({size_bytes:,} bytes)")
-        
+        print(f"Kích thước file: {size_mb:.2f} MB ({size_bytes:,} bytes)")
+          
         return size_bytes
     except Exception as e:
-        print(f"⚠️  Could not get file size: {e}")
+        print(f"⚠️ Không thể lấy kích thước file: {e}")
         return 0
-
 
 def get_latest_bronze_file(spark, bronze_base_path):
     """
-    Find the latest Bronze file based on timestamp in filename
-    Bronze filename format: vietnam_hotels_list_YYYYMMDD_HHMMSS_checksum.csv
-    
-    Returns: (file_path, checksum, file_name, timestamp)
+    Tìm file Bronze mới nhất dựa trên timestamp trong tên file
+    Định dạng tên file Bronze: vietnam_hotels_list_YYYYMMDD_HHMMSS_checksum.csv
+    Trả về: (file_path, checksum, file_name, timestamp)
     """
     try:
         df_files = spark.read.text(f"{bronze_base_path}/*.csv")
         file_paths = df_files.select(input_file_name().alias("file_path")).distinct().collect()
         
         if not file_paths:
-            raise Exception(f"No Bronze files found in {bronze_base_path}")
+            raise Exception(f"Không tìm thấy file Bronze trong {bronze_base_path}")
         
-        # Extract timestamp and sort
+        # Trích xuất timestamp từ tên file và sắp xếp
         files_with_ts = []
         for row in file_paths:
             file_path = row.file_path
             file_name = file_path.split("/")[-1]
-            # Extract: vietnam_hotels_list_20251029_194555_checksum.csv
+            # Ví dụ tên file: vietnam_hotels_list_20251029_194555_checksum.csv
             parts = file_name.replace('.csv', '').split('_')
             if len(parts) >= 4:
                 timestamp = parts[-3] + parts[-2]  # YYYYMMDD + HHMMSS
                 checksum = parts[-1]
                 files_with_ts.append((timestamp, checksum, file_path, file_name))
         
-        # Sort by timestamp descending (newest first)
+        # Sắp xếp theo timestamp giảm dần (mới nhất trước)
         files_with_ts.sort(reverse=True, key=lambda x: x[0])
         
         latest = files_with_ts[0]
-        print(f"📂 Found {len(files_with_ts)} Bronze files")
-        print(f"🔍 Latest file: {latest[3]} (timestamp: {latest[0]})")
-        print(f"📄 Checksum: {latest[1]}")
+        print(f"Tìm thấy {len(files_with_ts)} file Bronze")
+        print(f"File mới nhất: {latest[3]} (timestamp: {latest[0]})")
+        print(f"Checksum: {latest[1]}")
         
         return latest[2], latest[1], latest[3], latest[0]  # path, checksum, filename, timestamp
         
     except Exception as e:
-        print(f"❌ Error finding latest Bronze file: {e}")
+        print(f"❌ Lỗi khi tìm file Bronze mới nhất: {e}")
         raise
 
-
 # ============================================================================
-# MAIN TRANSFORM FUNCTION
+# FUNCTIONS CHÍNH
 # ============================================================================
 
 def transform_from_bronze(spark):
     """
-    Main transformation logic - Extract from Bronze and write to scratch
-    
-    Changes from original:
-    - ❌ Removed: validate_data() - moved to Task 3
-    - ❌ Removed: MERGE logic - moved to Task 3
-    - ❌ Removed: PostgreSQL logging - moved to Task 3
-    - ✅ Changed: Write to scratch instead of Silver table
+    Luồng chuyển đổi chính - Trích xuất từ Bronze và ghi vào scratch
+    Thay đổi so với bản gốc:
+    - ❌ Đã bỏ: validate_data() - chuyển sang Task 3
+    - ❌ Đã bỏ: MERGE logic - chuyển sang Task 3
+    - ❌ Đã bỏ: PostgreSQL logging - chuyển sang Task 3
+    - ✅ Đã đổi: ghi vào scratch thay vì bảng Silver
     """
     
-    print(f"🚀 Task 1: Transform from Bronze")
-    print(f"   Source: {BRONZE_BASE_PATH}")
-    print(f"   Target: {PATHS['transformed']}")
+    print(f"Task 1: Chuyển đổi từ Bronze")
+    print(f"   Nguồn: {BRONZE_BASE_PATH}")
+    print(f"   Đích: {PATHS['transformed']}")
     print(f"")
     
-    # 1. Find latest Bronze file
-    print(f"1️⃣  Finding latest Bronze file...")
+    # 1. Tìm file Bronze mới nhất
+    print(f"Đang tìm file Bronze mới nhất...")
     latest_file_path, file_checksum, file_name, file_timestamp = get_latest_bronze_file(
         spark, BRONZE_BASE_PATH
     )
     
-    print(f"   ✓ Selected: {file_name}")
+    print(f"   Đã chọn: {file_name}")
     
     # 2. Get file size
     file_size_bytes = get_s3_file_size(spark, latest_file_path)
     
     # 3. Check if already processed in Silver layer
-    print(f"\n2️⃣  Checking tracking database...")
+    print(f"\nĐang kiểm tra cơ sở dữ liệu tracking...")
     if check_if_file_ingested(file_checksum, POSTGRES_CONN, layer='silver'):
-        print(f"   ⏭️  Already processed in Silver layer")
+        print(f"   Đã xử lý ở layer Silver")
         print(f"      Checksum: {file_checksum}")
-        print(f"      Skipping transformation")
+        print(f"      Bỏ qua chuyển đổi")
         return 0
-    print(f"   ✓ New file, proceeding with transformation")
+    print(f"   ✅ File mới, tiếp tục chuyển đổi")
     
     # 4. Read CSV from Bronze
-    print(f"\n3️⃣  Reading Bronze CSV...")
+    print(f"\nĐang đọc CSV từ Bronze...")
     df = spark.read \
         .option("header", "true") \
         .option("inferSchema", "false") \
@@ -143,10 +135,10 @@ def transform_from_bronze(spark):
         .csv(latest_file_path)
     
     total_records = df.count()
-    print(f"   ✓ Read {total_records:,} records")
+    print(f"   ✅ Đã đọc {total_records:,} bản ghi")
     
     # 5. Add metadata columns (for tracking)
-    print(f"\n4️⃣  Adding metadata columns...")
+    print(f"\nĐang thêm cột metadata...")
     df_with_metadata = df \
         .withColumn("source_file", F.lit(file_name)) \
         .withColumn("source_file_checksum", F.lit(file_checksum)) \
@@ -154,49 +146,48 @@ def transform_from_bronze(spark):
         .withColumn("source_file_size_bytes", F.lit(file_size_bytes)) \
         .withColumn("extraction_timestamp", F.lit(datetime.now()))
     
-    print(f"   ✓ Added 5 metadata columns")
+    print(f"   ✅ Đã thêm 5 cột metadata")
     
     # 6. Show sample data
-    print(f"\n5️⃣  Sample data (first 3 rows):")
+    print(f"\nDữ liệu mẫu (3 dòng đầu):")
     df_with_metadata.select("hotel_name", "province", "source_file").show(3, truncate=False)
     
     # 7. Show province distribution
-    print(f"\n6️⃣  Province distribution:")
+    print(f"\nPhân bố theo tỉnh:")
     province_dist = df_with_metadata.groupBy("province").count() \
         .orderBy(F.desc("count"))
     province_dist.show(10, truncate=False)
     
     # 8. Write to scratch bucket (NEW: Changed from writing to Silver)
-    print(f"\n7️⃣  Writing to scratch bucket...")
-    print(f"   Path: {PATHS['transformed']}")
+    print(f"\nĐang ghi vào scratch bucket...")
+    print(f"   Đường dẫn: {PATHS['transformed']}")
     
     df_with_metadata.write \
         .mode("overwrite") \
         .parquet(PATHS['transformed'])
     
-    print(f"   ✓ Written {total_records:,} records as Parquet")
+    print(f"   ✅ Đã ghi {total_records:,} bản ghi dưới dạng Parquet")
     
     # 9. Success summary
     print(f"\n{'=' * 80}")
-    print(f"✅ Task 1 COMPLETED")
-    print(f"   Records transformed: {total_records:,}")
-    print(f"   Output: {PATHS['transformed']}")
-    print(f"   Next: Run Task 2 (Clean)")
-    print(f"{'=' * 80}")
+    print(f"✅ Task 1 HOÀN THÀNH")
+    print(f"   Số bản ghi đã chuyển đổi: {total_records:,}")
+    print(f"   Đầu ra: {PATHS['transformed']}")
+    print(f"   Tiếp theo: Chạy Task 2 (Clean)")
+    print(f"{ '=' * 80}")
     
     return total_records
 
-
 # ============================================================================
-# MAIN
+# MAIN ENTRY POINT
 # ============================================================================
 
 def main():
     print("=" * 80)
-    print("SILVER LAYER - HOTELS LIST - TASK 1: TRANSFORM")
+    print("LAYER SILVER - HOTELS LIST - TÁC VỤ 1: CHUYỂN ĐỔI")
     print("=" * 80)
     print(f"Run ID: {RUN_TIMESTAMP}")
-    print(f"Table: {TABLE_NAME}")
+    print(f"Bảng: {TABLE_NAME}")
     print(f"Layer: {LAYER}")
     print("=" * 80)
     print("")
@@ -207,14 +198,14 @@ def main():
         record_count = transform_from_bronze(spark)
         
         if record_count == 0:
-            print("\n⚠️  No new data to process (already ingested)")
+            print("\n⚠️ Không có dữ liệu mới để xử lý (đã được ingest)")
             sys.exit(0)
         
     except Exception as e:
         print(f"\n{'=' * 80}")
-        print(f"❌ Task 1 FAILED")
+        print(f"❌ Tác vụ 1 THẤT BẠI")
         print(f"{'=' * 80}")
-        print(f"Error: {e}")
+        print(f"Lỗi: {e}")
         print("")
         import traceback
         traceback.print_exc()
@@ -222,7 +213,6 @@ def main():
     
     finally:
         spark.stop()
-
 
 if __name__ == "__main__":
     main()
