@@ -116,6 +116,56 @@ def get_latest_scratch_run(spark, scratch_base_path):
         raise
 
 
+def parse_tiktok_number(value_col):
+    """
+    Parse TikTok number format to integer
+    
+    Handles:
+    - Plain numbers: "1234" → 1234
+    - K format: "36.6K" → 36600, "22K" → 22000
+    - M format: "1.5M" → 1500000, "1M" → 1000000
+    - N/A or invalid → NULL
+    
+    Args:
+        value_col: Column with string values
+    
+    Returns:
+        Column expression that parses to IntegerType
+    """
+    from pyspark.sql.types import IntegerType
+    
+    # Extract number and unit
+    # Pattern: optional digits, optional decimal point, digits, optional K/M
+    # Examples: "36.6K", "22K", "1.5M", "1M", "1234"
+    trimmed = F.trim(value_col)
+    
+    # Case 1: Plain number (all digits)
+    plain_number = F.when(
+        trimmed.rlike("^\\d+$"),
+        trimmed.cast(IntegerType())
+    )
+    
+    # Case 2: K format (thousands) - e.g., "36.6K" → 36600, "22K" → 22000
+    k_pattern = F.regexp_extract(trimmed, r"^([\d.]+)K$", 1)
+    k_value = F.when(
+        trimmed.rlike("^[\\d.]+K$"),
+        (k_pattern.cast("double") * 1000).cast(IntegerType())
+    )
+    
+    # Case 3: M format (millions) - e.g., "1.5M" → 1500000, "1M" → 1000000
+    m_pattern = F.regexp_extract(trimmed, r"^([\d.]+)M$", 1)
+    m_value = F.when(
+        trimmed.rlike("^[\\d.]+M$"),
+        (m_pattern.cast("double") * 1000000).cast(IntegerType())
+    )
+    
+    # Combine: try plain number first, then K, then M, else NULL
+    return F.when(
+        value_col.isNotNull() & (trimmed != "") & (trimmed != "N/A"),
+        F.coalesce(plain_number, k_value, m_value)
+    ).otherwise(F.lit(None).cast(IntegerType()))
+
+
 def parse_post_date(df):
     """
     Parse post_date from DD-MM-YYYY string format to DateType
@@ -329,18 +379,15 @@ def clean_and_transform_posts(df):
     # 2. Parse crawl_time (String → TimestampType)
     df_cleaned = parse_crawl_time(df_cleaned)
     
-    # 3. Convert metrics to INT (safe casting - NULL if invalid)
-    print(f"🔧 Converting metrics (String → Int)...")
+    # 3. Convert metrics to INT (parse TikTok format: K, M, plain numbers)
+    print(f"🔧 Converting metrics (String → Int, parsing TikTok format: K/M)...")
     metric_columns = ['likes', 'comments_count', 'saves', 'shares',
                      'comments_level1', 'comments_level2', 'comments_loaded',
                      'comments_displayed_tiktok', 'comments_difference']
     
     for col in metric_columns:
-        df_cleaned = df_cleaned.withColumn(col,
-            F.when(F.col(col).isNotNull() & (F.trim(F.col(col)) != ""),
-                   F.col(col).cast(IntegerType())
-            ).otherwise(F.lit(None).cast(IntegerType()))
-        )
+        # Use parse_tiktok_number to handle: plain numbers, K format, M format, N/A
+        df_cleaned = df_cleaned.withColumn(col, parse_tiktok_number(F.col(col)))
     
     # 4. Update ingestion_timestamp to current datetime
     print(f"🔧 Updating ingestion_timestamp (TimestampType)...")
@@ -377,22 +424,22 @@ def clean_and_transform_comments(df):
     # 1. Parse comment time (mixed format → DateType)
     df_cleaned = parse_comment_time(df)
     
-    # 2. Convert stt to INT (comment sequence number)
+    # 2. Convert stt to INT (comment sequence number) - plain number only
     print(f"🔧 Converting stt (String → Int)...")
     df_cleaned = df_cleaned.withColumn("stt",
-        F.when(F.col("stt").isNotNull() & (F.trim(F.col("stt")) != ""),
-               F.col("stt").cast(IntegerType())
+        F.when(
+            F.col("stt").isNotNull() & 
+            (F.trim(F.col("stt")) != "") &
+            (F.trim(F.col("stt")) != "N/A") &
+            (F.trim(F.col("stt")).rlike("^\\d+$")),  # Only digits (no K/M for sequence numbers)
+            F.trim(F.col("stt")).cast(IntegerType())
         ).otherwise(F.lit(None).cast(IntegerType()))
     )
     
-    # 3. Convert likes, number_of_replies to INT
-    print(f"🔧 Converting likes and number_of_replies (String → Int)...")
+    # 3. Convert likes, number_of_replies to INT (parse TikTok format: K, M)
+    print(f"🔧 Converting likes and number_of_replies (String → Int, parsing TikTok format: K/M)...")
     for col in ['likes', 'number_of_replies']:
-        df_cleaned = df_cleaned.withColumn(col,
-            F.when(F.col(col).isNotNull() & (F.trim(F.col(col)) != ""),
-                   F.col(col).cast(IntegerType())
-            ).otherwise(F.lit(None).cast(IntegerType()))
-        )
+        df_cleaned = df_cleaned.withColumn(col, parse_tiktok_number(F.col(col)))
     
     # 4. Trim whitespace from text fields
     print(f"🔧 Trimming whitespace from text fields...")
