@@ -1,0 +1,316 @@
+﻿destination_name,province_name,destination_type,latitude,longitude
+Chùa Vĩnh Nghiêm,Bắc Giang,temple_pagoda,,
+Khu bảo tồn thiên nhiên Khe Rỗ,Bắc Giang,national_park,,
+Khu du lịch Suối Mỡ,Bắc Giang,waterfall,,
+Khu du lịch tâm linh - sinh thái Tây Yên Tử,Bắc Giang,mountain,,
+Suối Nước Vàng Lục Ngạn,Bắc Giang,scenic_spot,,
+Hồ Ba Bể,Bắc Kạn,lake,,
+Thác Đầu Đẳng,Bắc Kạn,waterfall,,
+Vườn Quốc gia Ba Bể,Bắc Kạn,national_park,,
+Động Hua Mạ,Bắc Kạn,cave,,
+Động Puông,Bắc Kạn,cave,,
+Hồ Thang Hen,Cao Bằng,lake,22.7581541,106.2948146
+Khu di tích Pác Bó,Cao Bằng,historical_site,,
+Khu du lịch sinh thái Phia Oắc - Phia Đén,Cao Bằng,mountain,,
+Thác Bản Giốc,Cao Bằng,waterfall,22.8543165,106.7233151
+Động Ngườm Ngao,Cao Bằng,cave,22.8463574,106.7060495
+Cao nguyên đá Đồng Văn,Hà Giang,mountain,,
+Cột cờ Lũng Cú,Hà Giang,historical_site,,
+Dốc Thẩm Mã,Hà Giang,mountain_pass,,
+Phố cổ Đồng Văn,Hà Giang,old_quarter,,
+Đèo Mã Pí Lèng,Hà Giang,mountain_pass,,
+Chùa Tam Thanh,Lạng Sơn,temple_pagoda,21.8555831,106.7469837
+Cửa khẩu Hữu Nghị,Lạng Sơn,city_landmark,21.9711036,106.7108794
+Núi Tô Thị,Lạng Sơn,mountain,21.8564627,106.7484373
+Động Tam Thanh,Lạng Sơn,cave,21.8555666,106.7467985
+Ải Chi Lăng,Lạng Sơn,historical_site,21.573556,106.502583
+Khu di tích lịch sử Đền Hùng,Phú Thọ,historical_site,,
+Khu du lịch nước khoáng Thanh Thủy,Phú Thọ,hot_spring,,
+Vườn Quốc gia Xuân Sơn,Phú Thọ,national_park,21.1202059,104.9479697
+Đầm Ao Châu,Phú Thọ,lake,21.243084,105.6946362
+Đền Mẫu Âu Cơ,Phú Thọ,temple_pagoda,,
+Bãi Cháy,Quảng Ninh,beach,20.9552964,107.0236075
+Bảo tàng Quảng Ninh,Quảng Ninh,museum,20.9486771,107.0975562
+Khu di tích danh thắng Yên Tử,Quảng Ninh,temple_pagoda,,
+Vịnh Hạ Long,Quảng Ninh,bay,20.9084384,107.0682782
+Đảo Tuần Châu,Quảng Ninh,island,20.9284916,106.9701928
+ATK Định Hóa,Thái Nguyên,historical_site,21.7882992,105.5098493
+Bảo tàng Văn hóa các dân tộc Việt Nam,Thái Nguyên,museum,21.597226,105.8386288
+Hồ Núi Cốc,Thái Nguyên,lake,21.5774672,105.70388
+Hồ Suối Lạnh,Thái Nguyên,lake,21.4069383,105.7735808
+Đồi chè Tân Cương,Thái Nguyên,scenic_spot,21.544137,105.759957
+Khu du lịch sinh thái Na Hang - Lâm Bình,Tuyên Quang,lake,,
+Khu du lịch sinh thái Thác Mơ,Tuyên Quang,waterfall,,
+Suối khoáng Mỹ Lâm,Tuyên Quang,hot_spring,21.765885,105.1236254
+Thành nhà Mạc Tuyên Quang,Tuyên Quang,historical_site,21.8192365,105.2150066
+Đền Hạ Tuyên Quang,Tuyên Quang,temple_pagoda,22.8278297,104.9800739
+Bản Cát Cát,Lào Cai,village,,
+Thác Bạc,Lào Cai,waterfall,22.3632406,103.7768287
+Thị trấn Sa Pa,Lào Cai,mountain_town,,
+Đèo Ô Quy Hồ,Lào Cai,mountain_pass,,
+Đỉnh Fansipan,Lào Cai,mountain,,
+Hồ Thác Bà,Yên Bái,lake,,
+Ruộng bậc thang Mù Cang Chải,Yên Bái,mountain,,
+Suối Giàng,Yên Bái,mountain,,
+Đèo Khau Phạ,Yên Bái,mountain_pass,,
+Đền Đông Cuông,Yên Bái,temple_pagoda,,
+Bảo tàng Chiến thắng Điện Biên Phủ,Điện Biên,museum,21.380741,103.015194
+Cánh đồng Mường Thanh,Điện Biên,valley,,
+Hầm De Castries,Điện Biên,historical_site,21.384944,103.0106749
+Tượng đài Chiến thắng Điện Biên Phủ,Điện Biên,historical_site,21.3921057,103.0188842
+Đồi A1 (Him Lam),Điện Biên,historical_site,,
+Bản Lác Mai Châu,Hòa Bình,village,20.6537082,105.0722738
+Kim Bôi Resort,Hòa Bình,hot_spring,,
+Mai Châu,Hòa Bình,valley,20.6537082,105.0722738
+Thung Nai,Hòa Bình,lake,,
+Thủy điện Hòa Bình,Hòa Bình,dam,20.808346,105.3268801
+Khu du lịch sinh thái Sin Suối Hồ,Lai Châu,village,,
+Thác Tác Tình,Lai Châu,waterfall,22.3476248,103.6134553
+Thị trấn Tam Đường,Lai Châu,mountain_town,22.3441647,103.622339
+Đỉnh Putaleng,Lai Châu,mountain,,
+Động Tiên Sơn,Lai Châu,cave,22.3160203,103.6541085
+Bản Ló - Ngọc Chiến,Sơn La,hot_spring,,
+Cao nguyên Mộc Châu,Sơn La,plateau,,
+Hang Thẩm Tét Toóng,Sơn La,cave,,
+Thủy điện Sơn La,Sơn La,dam,21.4964675,103.9965489
+Tà Xùa,Sơn La,mountain,21.2796362,104.4326099
+Chùa Dâu,Bắc Ninh,temple_pagoda,21.0358692,106.0425161
+Chùa Phật Tích,Bắc Ninh,temple_pagoda,21.0936546,106.0262578
+Làng Quan họ Viêm Xá,Bắc Ninh,cultural_village,,
+Làng tranh Đông Hồ,Bắc Ninh,cultural_village,,
+Đền Đô,Bắc Ninh,temple_pagoda,21.107029,105.9597712
+Chùa Bầu,Hà Nam,temple_pagoda,,
+Chùa Tam Chúc,Hà Nam,temple_pagoda,,
+Khu du lịch Tam Chúc - Ba Sao,Hà Nam,scenic_spot,,
+Kẽm Trống,Hà Nam,scenic_spot,,
+Đền Trúc - Ngũ Động Sơn,Hà Nam,temple_pagoda,,
+Khu di tích Côn Sơn - Kiếp Bạc,Hải Dương,historical_site,21.1509953,106.3816559
+Văn Miếu Mao Điền,Hải Dương,historical_site,,
+Đảo Cò Chi Lăng Nam,Hải Dương,lake,,
+Đền Bia,Hải Dương,temple_pagoda,20.977979,106.2534188
+Đền Cao An Phụ,Hải Dương,temple_pagoda,,
+Chùa Chuông,Hưng Yên,temple_pagoda,20.6557859,106.0504457
+Làng nhãn lồng Hồng Nam,Hưng Yên,cultural_village,,
+Phố Hiến,Hưng Yên,historical_site,20.6625669,106.0584835
+Vườn nhãn lồng Tiên Lỗ,Hưng Yên,garden,,
+Đền Mẫu Phố Hiến,Hưng Yên,temple_pagoda,,
+Biển Thịnh Long,Nam Định,beach,,
+Chùa Phổ Minh,Nam Định,temple_pagoda,20.4543035,106.1631943
+Nhà thờ Phú Nhai,Nam Định,church,,
+Nhà thờ Trung Lao,Nam Định,church,,
+Đền Trần,Nam Định,temple_pagoda,20.4559665,106.1679446
+Chùa Bái Đính,Ninh Bình,temple_pagoda,20.2728394,105.8640252
+Cố đô Hoa Lư,Ninh Bình,historical_site,20.283483,105.8995986
+Quần thể danh thắng Tràng An,Ninh Bình,boat_landscape,,
+Tam Cốc - Bích Động,Ninh Bình,boat_landscape,20.2163426,105.937457
+Vườn quốc gia Cúc Phương,Ninh Bình,national_park,20.3162835,105.6176593
+Biển Cồn Vành,Thái Bình,beach,,
+Biển Đồng Châu,Thái Bình,beach,,
+Chùa Keo,Thái Bình,temple_pagoda,,
+Làng vườn Bách Thuận,Thái Bình,cultural_village,,
+Đền Tiên La,Thái Bình,temple_pagoda,,
+Hồ Đại Lải,Vĩnh Phúc,lake,,
+Khu danh thắng Tây Thiên,Vĩnh Phúc,temple_pagoda,,
+Sân golf Tam Đảo,Vĩnh Phúc,park,,
+Tam Đảo,Vĩnh Phúc,mountain_town,21.4035508,105.610193
+Thiền viện Trúc Lâm Tây Thiên,Vĩnh Phúc,temple_pagoda,,
+Hoàng thành Thăng Long,Hà Nội,historical_site,21.0357191,105.840307
+Hồ Hoàn Kiếm,Hà Nội,lake,21.0288313,105.8525357
+Lăng Chủ tịch Hồ Chí Minh,Hà Nội,historical_site,21.0367831,105.8346888
+Phố cổ Hà Nội,Hà Nội,old_quarter,21.0347561,105.8515999
+Văn Miếu Quốc Tử Giám,Hà Nội,historical_site,21.0287903,105.8359533
+Hồ Tam Bạc,Hải Phòng,lake,20.8550871,106.6746302
+Khu danh thắng Tràng Kênh,Hải Phòng,scenic_spot,,
+Khu du lịch sinh thái Hòn Dấu,Hải Phòng,island,,
+Khu du lịch Đồ Sơn,Hải Phòng,beach,,
+Quần đảo Cát Bà,Hải Phòng,island,,
+Biển Thiên Cầm,Hà Tĩnh,beach,18.2679732,106.1025304
+Chùa Hương Tích,Hà Tĩnh,temple_pagoda,18.5342785,105.7890804
+Khu du lịch sinh thái Hồ Kẻ Gỗ,Hà Tĩnh,lake,,
+Ngã ba Đồng Lộc,Hà Tĩnh,historical_site,18.4022035,105.7395203
+Suối nước nóng Sơn Kim,Hà Tĩnh,hot_spring,,
+Biển Cửa Lò,Nghệ An,beach,18.7559967,105.7399923
+Quê Bác - Làng Sen Kim Liên,Nghệ An,historical_site,,
+Thác Khe Kèm,Nghệ An,waterfall,,
+Vườn quốc gia Pù Mát,Nghệ An,national_park,18.9496787,104.6817847
+Đảo Lan Châu,Nghệ An,island,,
+Biển Nhật Lệ,Quảng Bình,beach,,
+Hang Sơn Đoòng (vùng Phong Nha - Kẻ Bàng),Quảng Bình,cave,,
+Suối Nước Moọc,Quảng Bình,scenic_spot,,
+Sông Chày - Hang Tối,Quảng Bình,cave,,
+Động Phong Nha,Quảng Bình,cave,,
+Cầu Hiền Lương - Sông Bến Hải,Quảng Trị,historical_site,,
+Nghĩa trang liệt sĩ Trường Sơn,Quảng Trị,historical_site,,
+Thành cổ Quảng Trị,Quảng Trị,historical_site,16.7539122,107.1895187
+Đảo Cồn Cỏ,Quảng Trị,island,17.158598,107.3393576
+Địa đạo Vịnh Mốc,Quảng Trị,historical_site,,
+Biển Hải Tiến,Thanh Hóa,beach,19.7901813,105.9285966
+Biển Sầm Sơn,Thanh Hóa,beach,19.7439948,105.9067049
+Khu bảo tồn thiên nhiên Pù Luông,Thanh Hóa,national_park,20.4989609,105.2013014
+Suối Cá Thần Cẩm Lương,Thanh Hóa,scenic_spot,,
+Thành Nhà Hồ,Thanh Hóa,historical_site,20.077973,105.6044596
+Chùa Thiên Mụ,Thừa Thiên Huế,temple_pagoda,16.4537195,107.5445808
+Lăng Tự Đức,Thừa Thiên Huế,historical_site,16.4315368,107.566845
+Vịnh Lăng Cô,Thừa Thiên Huế,bay,16.4100277,107.5610284
+Đại Nội Huế,Thừa Thiên Huế,historical_site,16.4689726,107.5781266
+Đầm Lập An,Thừa Thiên Huế,lagoon,16.2408499,108.0571813
+Buôn Akô Dhông,Đắk Lắk,village,12.696465,108.0491334
+Buôn Đôn,Đắk Lắk,cultural_village,12.878569,107.7120405
+Hồ Lắk,Đắk Lắk,lake,12.4232112,108.1776243
+Thác Dray Nur,Đắk Lắk,waterfall,12.5405291,107.8904044
+Thác Trinh Nữ,Đắk Lắk,waterfall,,
+Cụm thác Đray Sáp - Gia Long,Đắk Nông,waterfall,,
+Hồ Tà Đùng,Đắk Nông,lake,,
+Khu bảo tồn thiên nhiên Nam Nung,Đắk Nông,national_park,,
+Thác Dray Sap,Đắk Nông,waterfall,,
+Thác Liêng Nung,Đắk Nông,waterfall,,
+Biển Hồ T'Nưng,Gia Lai,lake,,
+Hồ Ayun Hạ,Gia Lai,lake,13.6290506,108.2391416
+Núi Ham Rồng Pleiku,Gia Lai,mountain,,
+Núi lửa Chư Đăng Ya,Gia Lai,mountain,14.1295364,108.0543985
+Thác Phú Cường,Gia Lai,waterfall,13.6616543,108.1363774
+Cầu treo Kon Klor,Kon Tum,bridge,14.3469891,108.0355259
+Làng Kon Kơ Tu,Kon Tum,village,,
+Ngục Kon Tum,Kon Tum,historical_site,14.343499,107.9910235
+Nhà rông Kon Klor,Kon Tum,cultural_village,14.3482379,108.0344241
+Nhà thờ gỗ Kon Tum,Kon Tum,church,14.3450781,108.013228
+Hồ Xuân Hương,Lâm Đồng,lake,11.9450803,108.4487222
+Núi Langbiang,Lâm Đồng,mountain,12.0472573,108.4405826
+Thung lũng Tình Yêu,Lâm Đồng,park,11.9781853,108.4499229
+Thác Datanla,Lâm Đồng,waterfall,11.9011774,108.4488444
+Đồi chè Cầu Đất,Lâm Đồng,scenic_spot,11.8777526,108.5603366
+Bãi biển Kỳ Co,Bình Định,beach,,
+Cầu Thị Nại,Bình Định,bridge,,
+Eo Gió,Bình Định,coastal_cliff,,
+Ghềnh Ráng Tiên Sa,Bình Định,coastal_cliff,,
+Tháp Đôi Quy Nhơn,Bình Định,historical_site,,
+Bàu Trắng,Bình Thuận,lake,11.0821248,108.3928315
+Hải đăng Kê Gà,Bình Thuận,lighthouse,10.6952853,107.9915815
+Làng chài Mũi Né,Bình Thuận,village,,
+Mũi Né,Bình Thuận,beach,10.9547336,108.2233358
+Đồi cát Bay Mũi Né,Bình Thuận,desert_dune,10.948883,108.2978477
+Hòn Chồng,Khánh Hòa,coastal_rock,12.2728399,109.2065606
+Tháp Bà Ponagar,Khánh Hòa,temple_pagoda,,
+VinWonders Nha Trang,Khánh Hòa,amusement_park,,
+Đảo Bình Ba,Khánh Hòa,island,11.8399697,109.2309699
+Đảo Hòn Mun,Khánh Hòa,island,12.1666859,109.3049424
+Làng gốm Bàu Trúc,Ninh Thuận,cultural_village,,
+Tháp Po Klong Garai,Ninh Thuận,temple_pagoda,,
+Vườn nho Ninh Thuận,Ninh Thuận,garden,,
+Vịnh Bình Tiên,Ninh Thuận,bay,,
+Vịnh Vĩnh Hy,Ninh Thuận,bay,11.7197233,109.2038962
+Bãi Xép,Phú Yên,beach,,
+Gành Đá Đĩa,Phú Yên,coastal_rock,,
+Mũi Điện (Mũi Đại Lãnh),Phú Yên,cape,,
+Tháp Nhạn,Phú Yên,temple_pagoda,,
+Đầm Ô Loan,Phú Yên,lagoon,,
+Cù Lao Chàm,Quảng Nam,island,,
+Làng gốm Thanh Hà,Quảng Nam,cultural_village,,
+Làng rau Trà Quế,Quảng Nam,cultural_village,,
+Phố cổ Hội An,Quảng Nam,historical_site,15.8683304,108.3502537
+Thánh địa Mỹ Sơn,Quảng Nam,historical_site,,
+Biển Sa Huỳnh,Quảng Ngãi,beach,14.6439653,109.0654746
+Núi Thiên Ấn,Quảng Ngãi,mountain,15.149357,108.8181961
+Thác Trắng Minh Long,Quảng Ngãi,waterfall,14.9062538,108.6597987
+Đảo Bé (Lý Sơn),Quảng Ngãi,island,15.4298174,109.0819609
+Đảo Lý Sơn,Quảng Ngãi,island,15.3809098,109.1174595
+Bà Nà Hills,Đà Nẵng,amusement_park,15.9956239,107.989389
+Bán đảo Sơn Trà,Đà Nẵng,peninsula,16.12049,108.2647075
+Bãi biển Mỹ Khê,Đà Nẵng,beach,16.0756712,108.2468627
+Cầu Rồng,Đà Nẵng,bridge,16.0611682,108.2278968
+Ngũ Hành Sơn,Đà Nẵng,mountain,16.00402,108.2627745
+Biển Hồ Tràm,Bà Rịa Vũng Tàu,beach,,
+Bãi Sau Vũng Tàu,Bà Rịa Vũng Tàu,beach,,
+Ngọn hải đăng Vũng Tàu,Bà Rịa Vũng Tàu,lighthouse,,
+Suối nước nóng Bình Châu,Bà Rịa Vũng Tàu,hot_spring,,
+Tượng Chúa Kitô Vua,Bà Rịa Vũng Tàu,viewpoint,,
+Chùa Bà Thiên Hậu Thủ Dầu Một,Bình Dương,temple_pagoda,,
+Chùa Hội Khánh,Bình Dương,temple_pagoda,,
+Công viên thành phố mới Bình Dương,Bình Dương,park,11.0524088,106.6786935
+Khu du lịch Đại Nam,Bình Dương,amusement_park,11.0432629,106.6347994
+Làng sơn mài Tương Bình Hiệp,Bình Dương,cultural_village,,
+Di tích lịch sử sóc Bom Bo,Bình Phước,historical_site,,
+Khu du lịch Sóc Xiêm,Bình Phước,park,,
+Núi Bà Rá,Bình Phước,mountain,11.8343777,107.0118478
+Thác Đứng,Bình Phước,waterfall,,
+Vườn quốc gia Bù Gia Mập,Bình Phước,national_park,,
+Khu du lịch Bửu Long,Đồng Nai,park,10.9629837,106.7936911
+Khu du lịch Thác Mai - Bàu Nước Sôi,Đồng Nai,waterfall,,
+Khu du lịch Vườn Xoài,Đồng Nai,park,10.9145226,106.9360149
+Thác Giang Điền,Đồng Nai,waterfall,10.9474593,106.9821623
+Vườn quốc gia Cát Tiên (khu vực Đồng Nai),Đồng Nai,national_park,,
+Hồ Dầu Tiếng,Tây Ninh,lake,11.459395,106.3849837
+Khu du lịch Long Điền Sơn,Tây Ninh,park,,
+Núi Bà Đen,Tây Ninh,mountain,11.3823834,106.170221
+Thánh thất Cao Đài Long Hoa,Tây Ninh,temple_pagoda,11.2593393,106.119375
+Tòa thánh Cao Đài Tây Ninh,Tây Ninh,temple_pagoda,,
+Bưu điện trung tâm Sài Gòn,Hồ Chí Minh,city_landmark,10.7799557,106.6999921
+Chợ Bến Thành,Hồ Chí Minh,market,10.7725301,106.6980365
+Nhà thờ Đức Bà Sài Gòn,Hồ Chí Minh,church,10.7797687,106.6990427
+Phố đi bộ Nguyễn Huệ,Hồ Chí Minh,city_landmark,10.7737196,106.7040457
+Địa đạo Củ Chi,Hồ Chí Minh,historical_site,11.1432528,106.4632107
+Chợ Châu Đốc,An Giang,market,10.7110765,105.1188769
+Hồ Ô Tức Sa,An Giang,lake,10.5223694,104.9951761
+Núi Cấm (Thiên Cấm Sơn),An Giang,mountain,,
+Núi Sam - Miếu Bà Chúa Xứ,An Giang,temple_pagoda,,
+Rừng tràm Trà Sư,An Giang,forest,10.5859015,105.058267
+Cánh đồng điện gió Bạc Liêu,Bạc Liêu,viewpoint,,
+Khu lưu niệm nghệ thuật Đờn ca tài tử Nam Bộ,Bạc Liêu,museum,,
+Nhà Công tử Bạc Liêu,Bạc Liêu,historical_site,9.2841226,105.7233534
+Nhà thờ Tắc Sậy,Bạc Liêu,church,9.2217967,105.3974305
+Quảng trường Hùng Vương Bạc Liêu,Bạc Liêu,city_landmark,9.2940274,105.7248751
+Bảo tàng Bến Tre,Bến Tre,museum,10.2350771,106.3742263
+Cồn Phú Đa,Bến Tre,river_island,10.2516753,106.0655419
+Cồn Phụng,Bến Tre,river_island,10.3336295,106.3572824
+Cồn Quy,Bến Tre,river_island,10.3338868,106.3843349
+Làng hoa kiểng Chợ Lách,Bến Tre,cultural_village,,
+Chùa Monivongsa Bopharam,Cà Mau,temple_pagoda,,
+Khu du lịch Hòn Đá Bạc,Cà Mau,coastal_rock,,
+Mũi Cà Mau,Cà Mau,cape,8.6058348,104.7190068
+Rừng quốc gia U Minh Hạ,Cà Mau,national_park,,
+Vườn quốc gia Mũi Cà Mau,Cà Mau,national_park,8.6977344,104.834501
+Khu di tích Gò Tháp,Đồng Tháp,historical_site,10.6039837,105.8281274
+Khu di tích Xẻo Quýt,Đồng Tháp,historical_site,10.398056,105.8045866
+Khu du lịch Gáo Giồng,Đồng Tháp,wetland,,
+Làng hoa Sa Đéc,Đồng Tháp,garden,,
+Vườn quốc gia Tràm Chim,Đồng Tháp,national_park,10.7298927,105.5001075
+Chợ nổi Ngã Bảy,Hậu Giang,market,,
+Khu bảo tồn thiên nhiên Lung Ngọc Hoàng,Hậu Giang,national_park,,
+Khu căn cứ Tỉnh ủy Cần Thơ,Hậu Giang,historical_site,,
+Khu du lịch sinh thái Phú Hữu,Hậu Giang,park,,
+Khu du lịch sinh thái Tây Đô,Hậu Giang,park,,
+Hòn Phụ Tử,Kiên Giang,coastal_rock,10.1353563,104.6388178
+Hòn Tre,Kiên Giang,island,9.9629651,104.8362725
+Quần đảo Nam Du,Kiên Giang,island,,
+Thị xã Hà Tiên,Kiên Giang,coastal_town,,
+Đảo Phú Quốc,Kiên Giang,island,,
+Chùa Tôn Thạnh,Long An,temple_pagoda,,
+Khu du lịch Cát Tường Phú Sinh,Long An,park,,
+Khu du lịch sinh thái Làng Nổi Tân Lập (khu trung tâm),Long An,wetland,,
+Khu du lịch sinh thái Đồng Tháp Mười (Long An),Long An,wetland,,
+Làng nổi Tân Lập,Long An,wetland,10.7119374,105.9893237
+Chùa Dơi (Mã Tộc),Sóc Trăng,temple_pagoda,,
+Chùa Kh'leang,Sóc Trăng,temple_pagoda,9.6100629,105.9767306
+Chùa Som Rong,Sóc Trăng,temple_pagoda,,
+Chùa Đất Sét,Sóc Trăng,temple_pagoda,9.6145357,105.9801992
+Khu du lịch sinh thái Hồ Bạch Ngọc,Sóc Trăng,park,,
+Biển Tân Thành (Gò Công Đông),Tiền Giang,beach,,
+Chùa Vĩnh Tràng,Tiền Giang,temple_pagoda,10.3628375,106.3735689
+Chợ nổi Cái Bè,Tiền Giang,market,10.3122272,106.032718
+Cù lao Thới Sơn,Tiền Giang,river_island,,
+Trại rắn Đồng Tâm,Tiền Giang,zoo,10.3509057,106.2963739
+Ao Bà Om,Trà Vinh,lake,,
+Chùa Hang,Trà Vinh,temple_pagoda,9.8876523,106.34512
+Chùa Kompong Chray,Trà Vinh,temple_pagoda,,
+Chùa Âng,Trà Vinh,temple_pagoda,9.9159554,106.3034636
+Cồn Chim Trà Vinh,Trà Vinh,river_island,9.9166726,106.4274233
+Chợ nổi Trà Ôn,Vĩnh Long,market,,
+Cù lao An Bình,Vĩnh Long,river_island,,
+Khu du lịch Hoàng Hảo,Vĩnh Long,park,,
+Khu du lịch Vinh Sang,Vĩnh Long,park,10.2704084,105.9536573
+Văn Thánh Miếu Vĩnh Long,Vĩnh Long,historical_site,10.2428887,105.9850273
+Bến Ninh Kiều,Cần Thơ,city_landmark,10.0338293,105.7883736
+Chợ nổi Cái Răng,Cần Thơ,market,10.0034333,105.7450883
+Cầu đi bộ Ninh Kiều,Cần Thơ,city_landmark,10.0370351,105.7912377
+Nhà cổ Bình Thủy,Cần Thơ,historical_site,10.066996,105.7496309
+Thiền viện Trúc Lâm Phương Nam,Cần Thơ,temple_pagoda,9.9896795,105.7037191
