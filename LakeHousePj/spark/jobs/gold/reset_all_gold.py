@@ -32,7 +32,8 @@ GOLD_TABLES = [
     "dim_province",
     "dim_destination",
     "dim_date",
-    "dim_author"
+    "dim_author",
+    "dim_post"
 ]
 
 
