@@ -221,8 +221,14 @@ services:
       SPARK_MODE: worker
       SPARK_MASTER_URL: spark://spark-master:7077
       SPARK_WORKER_CORES: 4
-      SPARK_WORKER_MEMORY: 4g
+      SPARK_WORKER_MEMORY: 3g
       SPARK_WORKER_WEBUI_PORT: 8081
+    deploy:
+      resources:
+        limits:
+          memory: 3.5g    # Hard limit: Container bị kill nếu vượt 3.5GB (an toàn với 9.6GB free)
+        reservations:
+          memory: 2g      # Soft limit: Đảm bảo có ít nhất 2GB khi start
     depends_on:
       spark-master:
         condition: service_healthy
@@ -355,8 +361,15 @@ services:
       AIRFLOW__WEBSERVER__RBAC: 'true'
       AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
       AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      AIRFLOW__SCHEDULER__HEARTBEAT_SEC: 5
+      AIRFLOW__SCHEDULER__HEALTH_CHECK_THRESHOLD: 240
       AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: 30
       AIRFLOW__LOGGING__LOGGING_LEVEL: INFO
+      # Database connection pool settings to handle DNS/network issues
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE: 5
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_RECYCLE: 1800
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_PRE_PING: 'true'
+      AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW: 10
       _AIRFLOW_DB_MIGRATE: 'true'
       _AIRFLOW_WWW_USER_CREATE: 'true'
       _AIRFLOW_WWW_USER_USERNAME: admin

@@ -11,13 +11,14 @@ Strategy: 2-Step Pattern with Direct APPEND
   - Step 1 (Transform): Bronze CSV → Scratch Parquet (parse header + CSV, preserve all data)
   - Step 2 (Clean & Load): Scratch Parquet → Silver Iceberg (cleaning, type conversion, APPEND)
 
-Deduplication Strategy: NONE (Direct APPEND)
-  - Reason: Crawler tool only scrapes NEW videos (never re-scrapes same video)
-  - Each file = 1 unique video = unique post + unique comments
-  - No duplicates possible → Direct APPEND without deduplication check
+Deduplication Strategy: OPTION A (Keep Latest File per URL)
+  - When same post_url is crawled multiple times → Keep ONLY the LATEST file (by checksum/timestamp)
+  - Skip older crawls to avoid duplicate comments in Silver
+  - Assumes newer crawl contains most up-to-date data (all old comments + any new ones)
+  - Result: Each post_url appears exactly ONCE in Silver → No duplicate comments
 
 Partition: 
-  - tiktok_post_metadata: NO partition (small table, 1 post per file)
+  - tiktok_post_metadata: Partition by post_url (consistent with comments)
   - tiktok_post_comments: Partition by post_url (semantic, co-located queries)
 """
 

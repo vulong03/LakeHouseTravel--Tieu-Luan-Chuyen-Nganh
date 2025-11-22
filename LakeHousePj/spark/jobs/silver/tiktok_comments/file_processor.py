@@ -27,7 +27,7 @@ from utils.merge_utils import calculate_row_checksum
 def process_single_post_url(
     spark: SparkSession,
     post_url: str,
-    mapping: Dict[str, Dict[str, any]],
+    file_meta: Dict[str, any],
     scratch_path_posts: str,
     scratch_path_comments: str,
     silver_table_posts: str,
@@ -47,7 +47,7 @@ def process_single_post_url(
     Args:
         spark: SparkSession instance
         post_url: Post URL to process
-        mapping: Partition → source file mapping
+        file_meta: File metadata dict with source_file, checksum, size
         scratch_path_posts: Scratch path for posts
         scratch_path_comments: Scratch path for comments
         silver_table_posts: Target Silver table for posts
@@ -67,7 +67,6 @@ def process_single_post_url(
         - status: 'success' or 'failed'
         - error_msg: Error message if failed, None if success
     """
-    file_meta = mapping[post_url]
     file_name = file_meta['source_file']
     file_checksum = file_meta['source_file_checksum']
     file_size = file_meta['source_file_size_bytes']
@@ -240,23 +239,23 @@ def process_single_post_url(
         return posts_count, comments_count, 'failed', error_msg
 
 
-def create_batches(post_urls: list, batch_size: int) -> list:
+def create_batches(items: list, batch_size: int) -> list:
     """
-    Split list of post_urls into batches for organized processing.
+    Split list of items into batches for organized processing.
     
     Args:
-        post_urls: Full list of post_urls to process
-        batch_size: Number of files per batch
+        items: Full list of items (metadata dicts) to process
+        batch_size: Number of items per batch
     
     Returns:
-        List of batches (each batch is a list of post_urls)
+        List of batches (each batch is a list of items)
     """
     batches = []
-    for i in range(0, len(post_urls), batch_size):
-        batches.append(post_urls[i:i+batch_size])
+    for i in range(0, len(items), batch_size):
+        batches.append(items[i:i+batch_size])
     
     print(f"\n📦 Created {len(batches)} batches (batch size: {batch_size})")
-    print(f"   Total files: {len(post_urls)}")
+    print(f"   Total items: {len(items)}")
     print(f"   Full batches: {len([b for b in batches if len(b) == batch_size])}")
     if batches:
         print(f"   Last batch size: {len(batches[-1])}")
