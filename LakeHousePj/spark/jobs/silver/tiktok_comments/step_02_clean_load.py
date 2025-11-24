@@ -8,10 +8,10 @@ Strategy:
     * Build mapping: partition → source file metadata
     * Filter unprocessed partitions (check PostgreSQL tracking)
   
-  - Phase 2: BATCH PROCESSING (30 partitions per batch)
-    * Posts: Read 30 partitions → Union → Clean → Single APPEND
-    * Comments: Read 30 partitions → Union → Clean → Single APPEND
-    * Log each file individually to PostgreSQL
+  - Phase 2: BATCH PROCESSING (30 files per batch)
+    * Posts: Read 30 files → Union → Clean → Single APPEND
+    * Comments: Read 30 files → Union → Clean → Single APPEND
+    * Log each file individually to PostgreSQL (calculate counts from final DataFrame)
     * Repeat for next batch
   
   - Phase 3: EXCEPTION HANDLING
@@ -20,14 +20,15 @@ Strategy:
     * Summary statistics reported
 
 Benefits:
-  - Reduce Iceberg append operations: 2758 → 92 (96.7% reduction)
+  - Reduce Iceberg append operations: ~2,830 → ~92 (96.7% reduction)
   - Reduce Hive Metastore snapshots and memory pressure
   - Maintain granular file-level tracking in PostgreSQL
+  - Partition by crawl_date/scrape_date instead of post_url for better performance
 
-Input: Scratch Parquet files (2 partitioned folders by post_url)
+Input: Scratch Parquet files (unpartitioned folders)
 Output: 2 Silver Iceberg tables:
-  - silver.silver.tiktok_post_metadata
-  - silver.silver.tiktok_post_comments
+  - silver.silver.tiktok_post_metadata (partitioned by crawl_date)
+  - silver.silver.tiktok_post_comments (partitioned by scrape_date)
 """
 
 import sys
@@ -37,6 +38,7 @@ import re
 sys.path.append('/opt/spark/jobs')
 
 from datetime import datetime, timedelta
+from functools import reduce
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
     StructType, StructField, StringType, IntegerType,
@@ -361,9 +363,10 @@ def clean_and_transform_posts(df):
     Transformations:
     1. Parse post_date: String (DD-MM-YYYY) → DateType
     2. Parse crawl_time: String → TimestampType
-    3. Convert metrics to INT: likes, comments_count, saves, shares
-    4. Keep descriptions as String
-    5. Update ingestion_timestamp to current datetime
+    3. Extract crawl_date from crawl_time (for partitioning)
+    4. Convert metrics to INT: likes, comments_count, saves, shares
+    5. Keep descriptions as String
+    6. Update ingestion_timestamp to current datetime
     
     Args:
         df: Input DataFrame from Scratch
@@ -379,7 +382,11 @@ def clean_and_transform_posts(df):
     # 2. Parse crawl_time (String → TimestampType)
     df_cleaned = parse_crawl_time(df_cleaned)
     
-    # 3. Convert metrics to INT (parse TikTok format: K, M, plain numbers)
+    # 3. Extract crawl_date from crawl_time (for partitioning)
+    print(f"🔧 Extracting crawl_date from crawl_time...")
+    df_cleaned = df_cleaned.withColumn("crawl_date", F.to_date(F.col("crawl_time")))
+    
+    # 4. Convert metrics to INT (parse TikTok format: K, M, plain numbers)
     print(f"🔧 Converting metrics (String → Int, parsing TikTok format: K/M)...")
     metric_columns = ['likes', 'comments_count', 'saves', 'shares',
                      'comments_level1', 'comments_level2', 'comments_loaded',
@@ -389,7 +396,7 @@ def clean_and_transform_posts(df):
         # Use parse_tiktok_number to handle: plain numbers, K format, M format, N/A
         df_cleaned = df_cleaned.withColumn(col, parse_tiktok_number(F.col(col)))
     
-    # 4. Update ingestion_timestamp to current datetime
+    # 5. Update ingestion_timestamp to current datetime
     print(f"🔧 Updating ingestion_timestamp (TimestampType)...")
     df_cleaned = df_cleaned.withColumn("ingestion_timestamp", F.lit(datetime.now()))
     
@@ -408,10 +415,11 @@ def clean_and_transform_comments(df):
     
     Transformations:
     1. Parse time (mixed format) → DateType as comment_date
-    2. Convert likes, number_of_replies to INT
-    3. Convert stt to INT
-    4. Trim whitespace from text fields
-    5. Update ingestion_timestamp to current datetime
+    2. Extract scrape_date from scrape_timestamp (for partitioning)
+    3. Convert likes, number_of_replies to INT
+    4. Convert stt to INT
+    5. Trim whitespace from text fields
+    6. Update ingestion_timestamp to current datetime
     
     Args:
         df: Input DataFrame from Scratch
@@ -424,7 +432,16 @@ def clean_and_transform_comments(df):
     # 1. Parse comment time (mixed format → DateType)
     df_cleaned = parse_comment_time(df)
     
-    # 2. Convert stt to INT (comment sequence number) - plain number only
+    # 2. Extract scrape_date from scrape_timestamp (for partitioning)
+    print(f"🔧 Extracting scrape_date from scrape_timestamp...")
+    df_cleaned = df_cleaned.withColumn("scrape_date",
+        F.to_date(
+            F.regexp_replace(F.col("scrape_timestamp"), "T", " ").substr(1, 10),
+            "yyyy-MM-dd"
+        )
+    )
+    
+    # 3. Convert stt to INT (comment sequence number) - plain number only
     print(f"🔧 Converting stt (String → Int)...")
     df_cleaned = df_cleaned.withColumn("stt",
         F.when(
@@ -436,18 +453,18 @@ def clean_and_transform_comments(df):
         ).otherwise(F.lit(None).cast(IntegerType()))
     )
     
-    # 3. Convert likes, number_of_replies to INT (parse TikTok format: K, M)
+    # 4. Convert likes, number_of_replies to INT (parse TikTok format: K, M)
     print(f"🔧 Converting likes and number_of_replies (String → Int, parsing TikTok format: K/M)...")
     for col in ['likes', 'number_of_replies']:
         df_cleaned = df_cleaned.withColumn(col, parse_tiktok_number(F.col(col)))
     
-    # 4. Trim whitespace from text fields
+    # 5. Trim whitespace from text fields
     print(f"🔧 Trimming whitespace from text fields...")
     text_columns = ['ten', 'tag_ten', 'comment', 'replied_to_tag_name']
     for col in text_columns:
         df_cleaned = df_cleaned.withColumn(col, F.trim(F.col(col)))
     
-    # 5. Filter out invalid comments (empty or NULL comment text)
+    # 6. Filter out invalid comments (empty or NULL comment text)
     print(f"🔧 Filtering out invalid comments...")
     count_before = df_cleaned.count()
     df_filtered = df_cleaned.filter(
@@ -460,7 +477,7 @@ def clean_and_transform_comments(df):
     print(f"   Removed {removed_count:,} comments with empty/NULL text ({removed_pct:.2f}%)")
     print(f"   Valid comments remaining: {count_after:,}")
     
-    # 6. Update ingestion_timestamp to current datetime
+    # 7. Update ingestion_timestamp to current datetime
     print(f"🔧 Updating ingestion_timestamp (TimestampType)...")
     df_final = df_filtered.withColumn("ingestion_timestamp", F.lit(datetime.now()))
     
@@ -504,6 +521,7 @@ def create_silver_posts_table(spark):
         
         # Crawl metadata
         StructField("crawl_time", TimestampType(), True),  # ✅ TimestampType (cleaned)
+        StructField("crawl_date", DateType(), True),  # ✅ NEW: For partitioning
         StructField("scrape_timestamp", StringType(), True),
         
         # Checksum for deduplication
@@ -557,6 +575,7 @@ def create_silver_comments_table(spark):
         
         # Scrape metadata
         StructField("scrape_timestamp", StringType(), True),
+        StructField("scrape_date", DateType(), True),  # ✅ NEW: For partitioning
         
         # Checksum for deduplication
         StructField("row_checksum", StringType(), False),
@@ -585,11 +604,12 @@ def create_silver_comments_table(spark):
 # =============================================================================
 # BATCH PROCESSING APPROACH
 # =============================================================================
-# Strategy: Process 30 partitions at a time to reduce Iceberg append operations
+# Strategy: Process 30 files at a time, write once per batch to reduce Iceberg append operations
 # Benefits:
-#   - 1379 appends → 46 appends (96.7% reduction)
+#   - ~2,830 appends → ~92 appends (96.7% reduction)
 #   - Less pressure on Hive Metastore
 #   - Maintain file-level tracking in PostgreSQL
+#   - Partition by crawl_date/scrape_date instead of post_url for better performance
 
 
 # REMOVED: prepare_unprocessed_partitions() - No longer needed with new approach
@@ -597,14 +617,12 @@ def create_silver_comments_table(spark):
 
 def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_comments):
     """
-    PHASE 2: PER-FILE PROCESSING - Process each file completely (posts + comments).
+    PHASE 2: BATCH PROCESSING - Process 30 files per batch, write once per batch.
     
-    Strategy: For each item (metadata dict) in batch:
-      1. Read partition for posts
-      2. Clean & append posts (with duplicate check)
-      3. Read partition for comments
-      4. Clean & append comments
-      5. Log 1 entry (atomic - success only if BOTH OK)
+    Strategy: For each batch (30 files):
+      1. Read all posts from 30 files → Union → Clean → Single APPEND
+      2. Read all comments from 30 files → Union → Clean → Single APPEND
+      3. Log each file individually to PostgreSQL (calculate counts from final DataFrame)
     
     Args:
         spark: SparkSession instance
@@ -616,10 +634,10 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
         Dict with statistics: posts_loaded, comments_loaded, files_success, files_failed
     """
     print(f"\n{'='*80}")
-    print(f"📦 PHASE 2: PER-FILE PROCESSING - Processing {len(unprocessed_items)} files")
+    print(f"📦 PHASE 2: BATCH PROCESSING - Processing {len(unprocessed_items)} files in batches of {BATCH_SIZE}")
     print(f"{'='*80}")
     
-    # Create batches (for organized display, not for bulk processing)
+    # Create batches
     batches = create_batches(unprocessed_items, BATCH_SIZE)
     
     stats = {
@@ -630,78 +648,287 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
         "batches_completed": 0
     }
     
-    # Process each batch (but process files individually within batch)
-    for batch_id, batch_urls in enumerate(batches, 1):
+    # Process each batch
+    for batch_id, batch_items in enumerate(batches, 1):
         print(f"\n{'='*80}")
-        print(f"📦 BATCH {batch_id}/{len(batches)}: Processing {len(batch_urls)} files")
+        print(f"📦 BATCH {batch_id}/{len(batches)}: Processing {len(batch_items)} files")
         print(f"{'='*80}")
         
-        batch_success = 0
-        batch_failed = 0
+        batch_posts_count = 0
+        batch_comments_count = 0
+        batch_files_success = 0
+        batch_files_failed = 0
         
-        # Process each file in batch
-        for idx, item_metadata in enumerate(batch_urls, 1):
-            print(f"\n[{idx}/{len(batch_urls)}]", end=" ")
+        # Initialize DataFrames for logging
+        df_posts_new = None
+        df_posts_cleaned = None  # Keep for logging (to check if post_url was processed)
+        df_comments_final = None
+        df_comments_cleaned = None  # Keep for logging (to check if post_url was processed)
+        
+        # Track append success status
+        posts_append_success = True  # Default: no data to append is OK
+        comments_append_success = True  # Default: no data to append is OK
+        
+        try:
+            # ============================================================
+            # STEP 1: COLLECT POST_URLS FROM BATCH
+            # ============================================================
+            batch_post_urls = [item["post_url"] for item in batch_items]
+            print(f"\n📋 Batch contains {len(batch_post_urls)} post URLs")
             
-            # Check if SparkContext is still alive before processing
-            if spark.sparkContext._jsc is None or spark.sparkContext._jsc.sc().isStopped():
-                print(f"❌ SparkContext stopped - aborting remaining files")
-                print(f"   Already processed: {batch_success} files")
-                print(f"   Remaining in batch: {len(batch_urls) - idx + 1} files")
-                stats["files_failed"] += len(batch_urls) - idx + 1
-                break
+            # ============================================================
+            # STEP 2: PROCESS POSTS (Read all → Union → Clean → Append once)
+            # ============================================================
+            print(f"\n📝 Processing POSTS for batch {batch_id}...")
             
+            # Read all posts from batch (using filter for all post_urls at once)
             try:
-                # Extract metadata from item
-                post_url = item_metadata["post_url"]
-                file_meta = {
-                    "source_file": item_metadata["source_file"],
-                    "source_file_checksum": item_metadata["source_file_checksum"],
-                    "source_file_size_bytes": item_metadata["source_file_size_bytes"]
-                }
+                # Read all posts matching batch post_urls in one go (more efficient)
+                df_all_posts = spark.read.parquet(scratch_path_posts) \
+                    .filter(F.col("post_url").isin(batch_post_urls))
                 
-                posts_count, comments_count, status, error_msg = process_single_post_url(
-                    spark=spark,
-                    post_url=post_url,
-                    file_meta=file_meta,
-                    scratch_path_posts=scratch_path_posts,
-                    scratch_path_comments=scratch_path_comments,
-                    silver_table_posts=SILVER_TABLE_POSTS,
-                    silver_table_comments=SILVER_TABLE_COMMENTS,
-                    business_columns_posts=BUSINESS_COLUMNS_POSTS,
-                    business_columns_comments=BUSINESS_COLUMNS_COMMENTS,
-                    cleaning_func_posts=clean_and_transform_posts,
-                    cleaning_func_comments=clean_and_transform_comments,
-                    postgres_conn=POSTGRES_CONN,
-                    bronze_base_path=BRONZE_BASE_PATH,
-                    batch_id=batch_id
+                # Check if we have any data
+                if df_all_posts.count() > 0:
+                    all_posts_data = [df_all_posts]
+                else:
+                    all_posts_data = []
+            except Exception as e:
+                print(f"   ⚠️  Error reading posts: {e}")
+                all_posts_data = []
+                batch_files_failed += len(batch_post_urls)
+            
+            if not all_posts_data:
+                print(f"   ⏭️  No posts data in this batch")
+            else:
+                # Use the single DataFrame (already filtered)
+                print(f"   📊 Processing posts data...")
+                df_posts_raw = all_posts_data[0]
+                
+                # Clean & Transform
+                print(f"   🧹 Cleaning and transforming posts...")
+                df_posts_cleaned = clean_and_transform_posts(df_posts_raw)
+                
+                # Check duplicates with Silver (anti-join)
+                print(f"   🔍 Checking duplicates with Silver table...")
+                df_silver_posts = spark.table(SILVER_TABLE_POSTS).select("post_url")
+                df_posts_new = df_posts_cleaned.join(
+                    df_silver_posts,
+                    on="post_url",
+                    how="left_anti"
+                )
+                posts_new_count = df_posts_new.count()
+                posts_skipped = df_posts_cleaned.count() - posts_new_count
+                print(f"   New posts to append: {posts_new_count:,}")
+                print(f"   Posts already in Silver (skipped): {posts_skipped:,}")
+                
+                if posts_new_count > 0:
+                    # Calculate row checksum
+                    print(f"   🔐 Calculating row checksum...")
+                    df_posts_final = calculate_row_checksum(
+                        df_posts_new,
+                        BUSINESS_COLUMNS_POSTS
+                    )
+                    
+                    # Append to Silver (1 time for entire batch) with error handling
+                    print(f"   💾 Appending {posts_new_count:,} posts to Silver...")
+                    try:
+                        df_posts_final.writeTo(SILVER_TABLE_POSTS) \
+                            .using("iceberg") \
+                            .append()
+                        batch_posts_count = posts_new_count
+                        posts_append_success = True
+                        print(f"   ✅ Posts appended successfully!")
+                    except Exception as append_error:
+                        print(f"   ❌ Posts append failed: {append_error}")
+                        batch_posts_count = 0
+                        posts_append_success = False
+                        # Re-raise to be caught by outer exception handler
+                        raise
+                else:
+                    print(f"   ⏭️  No new posts to append")
+                    posts_append_success = True  # No data to append is OK
+            
+            # ============================================================
+            # STEP 3: PROCESS COMMENTS (Read all → Union → Clean → Append once)
+            # ============================================================
+            print(f"\n💬 Processing COMMENTS for batch {batch_id}...")
+            
+            # Read all comments from batch (using filter for all post_urls at once)
+            try:
+                # Read all comments matching batch post_urls in one go (more efficient)
+                df_all_comments = spark.read.parquet(scratch_path_comments) \
+                    .filter(F.col("post_url").isin(batch_post_urls))
+                
+                # Check if we have any data
+                if df_all_comments.count() > 0:
+                    all_comments_data = [df_all_comments]
+                else:
+                    all_comments_data = []
+            except Exception as e:
+                print(f"   ⚠️  Error reading comments: {e}")
+                all_comments_data = []
+            
+            if not all_comments_data:
+                print(f"   ⏭️  No comments data in this batch")
+            else:
+                # Use the single DataFrame (already filtered)
+                print(f"   📊 Processing comments data...")
+                df_comments_raw = all_comments_data[0]
+                
+                # Clean & Transform
+                print(f"   🧹 Cleaning and transforming comments...")
+                df_comments_cleaned = clean_and_transform_comments(df_comments_raw)
+                
+                # Calculate row checksum
+                print(f"   🔐 Calculating row checksum...")
+                df_comments_final = calculate_row_checksum(
+                    df_comments_cleaned,
+                    BUSINESS_COLUMNS_COMMENTS
                 )
                 
-                if status == 'success':
-                    stats["posts_loaded"] += posts_count
-                    stats["comments_loaded"] += comments_count
-                    stats["files_success"] += 1
-                    batch_success += 1
-                else:
-                    stats["files_failed"] += 1
-                    batch_failed += 1
-                    
-            except Exception as e:
-                print(f"   ❌ Unexpected error: {e}")
-                stats["files_failed"] += 1
-                batch_failed += 1
+                # Append to Silver (1 time for entire batch) with error handling
+                comments_count = df_comments_final.count()
+                print(f"   💾 Appending {comments_count:,} comments to Silver...")
+                try:
+                    df_comments_final.writeTo(SILVER_TABLE_COMMENTS) \
+                        .using("iceberg") \
+                        .append()
+                    batch_comments_count = comments_count
+                    comments_append_success = True
+                    print(f"   ✅ Comments appended successfully!")
+                except Exception as append_error:
+                    print(f"   ❌ Comments append failed: {append_error}")
+                    batch_comments_count = 0
+                    comments_append_success = False
+                    # Re-raise to be caught by outer exception handler
+                    raise
+            
+            # ============================================================
+            # STEP 4: LOG TO POSTGRESQL (per file, after batch append)
+            # ============================================================
+            print(f"\n📝 Logging batch files to PostgreSQL...")
+            
+            # Calculate record counts per file from final DataFrames
+            for item in batch_items:
+                post_url = item["post_url"]
+                file_checksum = item["source_file_checksum"]
+                file_name = item["source_file"]
+                file_size = item["source_file_size_bytes"]
                 
-                if not CONTINUE_ON_BATCH_FAILURE:
-                    print(f"   Stopping execution (CONTINUE_ON_BATCH_FAILURE=False)")
-                    return stats
-        
-        stats["batches_completed"] += 1
-        
-        print(f"\n{'='*40}")
-        print(f"📊 Batch {batch_id}/{len(batches)} summary:")
-        print(f"   Success: {batch_success}/{len(batch_urls)}")
-        print(f"   Failed: {batch_failed}/{len(batch_urls)}")
-        print(f"{'='*40}")
+                try:
+                    # Count posts for this file
+                    # Check if post_url was PROCESSED (in cleaned data), not just appended
+                    posts_for_file = 0
+                    if df_posts_cleaned is not None:
+                        # Check if this post_url was processed (even if deduplicated)
+                        posts_check = df_posts_cleaned.filter(F.col("post_url") == post_url).count()
+                        if posts_check > 0:
+                            posts_for_file = 1  # Each post_url = 1 post record
+                    
+                    # Count comments for this file
+                    # Check if post_url was PROCESSED (in cleaned data)
+                    comments_for_file = 0
+                    if df_comments_cleaned is not None:
+                        comments_for_file = df_comments_cleaned \
+                            .filter(F.col("post_url") == post_url) \
+                            .count()
+                    
+                    total_records = posts_for_file + comments_for_file
+                    
+                    # Determine status (check both append success and data existence)
+                    if not posts_append_success or not comments_append_success:
+                        # Append operation failed
+                        status = 'failed'
+                        batch_files_failed += 1
+                        if not posts_append_success and not comments_append_success:
+                            error_msg = "Both posts and comments append operations failed"
+                        elif not posts_append_success:
+                            error_msg = "Posts append operation failed"
+                        else:
+                            error_msg = "Comments append operation failed"
+                    elif posts_for_file > 0 or comments_for_file > 0:
+                        # Append succeeded and data was processed (even if deduplicated)
+                        status = 'success'
+                        batch_files_success += 1
+                        error_msg = None
+                    else:
+                        # Append succeeded but post_url was not found in processed data at all
+                        status = 'failed'
+                        batch_files_failed += 1
+                        error_msg = "Post URL not found in processed data"
+                    
+                    # Log to PostgreSQL
+                    ingestion_details = {
+                        "tables": [
+                            {"name": TABLE_NAME_POSTS, "status": "success" if posts_for_file > 0 else "skipped", "records": posts_for_file},
+                            {"name": TABLE_NAME_COMMENTS, "status": "success" if comments_for_file > 0 else "skipped", "records": comments_for_file}
+                        ],
+                        "post_url": post_url,
+                        "source_size_bytes": file_size,
+                        "batch_id": batch_id
+                    }
+                    
+                    log_ingestion_to_postgres(
+                        file_path=f"{BRONZE_BASE_PATH}/{file_name}",
+                        file_checksum=file_checksum,
+                        records_ingested=total_records,
+                        table_name=f"{TABLE_NAME_POSTS} + {TABLE_NAME_COMMENTS}",
+                        status=status,
+                        layer='silver',
+                        ingestion_details=ingestion_details,
+                        file_size_bytes=file_size,
+                        postgres_conn_params=POSTGRES_CONN,
+                        error_message=error_msg if status == 'failed' else None
+                    )
+                    
+                except Exception as log_error:
+                    print(f"   ⚠️  Failed to log file {file_name}: {log_error}")
+                    batch_files_failed += 1
+            
+            # Update stats
+            stats["posts_loaded"] += batch_posts_count
+            stats["comments_loaded"] += batch_comments_count
+            stats["files_success"] += batch_files_success
+            stats["files_failed"] += batch_files_failed
+            stats["batches_completed"] += 1
+            
+            print(f"\n{'='*40}")
+            print(f"📊 Batch {batch_id}/{len(batches)} summary:")
+            print(f"   Posts loaded: {batch_posts_count:,}")
+            print(f"   Comments loaded: {batch_comments_count:,}")
+            print(f"   Files success: {batch_files_success}/{len(batch_items)}")
+            print(f"   Files failed: {batch_files_failed}/{len(batch_items)}")
+            print(f"{'='*40}")
+            
+        except Exception as e:
+            print(f"\n❌ ERROR in batch {batch_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Mark all files in batch as failed
+            stats["files_failed"] += len(batch_items)
+            
+            # Log all files as failed
+            for item in batch_items:
+                try:
+                    log_ingestion_to_postgres(
+                        file_path=f"{BRONZE_BASE_PATH}/{item['source_file']}",
+                        file_checksum=item["source_file_checksum"],
+                        records_ingested=0,
+                        table_name=f"{TABLE_NAME_POSTS} + {TABLE_NAME_COMMENTS}",
+                        status='failed',
+                        layer='silver',
+                        error_message=str(e),
+                        ingestion_details={"batch_id": batch_id, "post_url": item["post_url"]},
+                        file_size_bytes=item["source_file_size_bytes"],
+                        postgres_conn_params=POSTGRES_CONN
+                    )
+                except:
+                    pass
+            
+            if not CONTINUE_ON_BATCH_FAILURE:
+                print(f"   Stopping execution (CONTINUE_ON_BATCH_FAILURE=False)")
+                break
     
     return stats
 
@@ -734,22 +961,22 @@ def print_summary(stats, total_files):
 
 def clean_and_load_to_silver(spark):
     """
-    Main ETL: Read Scratch Parquet → Clean (Per-File) → Load to Silver
+    Main ETL: Read Scratch Parquet → Clean (Batch) → Load to Silver
     
-    PER-FILE PROCESSING APPROACH:
+    BATCH PROCESSING APPROACH:
     1. Phase 1: PREPARE - List partitions, build mapping, filter unprocessed
-    2. Phase 2: PER-FILE PROCESSING - Process each file completely (posts + comments)
+    2. Phase 2: BATCH PROCESSING - Process 30 files per batch, write once per batch
     3. Phase 3: SUMMARY - Report statistics
     
     Returns:
         tuple: (posts_loaded, comments_loaded)
     """
-    print(f"🚀 STEP 2: Clean & Load (Scratch → Silver) - PER-FILE PROCESSING")
+    print(f"🚀 STEP 2: Clean & Load (Scratch → Silver) - BATCH PROCESSING")
     print(f"   Source 1 (Posts): {SCRATCH_BASE_PATH_POSTS}")
     print(f"   Source 2 (Comments): {SCRATCH_BASE_PATH_COMMENTS}")
     print(f"   Target 1: {SILVER_TABLE_POSTS}")
     print(f"   Target 2: {SILVER_TABLE_COMMENTS}")
-    print(f"   Batch size: {BATCH_SIZE} files (for display organization)")
+    print(f"   Batch size: {BATCH_SIZE} files per batch (write once per batch)")
     
     # Get latest Scratch runs
     scratch_path_posts, run_id_posts = get_latest_scratch_run(spark, SCRATCH_BASE_PATH_POSTS)
@@ -771,14 +998,20 @@ def clean_and_load_to_silver(spark):
     # Build mapping (includes debug info for 1502 vs 1400 issue)
     # mapping = build_partition_to_file_mapping(spark, scratch_path_posts, posts_partitions)
     mapping = build_partition_to_file_mapping(spark, scratch_path_posts, file_combinations)
-    # Filter unprocessed
-    unprocessed_items = filter_unprocessed_partitions(spark, mapping, POSTGRES_CONN, layer='silver')
+    # Filter unprocessed (check both checksum in PostgreSQL and post_url in Silver)
+    unprocessed_items = filter_unprocessed_partitions(
+        spark, 
+        mapping, 
+        POSTGRES_CONN, 
+        layer='silver',
+        silver_table_posts=SILVER_TABLE_POSTS
+    )
     
     if not unprocessed_items:
         print(f"\n✅ All files already processed!")
         return 0, 0
     
-    # Phase 2: PER-FILE PROCESSING
+    # Phase 2: BATCH PROCESSING
     stats = process_batches(
         spark,
         unprocessed_items,

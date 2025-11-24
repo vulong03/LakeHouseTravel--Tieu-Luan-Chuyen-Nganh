@@ -202,16 +202,20 @@ def filter_unprocessed_partitions(
     spark: SparkSession,
     mapping: Dict[str, Dict[str, any]],
     postgres_conn_params: dict,
-    layer: str = 'silver'
+    layer: str = 'silver',
+    silver_table_posts: str = None
 ) -> List[Dict[str, any]]:
     """
-    Filter out already-processed partitions based on PostgreSQL tracking.
+    Filter out already-processed partitions based on:
+    1. PostgreSQL tracking (file_checksum level)
+    2. Silver table (post_url level) - if post_url already exists, skip to avoid deduplication
     
     Args:
         spark: SparkSession instance
         mapping: Partition → source file mapping (composite keys: "post_url||checksum")
         postgres_conn_params: PostgreSQL connection params
         layer: Data layer to check ('silver' by default)
+        silver_table_posts: Silver table name to check post_url existence (optional)
     
     Returns:
         List of unprocessed metadata dicts (each contains post_url, checksum, etc.)
@@ -221,18 +225,41 @@ def filter_unprocessed_partitions(
     print(f"\n🔍 Filtering unprocessed partitions...")
     
     unprocessed_items = []
-    skipped_count = 0
+    skipped_by_checksum = 0
+    skipped_by_post_url = 0
+    
+    # Get existing post_urls from Silver (if table exists and silver_table_posts provided)
+    existing_post_urls = set()
+    if silver_table_posts:
+        try:
+            df_existing = spark.table(silver_table_posts).select("post_url").distinct()
+            existing_post_urls = {row.post_url for row in df_existing.collect()}
+            print(f"   Found {len(existing_post_urls):,} existing post_urls in Silver table")
+        except Exception as e:
+            print(f"   ⚠️  Could not check Silver table (may not exist yet): {e}")
+            existing_post_urls = set()
     
     for composite_key, metadata in mapping.items():
         checksum = metadata["source_file_checksum"]
+        post_url = metadata["post_url"]
         
+        # Check 1: File already logged in PostgreSQL?
         if check_if_file_ingested(checksum, postgres_conn_params, layer):
-            skipped_count += 1
-        else:
-            unprocessed_items.append(metadata)
+            skipped_by_checksum += 1
+            continue
+        
+        # Check 2: post_url already exists in Silver?
+        if post_url in existing_post_urls:
+            skipped_by_post_url += 1
+            print(f"   ⏭️  Skipping {post_url[:50]}... (already in Silver)")
+            continue
+        
+        # Both checks passed → add to unprocessed
+        unprocessed_items.append(metadata)
     
     print(f"   Total entries: {len(mapping)}")
-    print(f"   Already processed: {skipped_count}")
+    print(f"   Skipped by checksum (already logged): {skipped_by_checksum}")
+    print(f"   Skipped by post_url (already in Silver): {skipped_by_post_url}")
     print(f"   To process: {len(unprocessed_items)}")
     
     return unprocessed_items
