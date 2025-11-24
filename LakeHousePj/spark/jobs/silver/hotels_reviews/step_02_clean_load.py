@@ -6,6 +6,11 @@ Chiến lược:
   - Đọc từ Scratch Parquet files
   - Parse review_date: định dạng tiếng Việt → DateType (yyyy-MM-dd)
   - Convert review_score: String → DoubleType
+  - Chuẩn hoá stay_date (tháng/năm → DateType với day=1)
+  - Làm sạch text: review_positive, review_negative, review_title (clean mạnh)
+  - Làm sạch nhẹ room_type, map về group (phòng đôi, phòng đơn, căn hộ, dorm, bungalow, biệt thự, ...)
+    + Nếu KHÔNG match group nào → giữ nguyên giá trị room_type đã được clean
+  - Loại bỏ bản ghi NULL ở các cột business chính
   - Thêm ingestion_timestamp: TimestampType
   - Tính row_checksum (12 cột business)
   - Deduplicate: LEFT ANTI JOIN trên row_checksum (loại bỏ bản ghi đã tồn tại)
@@ -43,6 +48,143 @@ from silver.hotels_reviews.config import (
 )
 
 
+# =========================
+# Helper: Normalize room_type
+# =========================
+def normalize_room_type_py(value: str) -> str:
+    """
+    Chuẩn hoá room_type về các group:
+      - phòng đơn / phòng đôi / phòng twin
+      - phòng tiêu chuẩn
+      - phòng cao cấp
+      - phòng suite
+      - phòng giường king / queen
+      - phòng gia đình
+      - căn hộ
+      - phòng dorm
+      - bungalow (gồm chalet, cabin)
+      - biệt thự (gồm villa, dinh thự)
+      - phòng điều hành
+      - phòng 3 người
+      - phòng 4 người
+      - lều (tent / glamping)
+
+    Nếu KHÔNG match bất kỳ nhóm nào ở trên → trả về CHÍNH giá trị room_type đã được clean.
+    (tức là không ép về 'đặc biệt' nữa để giữ chi tiết cho dashboard)
+    """
+    if value is None:
+        return None
+
+    s = value.strip().lower()
+    if not s:
+        return None
+
+    original = s  # để trả lại nếu không match group nào
+
+    # ==== ƯU TIÊN NHÓM ĐẶC THÙ TRƯỚC ====
+
+    # Dorm / phòng ngủ tập thể
+    dorm_keywords = [
+        "dorm",
+        "phòng dorm",
+        "phòng ngủ tập thể",
+        "giường trong phòng ngủ tập thể",
+    ]
+    if any(k in s for k in dorm_keywords):
+        return "phòng dorm"
+
+    # Bungalow / Chalet / Cabin
+    if "bungalow" in s or "bunglalow" in s or "bungalô" in s:
+        return "bungalow"
+    if "chalet" in s or "cabin" in s:
+        # Gom chalet/cabin vào nhóm bungalow
+        return "bungalow"
+
+    # Lều / Tent / Glamping
+    if "lều" in s or "lèu" in s or "tent" in s or "glamping" in s:
+        return "lều"
+
+    # Biệt thự / Villa / Dinh thự
+    villa_keywords = [
+        "biệt thự",
+        "villa",
+        "dinh thự",
+    ]
+    if any(k in s for k in villa_keywords):
+        return "biệt thự"
+
+    # Căn hộ / Residence / Penthouse / Maisonette
+    apt_keywords = [
+        "căn hộ",
+        "apartment",
+        "residence",
+        "penthouse",
+        "maisonette"
+    ]
+    if any(k in s for k in apt_keywords):
+        return "căn hộ"
+
+    # Phòng gia đình
+    family_keywords = [
+        "gia đình",
+        "family"
+    ]
+    if any(k in s for k in family_keywords):
+        return "phòng gia đình"
+
+    # Sức chứa: 3 người
+    if "3 người" in s or "3 người" in s or " triple" in s or s.startswith("triple"):
+        return "phòng 3 người"
+
+    # Sức chứa: 4 người
+    if "4 người" in s or "4 người" in s or "quadruple" in s:
+        return "phòng 4 người"
+
+    # Giường King / Queen
+    if "king" in s:
+        return "phòng giường king"
+    if "queen" in s:
+        return "phòng giường queen"
+
+    # Twin
+    if "twin" in s:
+        return "phòng twin"
+
+    # Suite / Presidential
+    if "suite" in s or "presidential" in s:
+        return "phòng suite"
+
+    # Executive → phòng điều hành
+    if "executive" in s or "phòng điều hành" in s:
+        return "phòng điều hành"
+
+    # Deluxe / Superior / Premium / Club / Grand / Luxury / Signature → phòng cao cấp
+    if any(k in s for k in ["deluxe", "superior", "premium", "club", "grand", "luxury", "signature"]):
+        return "phòng cao cấp"
+
+    # Single / phòng đơn
+    if "single" in s or "phòng đơn" in s or "phong don" in s:
+        return "phòng giường đơn"
+
+    # Double / giường đôi / phòng đôi
+    if "double" in s or "giường đôi" in s or "giuong doi" in s or "phòng đôi" in s:
+        return "phòng giường đôi"
+
+    # Standard / tiêu chuẩn
+    if "tiêu chuẩn" in s or "tieu chuan" in s or "standard" in s:
+        return "phòng tiêu chuẩn"
+
+    # Studio
+    if "studio" in s:
+        return "studio"
+
+    # Không match group nào → giữ nguyên giá trị đã clean
+    return original
+
+
+normalize_room_type_udf = F.udf(normalize_room_type_py, StringType())
+
+
 def parse_review_date(df):
     """
     Parse review_date tiếng Việt sang DateType
@@ -74,10 +216,11 @@ def parse_review_date(df):
     
     # Tạo DateType bằng F.make_date (tự xử lý NULL)
     df_with_date = df_parsed \
-        .withColumn("review_date_parsed", 
+        .withColumn(
+            "review_date_parsed",
             F.when(
-                (F.col("_day").isNotNull()) & 
-                (F.col("_month").isNotNull()) & 
+                (F.col("_day").isNotNull()) &
+                (F.col("_month").isNotNull()) &
                 (F.col("_year").isNotNull()),
                 F.make_date(F.col("_year"), F.col("_month"), F.col("_day"))
             ).otherwise(F.lit(None).cast(DateType()))
@@ -87,13 +230,14 @@ def parse_review_date(df):
     
     # Kiểm tra kết quả parsing
     total_count = df.count()
-    null_count = df.filter(F.col("review_date").isNull()).count()
+    null_before = df.filter(F.col("review_date").isNull()).count()
     parsed_count = df_with_date.filter(F.col("review_date").isNotNull()).count()
     
     print(f"   Tổng số bản ghi: {total_count:,}")
-    print(f"   NULL trước khi parse: {null_count:,}")
+    print(f"   NULL trước khi parse: {null_before:,}")
     print(f"   Parse thành công: {parsed_count:,}")
-    print(f"   Tỷ lệ parse: {(parsed_count / (total_count - null_count) * 100):.2f}%")
+    if total_count - null_before > 0:
+        print(f"   Tỷ lệ parse: {(parsed_count / (total_count - null_before) * 100):.2f}%")
     
     return df_with_date
 
@@ -105,8 +249,12 @@ def clean_and_transform(df):
     Transformations:
     1. Parse review_date: String → DateType (định dạng tiếng Việt)
     2. Convert review_score: String → DoubleType
-    3. Giữ các cột khác dạng String
-    4. Thêm ingestion_timestamp: TimestampType (thời gian hiện tại)
+    3. Chuẩn hoá stay_date (tháng/năm → DateType)
+    4. Clean text mạnh cho review_positive, review_negative, review_title
+    5. Clean nhẹ room_type, map về group (phòng đôi, dorm, bungalow, biệt thự, ...)
+       + Nếu không match group thì giữ nguyên room_type đã clean
+    6. Loại bản ghi có NULL ở review_date, traveler_type, review_score, room_type
+    7. Thêm ingestion_timestamp
     
     Args:
         df: DataFrame input từ Scratch
@@ -120,26 +268,23 @@ def clean_and_transform(df):
     df_cleaned = parse_review_date(df)
     
     # 2. Convert review_score: String → DoubleType
-    # Thay dấu phẩy bằng dấu chấm (định dạng VN: "8,5" → "8.5")
     print("Đang convert review_score (String → Double)...")
     df_cleaned = df_cleaned \
-        .withColumn("review_score", 
-            F.when(F.col("review_score").isNotNull(), 
-                   F.regexp_replace(F.col("review_score"), ",", ".").cast(DoubleType())
+        .withColumn(
+            "review_score",
+            F.when(
+                F.col("review_score").isNotNull(),
+                F.regexp_replace(F.col("review_score"), ",", ".").cast(DoubleType())
             ).otherwise(F.lit(None).cast(DoubleType()))
         )
     
-    # Chuẩn hoá stay_date: lowercase, bỏ chữ 'tháng', sau đó build MM/YYYY
+    # 3. Chuẩn hoá stay_date: lowercase, bỏ 'tháng', extract MM/YYYY
     print("\nĐang chuẩn hoá stay_date: lowercase và bỏ 'tháng' trước khi extract month/year...")
     df_cleaned = df_cleaned.withColumn("_stay_raw", F.lower(F.coalesce(F.col("stay_date"), F.lit(""))))
-    # Bỏ literal 'tháng' và phần ':' hoặc khoảng trắng sau đó
     df_cleaned = df_cleaned.withColumn("_stay_raw", F.regexp_replace(F.col("_stay_raw"), r"tháng[:\s]*", ""))
-
-    # Extract month và year từ chuỗi stay đã làm sạch
     df_cleaned = df_cleaned.withColumn("_stay_month", F.regexp_extract(F.col("_stay_raw"), r"(\d{1,2})(?=/|\s|$)", 1)) \
-                         .withColumn("_stay_year", F.regexp_extract(F.col("_stay_raw"), r"(\d{4})", 1))
+                           .withColumn("_stay_year", F.regexp_extract(F.col("_stay_raw"), r"(\d{4})", 1))
 
-    # Build DateType với day=1 khi có đủ month/year
     df_cleaned = df_cleaned.withColumn(
         "stay_date",
         F.when(
@@ -148,7 +293,6 @@ def clean_and_transform(df):
         ).otherwise(F.lit(None).cast(DateType()))
     )
 
-    # Log thống kê normalize stay_date
     try:
         total_stay = df_cleaned.count()
         parsed_stay = df_cleaned.filter((F.col("_stay_month") != "") & (F.col("_stay_year") != "")).count()
@@ -156,11 +300,10 @@ def clean_and_transform(df):
     except Exception:
         pass
 
-    # Drop các cột tạm
     df_cleaned = df_cleaned.drop("_stay_raw", "_stay_month", "_stay_year")
 
-    # CLEAN TEXT COLUMNS: lowercase, bỏ HTML, URL, xuống dòng, ký tự lạ, icon
-    print("\nĐang làm sạch text columns `review_positive` và `review_negative` (lowercase, loại ký tự lạ)...")
+    # 4. CLEAN TEXT COLUMNS: review_positive, review_negative, review_title (clean mạnh)
+    print("\nĐang làm sạch text columns `review_positive`, `review_negative`, `review_title` (lowercase, loại ký tự lạ)...")
     try:
         before_pos_null = df_cleaned.filter(F.col("review_positive").isNull()).count()
         before_neg_null = df_cleaned.filter(F.col("review_negative").isNull()).count()
@@ -168,46 +311,27 @@ def clean_and_transform(df):
     except Exception:
         before_pos_null = before_neg_null = before_title_null = None
 
+    def clean_text(col_name: str):
+        return F.when(
+            F.col(col_name).isNotNull(),
+            F.lower(
+                F.regexp_replace(
+                    F.regexp_replace(
+                        F.regexp_replace(
+                            F.regexp_replace(F.trim(F.col(col_name)), r"<[^>]+>", " "),
+                            r"http\S+|www\.[^\s]+", " "
+                        ),
+                        r"[\r\n]+", " "
+                    ),
+                    r"[^\p{L}\p{N}\p{P}\p{Z}]+", " "
+                )
+            )
+        ).otherwise(F.lit(None))
+
     df_cleaned = df_cleaned \
-        .withColumn("review_positive",
-            F.when(F.col("review_positive").isNotNull(),
-                F.lower(
-                    F.regexp_replace(
-                        F.regexp_replace(
-                            F.regexp_replace(
-                                F.regexp_replace(F.trim(F.col("review_positive")), r"<[^>]+>", " "),
-                            r"http\S+|www\.[^\s]+", " "),
-                        r"[\r\n]+", " "),
-                    r"[^\p{L}\p{N}\p{P}\p{Z}]+", " ")
-                )
-            ).otherwise(F.lit(None))
-        ) \
-        .withColumn("review_negative",
-            F.when(F.col("review_negative").isNotNull(),
-                F.lower(
-                    F.regexp_replace(
-                        F.regexp_replace(
-                            F.regexp_replace(
-                                F.regexp_replace(F.trim(F.col("review_negative")), r"<[^>]+>", " "),
-                            r"http\S+|www\.[^\s]+", " "),
-                        r"[\r\n]+", " "),
-                    r"[^\p{L}\p{N}\p{P}\p{Z}]+", " ")
-                )
-            ).otherwise(F.lit(None))
-        ) \
-        .withColumn("review_title",
-            F.when(F.col("review_title").isNotNull(),
-                F.lower(
-                    F.regexp_replace(
-                        F.regexp_replace(
-                            F.regexp_replace(
-                                F.regexp_replace(F.trim(F.col("review_title")), r"<[^>]+>", " "),
-                            r"http\S+|www\.[^\s]+", " "),
-                        r"[\r\n]+", " "),
-                    r"[^\p{L}\p{N}\p{P}\p{Z}]+", " ")
-                )
-            ).otherwise(F.lit(None))
-        )
+        .withColumn("review_positive", clean_text("review_positive")) \
+        .withColumn("review_negative", clean_text("review_negative")) \
+        .withColumn("review_title", clean_text("review_title"))
 
     # Collapse nhiều khoảng trắng thành 1
     df_cleaned = df_cleaned \
@@ -226,13 +350,41 @@ def clean_and_transform(df):
     except Exception:
         pass
 
-    # 3. Loại bản ghi có NULL ở các cột business quan trọng
-    print("\n⚠️  Đang loại các bản ghi có NULL ở `review_date`, `traveler_type` hoặc `review_score`...")
+    # 5. CLEAN NHẸ room_type (giữ dấu, không xoá ký tự lạ)
+    print("\nĐang làm sạch nhẹ cột room_type (lowercase, bỏ HTML/URL/newline, giữ dấu tiếng Việt)...")
+    df_cleaned = df_cleaned.withColumn(
+        "room_type",
+        F.when(
+            F.col("room_type").isNotNull(),
+            F.lower(
+                F.regexp_replace(
+                    F.regexp_replace(
+                        F.trim(F.col("room_type")),
+                        r"<[^>]+>", " "
+                    ),
+                    r"http\S+|www\.[^\s]+", " "
+                )
+            )
+        ).otherwise(F.lit(None))
+    )
+
+    # Gộp nhiều khoảng trắng
+    df_cleaned = df_cleaned.withColumn("room_type", F.regexp_replace(F.col("room_type"), r"\s+", " "))
+
+    # Convert empty string → NULL
+    df_cleaned = df_cleaned.withColumn(
+        "room_type",
+        F.when((F.col("room_type").isNull()) | (F.col("room_type") == ""), F.lit(None)).otherwise(F.col("room_type"))
+    )
+
+    # 6. Loại bản ghi có NULL ở các cột business quan trọng (bao gồm room_type)
+    print("\n⚠️  Đang loại các bản ghi có NULL ở `review_date`, `traveler_type`, `review_score`, `room_type`...")
     before_null_filter = df_cleaned.count()
     df_cleaned = df_cleaned.filter(
         (F.col("review_date").isNotNull()) &
         (F.col("traveler_type").isNotNull()) &
-        (F.col("review_score").isNotNull())
+        (F.col("review_score").isNotNull()) &
+        (F.col("room_type").isNotNull())
     )
     after_null_filter = df_cleaned.count()
     removed_nulls = before_null_filter - after_null_filter
@@ -240,17 +392,20 @@ def clean_and_transform(df):
     print(f"   Số bản ghi sau khi filter NULL:  {after_null_filter:,}")
     print(f"   Số bản ghi bị loại (NULL):       {removed_nulls:,}")
 
-    # Exact-row dedup đã được xử lý bằng row_checksum LEFT ANTI JOIN ở bước sau
+    # 7. Map room_type → group chuẩn bằng UDF
+    #    - Các giá trị match pattern → gom về group (phòng đôi, căn hộ, dorm, bungalow, biệt thự,...)
+    #    - Các giá trị KHÔNG match → giữ nguyên (original cleaned text)
+    print("\nĐang chuẩn hoá room_type về group nếu match (ngược lại giữ nguyên)...")
+    df_cleaned = df_cleaned.withColumn("room_type", normalize_room_type_udf(F.col("room_type")))
 
-    # 5. Cập nhật ingestion_timestamp theo datetime hiện tại (TimestampType)
+    # 8. Thêm ingestion_timestamp
     print("Đang thêm cột ingestion_timestamp (TimestampType)...")
-    df_cleaned = df_cleaned \
-        .withColumn("ingestion_timestamp", F.lit(datetime.now()))
+    df_cleaned = df_cleaned.withColumn("ingestion_timestamp", F.lit(datetime.now()))
 
     # Hiển thị sample sau khi clean
     print("\nSample dữ liệu sau khi làm sạch:")
     df_cleaned.select(
-        "hotel_name", "review_date", "review_score", "traveler_type"
+        "hotel_name", "review_date", "review_score", "traveler_type", "room_type"
     ).show(5, truncate=False)
 
     return df_cleaned
@@ -394,8 +549,8 @@ def clean_and_load_to_silver(spark):
     
     Các bước:
     1. Đọc từ Scratch Parquet files
-    2. Làm sạch dữ liệu (parse date, convert kiểu)
-    3. Tính row_checksum (12 business columns)
+    2. Làm sạch dữ liệu (parse date, convert kiểu, room_type group,...)
+    3. Tính row_checksum (MD5 trên các business columns)
     4. Deduplicate bằng LEFT ANTI JOIN
     5. APPEND vào Silver table
     6. Ghi log vào PostgreSQL tracking table
@@ -511,7 +666,8 @@ def clean_and_load_to_silver(spark):
         "transformations": {
             "review_date": "Vietnamese format → DateType",
             "review_score": "String → DoubleType",
-            "ingestion_timestamp": "TimestampType (current datetime)"
+            "ingestion_timestamp": "TimestampType (current datetime)",
+            "room_type": "Group common patterns (phòng đôi, căn hộ, dorm, bungalow, biệt thự, ...) – fallback giữ nguyên giá trị đã clean"
         }
     }
     
