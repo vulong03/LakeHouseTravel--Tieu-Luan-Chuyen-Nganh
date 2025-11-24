@@ -377,6 +377,28 @@ def clean_and_transform(df):
         F.when((F.col("room_type").isNull()) | (F.col("room_type") == ""), F.lit(None)).otherwise(F.col("room_type"))
     )
 
+    # ================================
+    # Normalize & map `traveler_type`
+    # - Lowercase, trim, collapse spaces
+    # - Map values like 'phòng gia đình' or 'family' -> 'gia đình'
+    # (Do mapping trước khi loại NULL để filter đúng)
+    # ================================
+    print("\nĐang chuẩn hoá cột `traveler_type` và map giá trị family → 'gia đình' nếu cần...")
+    df_cleaned = df_cleaned.withColumn(
+        "traveler_type",
+        F.when(
+            F.col("traveler_type").isNotNull(),
+            F.lower(F.regexp_replace(F.trim(F.col("traveler_type")), r"\s+", " "))
+        ).otherwise(F.lit(None))
+    )
+
+    # Map exact/common family values to canonical 'gia đình'
+    # Note: `traveler_type` was lowercased and trimmed above, so we can match exact normalized strings.
+    df_cleaned = df_cleaned.withColumn(
+        "traveler_type",
+        F.when(F.col("traveler_type").isin("phòng gia đình"), F.lit("Gia đình")).otherwise(F.col("traveler_type"))
+    )
+
     # 6. Loại bản ghi có NULL ở các cột business quan trọng (bao gồm room_type)
     print("\n⚠️  Đang loại các bản ghi có NULL ở `review_date`, `traveler_type`, `review_score`, `room_type`...")
     before_null_filter = df_cleaned.count()
@@ -384,7 +406,11 @@ def clean_and_transform(df):
         (F.col("review_date").isNotNull()) &
         (F.col("traveler_type").isNotNull()) &
         (F.col("review_score").isNotNull()) &
-        (F.col("room_type").isNotNull())
+        (F.col("room_type").isNotNull()) &
+        (F.col("review_title").isNotNull()) &
+        (F.col("reviewer_name").isNotNull()) &
+        (F.col("reviewer_country").isNotNull())
+        
     )
     after_null_filter = df_cleaned.count()
     removed_nulls = before_null_filter - after_null_filter
