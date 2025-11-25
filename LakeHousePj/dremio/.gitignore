@@ -1,0 +1,10 @@
+# Dremio data directory (contains database files)
+data/
+
+# Dremio logs
+logs/
+
+# Temporary files
+*.tmp
+*.log
+

@@ -419,7 +419,9 @@ def clean_and_transform_comments(df):
     3. Convert likes, number_of_replies to INT
     4. Convert stt to INT
     5. Trim whitespace from text fields
-    6. Update ingestion_timestamp to current datetime
+    6. Validate level_comment (filter column shift errors)
+    7. Filter out invalid comments (empty or NULL comment text)
+    8. Update ingestion_timestamp to current datetime
     
     Args:
         df: Input DataFrame from Scratch
@@ -464,7 +466,26 @@ def clean_and_transform_comments(df):
     for col in text_columns:
         df_cleaned = df_cleaned.withColumn(col, F.trim(F.col(col)))
     
-    # 6. Filter out invalid comments (empty or NULL comment text)
+    # 6. Validate level_comment (filter column shift errors)
+    print(f"🔧 Validating level_comment (filter column shift errors)...")
+    count_before_validation = df_cleaned.count()
+    
+    df_validated = df_cleaned.filter(
+        F.col("level_comment").isNull() |
+        F.col("level_comment").isin("Yes", "No", "yes", "no", "YES", "NO")
+    )
+    
+    count_after_validation = df_validated.count()
+    invalid_count = count_before_validation - count_after_validation
+    invalid_pct = (invalid_count / count_before_validation * 100) if count_before_validation > 0 else 0
+    
+    print(f"   Removed {invalid_count:,} comments with invalid level_comment ({invalid_pct:.2f}%)")
+    print(f"   ℹ️  Invalid values indicate column shift from Bronze parser (csv.DictReader)")
+    print(f"   Valid comments remaining: {count_after_validation:,}")
+    
+    df_cleaned = df_validated
+    
+    # 7. Filter out invalid comments (empty or NULL comment text)
     print(f"🔧 Filtering out invalid comments...")
     count_before = df_cleaned.count()
     df_filtered = df_cleaned.filter(
@@ -477,7 +498,7 @@ def clean_and_transform_comments(df):
     print(f"   Removed {removed_count:,} comments with empty/NULL text ({removed_pct:.2f}%)")
     print(f"   Valid comments remaining: {count_after:,}")
     
-    # 7. Update ingestion_timestamp to current datetime
+    # 8. Update ingestion_timestamp to current datetime
     print(f"🔧 Updating ingestion_timestamp (TimestampType)...")
     df_final = df_filtered.withColumn("ingestion_timestamp", F.lit(datetime.now()))
     

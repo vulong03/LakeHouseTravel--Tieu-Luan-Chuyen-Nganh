@@ -103,48 +103,6 @@ def load_source_data(spark) -> DataFrame:
     return df_comments
 
 
-def validate_and_filter_data(df: DataFrame) -> DataFrame:
-    """
-    Filter out records with invalid level_comment values
-    
-    Valid values: 'Yes', 'No', NULL, 'yes', 'no', 'YES', 'NO'
-    Invalid: dates, numbers, special chars (signs of column shift from Bronze/Silver)
-    
-    This filter is necessary because of column shift issues in step_01_transform.py
-    where CSV parsing fails when Comment field contains unquoted commas.
-    """
-    print("\n🔍 Validating and filtering level_comment...")
-    
-    original_count = df.count()
-    
-    # Filter: Keep only valid level_comment values
-    df_valid = df.filter(
-        F.col("level_comment").isNull() |
-        F.col("level_comment").isin("Yes", "No", "yes", "no", "YES", "NO")
-    )
-    
-    valid_count = df_valid.count()
-    invalid_count = original_count - valid_count
-    
-    print(f"   📊 Original records: {original_count:,}")
-    print(f"   ✅ Valid records: {valid_count:,}")
-    print(f"   ❌ Invalid records filtered: {invalid_count:,} ({invalid_count/original_count*100:.2f}%)")
-    
-    if invalid_count > 0:
-        print(f"   ℹ️  Invalid records skipped due to column shift in Bronze/Silver data")
-        print(f"   ℹ️  Root cause: csv.DictReader in step_01_transform.py cannot handle unquoted commas")
-        print(f"   ℹ️  TODO: Fix Bronze parser (step_01_transform.py) to prevent future issues")
-        
-        # Show sample invalid records for debugging
-        print(f"\n   📋 Sample invalid level_comment values:")
-        df.filter(
-            F.col("level_comment").isNotNull() &
-            ~F.col("level_comment").isin("Yes", "No", "yes", "no", "YES", "NO")
-        ).select("post_url", "stt", "level_comment", "comment").show(5, truncate=True)
-    
-    return df_valid
-
-
 def join_with_dim_post(spark, df: DataFrame) -> DataFrame:
     """Join with dim_post to get post_sk"""
     print("\n🔗 Joining with dim_post...")
@@ -395,9 +353,6 @@ def main():
         
         # Step 3: Load source data
         df_comments = load_source_data(spark)
-
-        # Step 3.5: Validate and filter invalid records
-        df_comments = validate_and_filter_data(df_comments)
 
         # Step 4: Join with dim_post
         df_joined = join_with_dim_post(spark, df_comments)
