@@ -1,5 +1,6 @@
 networks:
   lakehouse_network:
+    name: lakehouse-network
     driver: bridge
 
 services:
@@ -90,7 +91,7 @@ services:
     build:
       context: ./hive
       dockerfile: Dockerfile
-    container_name: lakehouse_hive_metastore
+    container_name: lakehouse-hive-metastore
     hostname: hive-metastore
     networks:
       - lakehouse_network
@@ -132,7 +133,7 @@ services:
     build:
       context: ./hive
       dockerfile: Dockerfile
-    container_name: lakehouse_hive_server2
+    container_name: lakehouse-hive-server2
     hostname: hive-server2
     networks:
       - lakehouse_network
@@ -418,7 +419,7 @@ services:
     build:
       context: ./dremio
       dockerfile: Dockerfile
-    container_name: lakehouse_dremio
+    container_name: lakehouse-dremio
     hostname: dremio
     networks:
       - lakehouse_network
