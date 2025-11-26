@@ -4,7 +4,7 @@ Gold Layer - Dimension Country Job
 Builds `gold.dim_country` from the `reviewer_country` values in `silver.hotels_reviews`.
 
 Schema:
- - country_id: surrogate key (int)
+ - country_sk: surrogate key (int)
  - country_name: business key (string)
  - region: string (nullable)
  - created_at, updated_at: timestamps
@@ -42,7 +42,7 @@ def create_gold_database(spark):
 
 def create_dim_country_table(spark):
     schema = StructType([
-        StructField("country_id", IntegerType(), False),
+        StructField("country_sk", IntegerType(), False),
         StructField("country_name", StringType(), False),
         StructField("region", StringType(), True),
         StructField("created_at", TimestampType(), False),
@@ -115,11 +115,11 @@ def transform(df):
     window_spec = Window.orderBy("country_name")
 
     df = (
-        df.withColumn("country_id", F.row_number().over(window_spec))
+        df.withColumn("country_sk", F.row_number().over(window_spec))
         .withColumn("created_at", current_ts)
         .withColumn("updated_at", current_ts)
         .withColumn("is_active", F.lit(True))
-        .select("country_id", "country_name", "region", "created_at", "updated_at", "is_active")
+        .select("country_sk", "country_name", "region", "created_at", "updated_at", "is_active")
     )
 
     df.printSchema()
