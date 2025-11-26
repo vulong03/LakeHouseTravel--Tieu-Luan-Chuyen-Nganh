@@ -30,7 +30,10 @@ GOLD_DATABASE = "gold"
 # All Gold tables to reset (dimension tables)
 GOLD_TABLES = [
     "dim_province",
-    "dim_destination"
+    "dim_destination",
+    "dim_date",
+    "dim_author",
+    "dim_post"
 ]
 
 

@@ -18,8 +18,8 @@ Deduplication Strategy: OPTION A (Keep Latest File per URL)
   - Result: Each post_url appears exactly ONCE in Silver → No duplicate comments
 
 Partition: 
-  - tiktok_post_metadata: Partition by post_url (consistent with comments)
-  - tiktok_post_comments: Partition by post_url (semantic, co-located queries)
+  - tiktok_post_metadata: Partition by crawl_date (date-based partitioning for better performance)
+  - tiktok_post_comments: Partition by scrape_date (date-based partitioning for better performance)
 """
 
 # Database and table names
@@ -59,8 +59,8 @@ BUSINESS_COLUMNS_COMMENTS = [
 ]
 
 # Partition columns
-PARTITION_COLUMNS_POSTS = ["post_url"]  # Partition by post_url (consistent with comments)
-PARTITION_COLUMNS_COMMENTS = ["post_url"]  # Partition comments by post_url
+PARTITION_COLUMNS_POSTS = ["crawl_date"]  # Partition by crawl_date (date-based partitioning)
+PARTITION_COLUMNS_COMMENTS = ["scrape_date"]  # Partition by scrape_date (date-based partitioning)
 
 # NOT NULL constraints (for data validation)
 NOT_NULL_COLUMNS_POSTS = ["post_url"]

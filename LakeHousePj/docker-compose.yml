@@ -1,5 +1,6 @@
 networks:
   lakehouse_network:
+    name: lakehouse-network
     driver: bridge
 
 services:
@@ -90,7 +91,7 @@ services:
     build:
       context: ./hive
       dockerfile: Dockerfile
-    container_name: lakehouse_hive_metastore
+    container_name: lakehouse-hive-metastore
     hostname: hive-metastore
     networks:
       - lakehouse_network
@@ -132,7 +133,7 @@ services:
     build:
       context: ./hive
       dockerfile: Dockerfile
-    container_name: lakehouse_hive_server2
+    container_name: lakehouse-hive-server2
     hostname: hive-server2
     networks:
       - lakehouse_network
@@ -409,4 +410,31 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    restart: unless-stopped
+
+  # ============================================
+  # Dremio - Data Lakehouse Query Engine
+  # ============================================
+  dremio:
+    build:
+      context: ./dremio
+      dockerfile: Dockerfile
+    container_name: lakehouse-dremio
+    hostname: dremio
+    networks:
+      - lakehouse_network
+    ports:
+      - "9047:9047"    # Dremio Web UI
+      - "31010:31010"  # Dremio client port (ODBC/JDBC)
+      - "45678:45678"  # Dremio coordinator port
+    volumes:
+      - ./dremio/data:/opt/dremio/data
+      - ./dremio/conf:/opt/dremio/conf
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      hive-metastore:
+        condition: service_healthy
     restart: unless-stopped
