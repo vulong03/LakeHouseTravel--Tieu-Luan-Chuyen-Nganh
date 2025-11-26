@@ -64,6 +64,7 @@ def create_dim_post_table(spark):
             StructField("author_sk", IntegerType(), True),  # FK to dim_author
             StructField("province_sk", IntegerType(), True),  # FK to dim_province
             StructField("crawl_date_sk", IntegerType(), True),  # FK to dim_date
+            StructField("post_date_sk", IntegerType(), True),  # FK to dim_date
             StructField("post_description", StringType(), True),
             StructField("keyword", StringType(), True),
             StructField("target_type", StringType(), True),
@@ -202,7 +203,7 @@ def join_with_dim_province(spark, df: DataFrame) -> DataFrame:
 
 
 def join_with_dim_date(spark, df: DataFrame) -> DataFrame:
-    """Join with dim_date to get crawl_date_sk"""
+    """Join with dim_date to get crawl_date_sk & post_date_sk"""
     print("\n🔗 Joining with dim_date...")
     
     # Load dim_date
@@ -218,21 +219,42 @@ def join_with_dim_date(spark, df: DataFrame) -> DataFrame:
             F.col("crawl_time").isNotNull(),
             F.to_date(F.col("crawl_time"))
         ).otherwise(F.lit(None))
+    ).withColumn(
+        "_post_date",
+        F.when(
+            F.col("post_date").isNotNull(),
+            F.to_date(F.col("post_date"))
+        ).otherwise(F.lit(None))
     )
     
-    # Left join with dim_date
+    crawl_alias = df_date.alias("crawl")
     df_joined = df.join(
-        df_date,
-        df["_crawl_date"] == df_date["full_date"],
+        crawl_alias,
+        df["_crawl_date"] == crawl_alias["full_date"],
         how="left"
     ).withColumnRenamed("date_sk", "crawl_date_sk") \
-     .drop("full_date", "_crawl_date")
+     .drop("full_date")
     
-    missing_count = df_joined.filter(
+    post_alias = df_date.alias("post")
+    df_joined = df_joined.join(
+        post_alias,
+        df_joined["_post_date"] == post_alias["full_date"],
+        how="left"
+    ).withColumnRenamed("date_sk", "post_date_sk") \
+     .drop("full_date") \
+     .drop("_crawl_date", "_post_date")
+    
+    missing_crawl = df_joined.filter(
         F.col("crawl_time").isNotNull() & F.col("crawl_date_sk").isNull()
     ).count()
-    if missing_count > 0:
-        print(f"⚠️  Warning: {missing_count} posts have crawl_time but no matching date in dim_date")
+    if missing_crawl > 0:
+        print(f"⚠️  Warning: {missing_crawl} posts have crawl_time but no matching date in dim_date")
+    
+    missing_post = df_joined.filter(
+        F.col("post_date").isNotNull() & F.col("post_date_sk").isNull()
+    ).count()
+    if missing_post > 0:
+        print(f"⚠️  Warning: {missing_post} posts have post_date but no matching date in dim_date")
     
     return df_joined
 
@@ -303,6 +325,7 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
         "author_sk",
         "province_sk",
         "crawl_date_sk",
+        "post_date_sk",
         F.when(
             F.col("post_description").isNotNull(),
             F.trim(F.col("post_description"))
@@ -330,6 +353,7 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
         "author_sk",
         "province_sk",
         "crawl_date_sk",
+        "post_date_sk",
         "post_description",
         "keyword",
         "target_type",
@@ -367,18 +391,20 @@ def validate_results(spark):
     total_count = df.count()
     with_author = df.filter(F.col("author_sk").isNotNull()).count()
     with_province = df.filter(F.col("province_sk").isNotNull()).count()
-    with_date = df.filter(F.col("crawl_date_sk").isNotNull()).count()
+    with_crawl_date = df.filter(F.col("crawl_date_sk").isNotNull()).count()
+    with_post_date = df.filter(F.col("post_date_sk").isNotNull()).count()
     with_description = df.filter(F.col("post_description").isNotNull()).count()
     
     print("\n📊 Validation Summary:")
     print(f"   Total posts: {total_count:,}")
     print(f"   Posts with author_sk: {with_author:,} ({with_author/total_count*100:.2f}%)")
     print(f"   Posts with province_sk: {with_province:,} ({with_province/total_count*100:.2f}%)")
-    print(f"   Posts with crawl_date_sk: {with_date:,} ({with_date/total_count*100:.2f}%)")
+    print(f"   Posts with crawl_date_sk: {with_crawl_date:,} ({with_crawl_date/total_count*100:.2f}%)")
+    print(f"   Posts with post_date_sk: {with_post_date:,} ({with_post_date/total_count*100:.2f}%)")
     print(f"   Posts with description: {with_description:,} ({with_description/total_count*100:.2f}%)")
     
     print("\n📝 Sample posts:")
-    df.select("post_sk", "post_url", "author_sk", "province_sk", "crawl_date_sk", "keyword") \
+    df.select("post_sk", "post_url", "author_sk", "province_sk", "crawl_date_sk", "post_date_sk", "keyword") \
         .orderBy("post_sk") \
         .show(20, truncate=False)
 

@@ -49,11 +49,17 @@ See: [dim_province/README.md](dim_province/README.md)
 **Status**: 📋 TODO  
 **Description**: Date dimension with fiscal periods, holidays, seasons
 
-### 3. fact_tiktok_engagement (Planned)
+### 3. fact_province_content_engagement
+**Status**: ✅ Implemented  
+**Path**: `gold/fact_province_content_engagement/`  
+**Description**: Aggregates TikTok engagement metrics by province and post date  
+**Run**: `.\scripts\run-gold-fact-province-content-engagement.ps1` *(create script if needed)*
+
+### 4. fact_tiktok_engagement (Planned)
 **Status**: 📋 TODO  
 **Description**: Daily aggregated TikTok metrics by province/keyword
 
-### 4. fact_hotel_bookings (Planned)
+### 5. fact_hotel_bookings (Planned)
 **Status**: 📋 TODO  
 **Description**: Hotel booking events with ratings and reviews
 
