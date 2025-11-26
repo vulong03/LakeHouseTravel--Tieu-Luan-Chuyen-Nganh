@@ -25,7 +25,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "`n[✓] Step 1 COMPLETED" -ForegroundColor Green
 
 # Step 2: Scratch -> Silver (deduplicate + append all records)
-Write-Host "`n================================================================================" -ForegroundColor Yellow
+Write-Host "================================================================================" -ForegroundColor Yellow
 Write-Host "STEP 2: Clean and Load Scratch to Silver" -ForegroundColor Yellow
 Write-Host "================================================================================" -ForegroundColor Yellow
 
