@@ -4,7 +4,7 @@ Gold Layer - Dimension Room Type Job
 Builds `gold.dim_room_type` from the `room_type` values in `silver.hotels_reviews`.
 
 Schema:
- - room_type_id: surrogate key (int)
+ - room_type_sk: surrogate key (int)
  - room_type_name: business key (string)
  - created_at, updated_at: timestamps
  - is_active: boolean
@@ -38,7 +38,7 @@ def create_gold_database(spark):
 
 def create_dim_room_type_table(spark):
     schema = StructType([
-        StructField("room_type_id", IntegerType(), False),
+        StructField("room_type_sk", IntegerType(), False),
         StructField("room_type_name", StringType(), False),
         StructField("created_at", TimestampType(), False),
         StructField("updated_at", TimestampType(), False),
@@ -81,11 +81,11 @@ def transform(df):
     window_spec = Window.orderBy("room_type_name")
 
     df = (
-        df.withColumn("room_type_id", F.row_number().over(window_spec))
+        df.withColumn("room_type_sk", F.row_number().over(window_spec))
         .withColumn("created_at", current_ts)
         .withColumn("updated_at", current_ts)
         .withColumn("is_active", F.lit(True))
-        .select("room_type_id", "room_type_name", "created_at", "updated_at", "is_active")
+        .select("room_type_sk", "room_type_name", "created_at", "updated_at", "is_active")
     )
 
     df.printSchema()
