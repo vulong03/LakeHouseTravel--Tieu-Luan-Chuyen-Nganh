@@ -13,11 +13,12 @@ def check_docker_health(**context) -> bool:
     Returns:
         True if all containers healthy, False otherwise
     """
+    # NOTE: Container names must match docker-compose.yml exactly
     required_containers = [
         'lakehouse_spark_master',
         'lakehouse_postgres',
         'lakehouse_minio',
-        'lakehouse_hive_metastore'
+        'lakehouse-hive-metastore',  # from docker-compose: container_name
     ]
     
     logging.info("Performing Docker health check...")
