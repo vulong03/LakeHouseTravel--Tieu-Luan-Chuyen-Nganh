@@ -79,6 +79,22 @@ def create_silver_table_if_needed(spark):
     print(f"✅ Silver table ready: {SILVER_TABLE}")
 
 
+def normalize_province(df):
+    """Chuẩn hoá tên tỉnh:
+    - 'Huế' -> 'Thừa Thiên Huế'
+    - 'Vũng Tàu' -> 'Bà Rịa Vũng Tàu'
+    Giữ nguyên các giá trị khác.
+    """
+    print("Chuẩn hoá giá trị cột 'province'...")
+    df = df.withColumn(
+        "province",
+        F.expr(
+            "CASE WHEN province = 'Huế' THEN 'Thừa Thiên Huế' WHEN province = 'Vũng Tàu' THEN 'Bà Rịa Vũng Tàu' ELSE province END"
+        )
+    )
+    return df
+
+
 def get_latest_scratch_run(spark):
     """Get the latest run folder from Scratch bucket"""
     try:
@@ -153,6 +169,10 @@ def clean_and_load_to_silver(spark):
     for col in string_columns:
         if col in df.columns:
             df = df.withColumn(col, F.trim(F.col(col)))
+
+    # Chuẩn hoá tên tỉnh sau khi trim whitespace
+    if 'province' in df.columns:
+        df = normalize_province(df)
     
     # 2. Parse rating_score to Double (remove non-numeric characters)
     print(f"   Converting rating_score to Double...")

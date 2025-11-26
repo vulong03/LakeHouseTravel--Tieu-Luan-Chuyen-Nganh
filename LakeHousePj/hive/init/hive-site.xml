@@ -87,6 +87,29 @@
         <value>thrift://hive-metastore:9083</value>
         <description>Metastore thrift URIs</description>
     </property>
+    <property>
+        <name>hive.metastore.sasl.enabled</name>
+        <value>false</value>
+        <description>Disable SASL for container-to-container access</description>
+    </property>
+    <property>
+        <name>hive.metastore.thrift.protocol</name>
+        <value>binary</value>
+        <description>Ensure thrift uses binary protocol</description>
+    </property>
+    <property>
+        <name>hive.metastore.thrift.bind.host</name>
+        <value>0.0.0.0</value>
+        <description>Bind thrift service to all interfaces</description>
+    </property>
+        <property>
+        <name>hive.metastore.thrift.protocol</name>
+        <value>binary</value>
+    </property>
+    <property>
+        <name>hive.metastore.thrift.bind.host</name>
+        <value>0.0.0.0</value>
+    </property>
 
     <property>
         <name>datanucleus.autoCreateSchema</name>

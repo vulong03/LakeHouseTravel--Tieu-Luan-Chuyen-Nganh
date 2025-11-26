@@ -84,6 +84,22 @@ def trim_whitespace(df):
     return df
 
 
+def normalize_province(df):
+    """Chuẩn hoá tên tỉnh:
+    - 'Huế' -> 'Thừa Thiên Huế'
+    - 'Vũng Tàu' -> 'Bà Rịa Vũng Tàu'
+    Giữ nguyên các giá trị khác.
+    """
+    print("Chuẩn hoá giá trị cột 'province'...")
+    df = df.withColumn(
+        "province",
+        F.expr(
+            "CASE WHEN province = 'Huế' THEN 'Thừa Thiên Huế' WHEN province = 'Vũng Tàu' THEN 'Bà Rịa Vũng Tàu' ELSE province END"
+        )
+    )
+    return df
+
+
 def validate_urls(df):
     """Loại bỏ bản ghi có URL không hợp lệ ở business key."""
     print("Đang kiểm tra và loại bỏ URL không hợp lệ...")
@@ -220,6 +236,8 @@ def clean_and_load(spark):
     df, nulls_removed = remove_nulls(df)
     df, dups_removed = remove_duplicates(df)
     df = trim_whitespace(df)
+    # Chuẩn hoá tên tỉnh sau khi trim whitespace
+    df = normalize_province(df)
     df, invalid_urls = validate_urls(df)
     
     cleaned_count = df.count()
