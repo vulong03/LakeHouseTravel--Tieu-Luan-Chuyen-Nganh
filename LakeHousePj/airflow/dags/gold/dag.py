@@ -113,12 +113,12 @@ with DAG(
     )
     
     # ============================================
-    # PHASE 1: Common Dimensions (Parallel)
+    # PHASE 1: Common Dimensions (Parallel then Sequential)
     # ============================================
     
     with TaskGroup(group_id='phase1_common_dims') as phase1_tg:
         
-        # dim_date
+        # Step 1: dim_date and dim_province (parallel - no dependencies)
         dim_date = BashOperator(
             task_id='dim_date',
             bash_command=build_spark_command(
@@ -127,7 +127,6 @@ with DAG(
             )
         )
         
-        # dim_province
         dim_province = BashOperator(
             task_id='dim_province',
             bash_command=build_spark_command(
@@ -136,7 +135,7 @@ with DAG(
             )
         )
         
-        # dim_destination
+        # Step 2: dim_destination (needs province FK, runs after province)
         dim_destination = BashOperator(
             task_id='dim_destination',
             bash_command=build_spark_command(
@@ -145,7 +144,8 @@ with DAG(
             )
         )
         
-        # All 3 run in parallel (no dependencies between them)
+        # Flow: date and province parallel → destination after province
+        dim_province >> dim_destination
     
     # Phase 1 complete barrier
     wait_phase1 = EmptyOperator(
