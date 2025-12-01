@@ -96,6 +96,9 @@ COUNTRY_TO_REGION  = {
     "Phần Lan": "Bắc Âu",
     "Đan Mạch": "Bắc Âu",
     "Iceland": "Bắc Âu",
+    "Lithuania": "Bắc Âu",
+    "Latvia": "Bắc Âu",
+    "Estonia": "Bắc Âu",
 
     # Tây Âu
     "Pháp": "Tây Âu",
@@ -231,6 +234,7 @@ COUNTRY_TO_REGION  = {
     "Madagascar": "Đông Phi",
     "Seychelles": "Đông Phi",
     "Mauritius": "Đông Phi",
+    "Comoros": "Đông Phi",
 
     # Trung Phi
     "Cộng hòa Trung Phi": "Trung Phi",
