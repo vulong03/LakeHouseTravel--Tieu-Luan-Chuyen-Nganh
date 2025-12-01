@@ -388,6 +388,15 @@ def clean_and_transform_posts(df):
     
     # 4. Convert metrics to INT (parse TikTok format: K, M, plain numbers)
     print(f"🔧 Converting metrics (String → Int, parsing TikTok format: K/M)...")
+    # likes: số lượng like của bài đăng
+    # comments_count: số lượng comment hiển thị trên TikTok
+    # saves: số lượt lưu (bookmark)
+    # shares: số lượt chia sẻ
+    # comments_level1: số comment cấp 1 (bình luận trực tiếp)
+    # comments_level2: số comment cấp 2 (trả lời comment cấp 1)
+    # comments_loaded: số comment tool crawl được
+    # comments_displayed_tiktok: số comment thực của video (ground truth)
+    # comments_difference: chênh lệch (comments_displayed_tiktok - comments_loaded)
     metric_columns = ['likes', 'comments_count', 'saves', 'shares',
                      'comments_level1', 'comments_level2', 'comments_loaded',
                      'comments_displayed_tiktok', 'comments_difference']
@@ -400,13 +409,26 @@ def clean_and_transform_posts(df):
     print(f"🔧 Updating ingestion_timestamp (TimestampType)...")
     df_cleaned = df_cleaned.withColumn("ingestion_timestamp", F.lit(datetime.now()))
     
+    # 6. Filter out posts with shares > 5M (invalid crawl data)
+    print(f"🔧 Filtering out posts with shares > 5M (invalid crawl data)...")
+    count_before = df_cleaned.count()
+    df_filtered = df_cleaned.filter(
+        F.col("shares").isNull() | (F.col("shares") <= 5000000)
+    )
+    count_after = df_filtered.count()
+    removed_count = count_before - count_after
+    if removed_count > 0:
+        removed_pct = (removed_count / count_before * 100) if count_before > 0 else 0
+        print(f"   Removed {removed_count:,} posts with shares > 5M ({removed_pct:.2f}%)")
+        print(f"   Valid posts remaining: {count_after:,}")
+    
     # Show sample (commented out to speed up processing)
     # print(f"\n📋 Sample cleaned posts data:")
-    # df_cleaned.select(
+    # df_filtered.select(
     #     "post_url", "author", "post_date", "likes", "comments_count"
     # ).show(5, truncate=False)
     
-    return df_cleaned
+    return df_filtered
 
 
 def clean_and_transform_comments(df):
@@ -516,43 +538,43 @@ def create_silver_posts_table(spark):
     
     schema = StructType([
         # Primary key
-        StructField("post_url", StringType(), False),
+        StructField("post_url", StringType(), False),  # Link bài viết TikTok (duy nhất)
         
         # Author info
-        StructField("author", StringType(), True),
-        StructField("author_tag", StringType(), True),
-        StructField("author_url", StringType(), True),
+        StructField("author", StringType(), True),  # Tên hiển thị của tác giả
+        StructField("author_tag", StringType(), True),  # Username/handle (@author)
+        StructField("author_url", StringType(), True),  # URL trang cá nhân tác giả
         
         # Post info
-        StructField("post_date", DateType(), True),  # ✅ DateType (cleaned)
-        StructField("post_description", StringType(), True),
+        StructField("post_date", DateType(), True),  # Ngày video được đăng
+        StructField("post_description", StringType(), True),  # Mô tả/caption bài đăng
         
         # Engagement metrics
-        StructField("likes", IntegerType(), True),  # ✅ IntegerType (cleaned)
-        StructField("comments_count", IntegerType(), True),
-        StructField("saves", IntegerType(), True),
-        StructField("shares", IntegerType(), True),
+        StructField("likes", IntegerType(), True),  # Số lượng like
+        StructField("comments_count", IntegerType(), True),  # Số lượng comment hiển thị
+        StructField("saves", IntegerType(), True),  # Số lượt lưu (bookmark)
+        StructField("shares", IntegerType(), True),  # Số lượt chia sẻ
         
         # Comment statistics
-        StructField("comments_level1", IntegerType(), True),
-        StructField("comments_level2", IntegerType(), True),
-        StructField("comments_loaded", IntegerType(), True),
-        StructField("comments_displayed_tiktok", IntegerType(), True),
-        StructField("comments_difference", IntegerType(), True),
+        StructField("comments_level1", IntegerType(), True),  # Comment cấp 1 (trực tiếp)
+        StructField("comments_level2", IntegerType(), True),  # Comment cấp 2 (reply)
+        StructField("comments_loaded", IntegerType(), True),  # Số comment tool crawl được
+        StructField("comments_displayed_tiktok", IntegerType(), True),  # Số comment thực (ground truth)
+        StructField("comments_difference", IntegerType(), True),  # Chênh lệch (displayed - loaded)
         
         # Crawl metadata
-        StructField("crawl_time", TimestampType(), True),  # ✅ TimestampType (cleaned)
-        StructField("crawl_date", DateType(), True),  # ✅ NEW: For partitioning
-        StructField("scrape_timestamp", StringType(), True),
+        StructField("crawl_time", TimestampType(), True),  # Timestamp lúc crawl
+        StructField("crawl_date", DateType(), True),  # Date extracted từ crawl_time (for partitioning)
+        StructField("scrape_timestamp", StringType(), True),  # Timestamp phiên scrape (ISO8601)
         
         # Checksum for deduplication
-        StructField("row_checksum", StringType(), False),
+        StructField("row_checksum", StringType(), False),  # Hash toàn bộ row (phát hiện thay đổi)
         
         # Ingestion metadata
-        StructField("ingestion_timestamp", TimestampType(), False),
-        StructField("source_file", StringType(), False),
-        StructField("source_file_checksum", StringType(), False),
-        StructField("source_file_size_bytes", LongType(), False)
+        StructField("ingestion_timestamp", TimestampType(), False),  # Thời điểm ghi vào Lakehouse
+        StructField("source_file", StringType(), False),  # Tên file gốc (truy vết)
+        StructField("source_file_checksum", StringType(), False),  # Checksum file nguồn (đảm bảo toàn vẹn)
+        StructField("source_file_size_bytes", LongType(), False)  # Kích thước file nguồn (bytes)
     ])
     
     create_iceberg_table_if_not_exists(
@@ -574,38 +596,38 @@ def create_silver_comments_table(spark):
     
     schema = StructType([
         # Link to post
-        StructField("post_url", StringType(), False),
+        StructField("post_url", StringType(), False),  # URL bài đăng (khóa ngoại tới bảng metadata)
         
         # Comment identifiers
-        StructField("stt", IntegerType(), True),  # ✅ IntegerType (cleaned)
+        StructField("stt", IntegerType(), True),  # Số thứ tự comment trong video (1 to n per video)
         
         # Commenter info
-        StructField("ten", StringType(), True),
-        StructField("tag_ten", StringType(), True),
-        StructField("url", StringType(), True),
+        StructField("ten", StringType(), True),  # Tên hiển thị người bình luận
+        StructField("tag_ten", StringType(), True),  # Username/handle TikTok người bình luận
+        StructField("url", StringType(), True),  # Link tới trang cá nhân người bình luận
         
         # Comment data
-        StructField("comment", StringType(), False),
-        StructField("comment_date", DateType(), True),  # ✅ DateType (cleaned from time)
-        StructField("likes", IntegerType(), True),  # ✅ IntegerType (cleaned)
+        StructField("comment", StringType(), False),  # Nội dung bình luận
+        StructField("comment_date", DateType(), True),  # Ngày bình luận được đăng
+        StructField("likes", IntegerType(), True),  # Số lượt thích của bình luận
         
         # Reply info
-        StructField("level_comment", StringType(), True),
-        StructField("replied_to_tag_name", StringType(), True),
-        StructField("number_of_replies", IntegerType(), True),  # ✅ IntegerType (cleaned)
+        StructField("level_comment", StringType(), True),  # Cấp độ: "Yes"=level2 (reply), "No"=level1 (trực tiếp)
+        StructField("replied_to_tag_name", StringType(), True),  # Username người được reply (chỉ với level2)
+        StructField("number_of_replies", IntegerType(), True),  # Số reply con (nếu level1)
         
         # Scrape metadata
-        StructField("scrape_timestamp", StringType(), True),
-        StructField("scrape_date", DateType(), True),  # ✅ NEW: For partitioning
+        StructField("scrape_timestamp", StringType(), True),  # Timestamp chuỗi lúc crawl comment
+        StructField("scrape_date", DateType(), True),  # Date extracted từ scrape_timestamp (for partitioning)
         
         # Checksum for deduplication
-        StructField("row_checksum", StringType(), False),
+        StructField("row_checksum", StringType(), False),  # Hash toàn bộ row (phát hiện thay đổi)
         
         # Ingestion metadata
-        StructField("ingestion_timestamp", TimestampType(), False),
-        StructField("source_file", StringType(), False),
-        StructField("source_file_checksum", StringType(), False),
-        StructField("source_file_size_bytes", LongType(), False)
+        StructField("ingestion_timestamp", TimestampType(), False),  # Thời điểm ghi vào Lakehouse
+        StructField("source_file", StringType(), False),  # Tên file gốc (truy vết)
+        StructField("source_file_checksum", StringType(), False),  # Checksum file nguồn (đảm bảo toàn vẹn)
+        StructField("source_file_size_bytes", LongType(), False)  # Kích thước file nguồn (bytes)
     ])
     
     create_iceberg_table_if_not_exists(

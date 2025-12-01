@@ -33,9 +33,7 @@ USER hive
 EXPOSE 9083
 EXPOSE 10000
 
-# Healthcheck
+# Healthcheck - check both Metastore (9083) and HiveServer2 (10000) ports
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
-    CMD nc -z localhost 9083 || exit 1
-HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
-    CMD nc -z localhost 10000 || exit 1
+    CMD nc -z localhost 9083 && nc -z localhost 10000 || exit 1
 # Default entrypoint is inherited from base image
