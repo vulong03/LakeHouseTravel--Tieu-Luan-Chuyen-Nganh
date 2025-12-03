@@ -1,11 +1,12 @@
 """
 Gold Layer Aggregation DAG
 ===========================
-3-Phase execution strategy based on dependencies:
+4-Phase execution strategy based on dependencies:
   Phase 1: Common dimensions (parallel)
   Phase 2a: TikTok pipeline (dim_author → dim_post → dim_comment)
   Phase 2b: Hotel pipeline (dim_room_type, dim_travel_type, dim_country → dim_hotel)
-  Phase 3: Fact tables (parallel after both pipelines complete)
+  Phase 3: Fact tables (sequential: content → hotel → comment_nlp)
+  Phase 4: ML Training (train province engagement model)
 
 Flow optimized for resource usage and dependency resolution.
 """
@@ -260,7 +261,37 @@ with DAG(
             )
         )
         
-        # Both facts run in parallel
+        # fact_comment_nlp_engagement (ML features)
+        fact_comment_nlp = BashOperator(
+            task_id='fact_comment_nlp_engagement',
+            bash_command=build_spark_command(
+                GOLD_JOBS['fact_comment_nlp_engagement']['job_path'],
+                resource_level=GOLD_JOBS['fact_comment_nlp_engagement']['resource_level']
+            )
+        )
+        
+        # Sequential: content → hotel → comment_nlp (avoid resource exhaustion)
+        fact_content >> fact_hotel >> fact_comment_nlp
+    
+    # Phase 3 complete barrier
+    wait_phase3 = EmptyOperator(
+        task_id='wait_phase3_complete'
+    )
+    
+    # ============================================
+    # PHASE 4: ML Training
+    # ============================================
+    
+    with TaskGroup(group_id='phase4_ml_training') as phase4_tg:
+        
+        # Train province engagement prediction model
+        train_model = BashOperator(
+            task_id='train_province_model',
+            bash_command=build_spark_command(
+                GOLD_JOBS['train_province_model']['job_path'],
+                resource_level=GOLD_JOBS['train_province_model']['resource_level']
+            )
+        )
     
     # ============================================
     # Completion Task
@@ -273,7 +304,7 @@ with DAG(
     )
     
     # ============================================
-    # DAG Flow (3-Phase Strategy)
+    # DAG Flow (4-Phase Strategy)
     # ============================================
     
     # Pre-flight
@@ -286,8 +317,11 @@ with DAG(
     wait_phase1 >> tiktok_pipeline_tg >> wait_phase2
     wait_phase1 >> hotel_pipeline_tg >> wait_phase2
     
-    # Phase 3: Fact tables (parallel, after both pipelines)
-    wait_phase2 >> phase3_tg
+    # Phase 3: Fact tables (sequential, after both pipelines)
+    wait_phase2 >> phase3_tg >> wait_phase3
+    
+    # Phase 4: ML Training (after all facts complete)
+    wait_phase3 >> phase4_tg
     
     # Complete
-    phase3_tg >> complete
+    phase4_tg >> complete

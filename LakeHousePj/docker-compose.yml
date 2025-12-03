@@ -439,3 +439,62 @@ services:
       hive-metastore:
         condition: service_healthy
     restart: unless-stopped
+
+  # ============================================
+  # MLflow - ML Experiment Tracking
+  # ============================================
+  mlflow:
+    build:
+      context: ./ml/mlflow
+      dockerfile: Dockerfile
+    container_name: lakehouse_mlflow
+    hostname: mlflow
+    networks:
+      - lakehouse_network
+    ports:
+      - "5001:5000"  # MLflow UI
+    environment:
+      MLFLOW_BACKEND_STORE_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/mlflow_db
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: s3://gold/mlflow/artifacts
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+    volumes:
+      - ./ml/mlflow/data:/mlflow/data
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/mlflow_db
+      --default-artifact-root s3://gold/mlflow/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ============================================
+  # Gradio - Recommendation Web App
+  # ============================================
+  gradio:
+    build:
+      context: ./gradio
+      dockerfile: Dockerfile
+    container_name: lakehouse_gradio
+    hostname: gradio
+    networks:
+      - lakehouse_network
+    ports:
+      - "7860:7860"  # Gradio UI
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    volumes:
+      - ./gradio:/app
+      - ./spark/jobs:/opt/spark/jobs  # Access to utils
+    depends_on:
+      - mlflow
+      - spark-master
+      - hive-metastore
+      - minio
+    restart: unless-stopped

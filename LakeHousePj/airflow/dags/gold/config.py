@@ -4,7 +4,8 @@ Based on Silver layer pattern with user-suggested flow:
   Phase 1: Common dimensions (parallel)
   Phase 2a: TikTok pipeline (sequential) 
   Phase 2b: Hotel pipeline (sequential)
-  Phase 3: Fact tables (parallel)
+  Phase 3: Fact tables (sequential)
+  Phase 4: ML Training
 """
 
 from datetime import datetime, timedelta
@@ -14,8 +15,8 @@ from datetime import datetime, timedelta
 # ============================================
 
 DAG_ID = 'gold_layer_aggregation'
-DESCRIPTION = 'Gold layer: Common dims → TikTok/Hotel pipelines → Facts'
-TAGS = ['gold', 'dimension', 'fact', 'analytics', '3-phase']
+DESCRIPTION = 'Gold layer: Common dims → TikTok/Hotel pipelines → Facts → ML Training'
+TAGS = ['gold', 'dimension', 'fact', 'analytics', 'ml', '4-phase']
 
 # ============================================
 # SCHEDULE
@@ -156,9 +157,10 @@ GOLD_JOBS = {
     },
     
     # ===================================
-    # PHASE 3: Fact Tables (PARALLEL - 2 jobs)
+    # PHASE 3: Fact Tables (SEQUENTIAL - 3 jobs)
     # ===================================
     # Run after both TikTok and Hotel pipelines complete
+    # Sequential to avoid resource exhaustion
     
     'fact_province_content_engagement': {
         'job_path': 'fact_province_content_engagement/fact_province_content_engagement_job.py',
@@ -172,8 +174,28 @@ GOLD_JOBS = {
         'job_path': 'fact_hotel_review_daily/fact_hotel_review_daily_job.py',
         'phase': 3,
         'resource_level': 'heavy',
-        'depends_on': ['dim_hotel', 'dim_travel_type', 'dim_room_type', 'dim_country', 'dim_date'],
+        'depends_on': ['dim_hotel', 'dim_travel_type', 'dim_room_type', 'dim_country', 'dim_date', 'fact_province_content_engagement'],  # Sequential: wait for first fact
         'description': 'Daily hotel review metrics with all dimension FKs'
+    },
+    
+    'fact_comment_nlp_engagement': {
+        'job_path': 'fact_comment_nlp_engagement/fact_comment_nlp_engagement_job.py',
+        'phase': 3,
+        'resource_level': 'heavy',  # NLP extraction is CPU intensive
+        'depends_on': ['dim_comment', 'dim_post', 'fact_hotel_review_daily'],  # Sequential: run last to avoid resource conflict
+        'description': 'ML feature engineering: comment NLP + engagement metrics'
+    },
+    
+    # ===================================
+    # PHASE 4: ML Training (After all facts complete)
+    # ===================================
+    
+    'train_province_model': {
+        'job_path': 'TrainingModel/train_province_model.py',
+        'phase': 4,
+        'resource_level': 'heavy',  # ML training is resource intensive
+        'depends_on': ['fact_province_content_engagement', 'fact_comment_nlp_engagement'],
+        'description': 'Train province engagement prediction model using MLflow'
     },
 }
 

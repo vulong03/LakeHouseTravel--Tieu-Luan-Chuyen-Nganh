@@ -1,5 +1,5 @@
 -- PostgreSQL script to build a rich dim_date table
--- Date range: 2015-01-01 to 2025-12-31
+-- Date range: 2000-01-01 to 2025-12-31
 
 -- Optional: chọn database/schema
 -- CREATE SCHEMA IF NOT EXISTS tourism_dw;
@@ -79,7 +79,7 @@ SELECT
   (EXTRACT(MONTH FROM d) = 1  AND EXTRACT(DAY FROM d) = 1)               AS is_year_start,
   (EXTRACT(MONTH FROM d) = 12 AND EXTRACT(DAY FROM d) = 31)              AS is_year_end
 FROM generate_series(
-    DATE '2015-01-01',
+    DATE '2000-01-01',
     DATE '2025-12-31',
     INTERVAL '1 day'
 ) AS gs(d)

@@ -345,13 +345,13 @@ def parse_comment_time(df):
         .drop("time", "_parts", "_day", "_month", "_year", "_absolute_date",
               "_relative_num", "_relative_unit", "_relative_date", "_scrape_date")
     
-    # Validate parsing results
-    total_count = df.count()
-    parsed_count = df_with_date.filter(F.col("comment_date").isNotNull()).count()
+    # # Validate parsing results
+    # total_count = df.count()
+    # parsed_count = df_with_date.filter(F.col("comment_date").isNotNull()).count()
     
-    print(f"   Total comments: {total_count:,}")
-    print(f"   Successfully parsed: {parsed_count:,}")
-    print(f"   Parse rate: {(parsed_count / total_count * 100):.2f}%")
+    # print(f"   Total comments: {total_count:,}")
+    # print(f"   Successfully parsed: {parsed_count:,}")
+    # print(f"   Parse rate: {(parsed_count / total_count * 100):.2f}%")
     
     return df_with_date
 
@@ -822,10 +822,23 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
                 print(f"   🧹 Cleaning and transforming comments...")
                 df_comments_cleaned = clean_and_transform_comments(df_comments_raw)
                 
+                # Validate post_url exists in Silver Posts (prevent orphan comments)
+                print(f"   🔍 Validating post_url exists in Silver Posts...")
+                df_valid_posts = spark.table(SILVER_TABLE_POSTS).select("post_url").distinct()
+                df_comments_validated = df_comments_cleaned.join(
+                    df_valid_posts,
+                    on="post_url",
+                    how="inner"  # Only keep comments with existing posts
+                )
+                
+                orphan_count = df_comments_cleaned.count() - df_comments_validated.count()
+                if orphan_count > 0:
+                    print(f"   ⚠️  Filtered {orphan_count:,} orphan comments (post not in Silver)")
+                
                 # Calculate row checksum
                 print(f"   🔐 Calculating row checksum...")
                 df_comments_final = calculate_row_checksum(
-                    df_comments_cleaned,
+                    df_comments_validated,
                     BUSINESS_COLUMNS_COMMENTS
                 )
                 
@@ -869,10 +882,10 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
                             posts_for_file = 1  # Each post_url = 1 post record
                     
                     # Count comments for this file
-                    # Check if post_url was PROCESSED (in cleaned data)
+                    # Check if post_url was PROCESSED AND VALIDATED (in validated data)
                     comments_for_file = 0
-                    if df_comments_cleaned is not None:
-                        comments_for_file = df_comments_cleaned \
+                    if df_comments_validated is not None:
+                        comments_for_file = df_comments_validated \
                             .filter(F.col("post_url") == post_url) \
                             .count()
                     

@@ -206,7 +206,7 @@ def cleanup_gold_minio_bucket(spark):
     print(f"\n{'=' * 80}")
     print(f"3.5️⃣  FORCE CLEANING GOLD MINIO BUCKET")
     print(f"{'=' * 80}")
-    print(f"\n   ⚠️  Manually deleting ALL files in s3a://gold/lakehouse/...")
+    print(f"\n   ⚠️  Deleting ALL files in s3a://gold/ (lakehouse + ml_training)...")
     
     try:
         hadoop_conf = spark._jsc.hadoopConfiguration()
@@ -215,34 +215,44 @@ def cleanup_gold_minio_bucket(spark):
             hadoop_conf
         )
         
-        # Path to Gold lakehouse folder
-        base_path = "s3a://gold/lakehouse"
-        hadoop_path = spark._jvm.org.apache.hadoop.fs.Path(base_path)
+        # Paths to delete
+        paths_to_delete = [
+            "s3a://gold/lakehouse",
+            "s3a://gold/ml_training"
+        ]
         
-        if fs.exists(hadoop_path):
-            # List all table folders
-            status_list = fs.listStatus(hadoop_path)
-            folders = []
+        total_folders_deleted = 0
+        
+        for base_path in paths_to_delete:
+            hadoop_path = spark._jvm.org.apache.hadoop.fs.Path(base_path)
             
-            for status in status_list:
-                path_str = str(status.getPath())
-                folder_name = path_str.split("/")[-1]
-                folders.append(folder_name)
-            
-            print(f"\n   Found {len(folders)} table folders to delete:")
-            for folder in folders:
-                print(f"      • {folder}")
-            
-            if len(folders) > 0:
-                # Delete entire lakehouse folder (all tables)
-                print(f"\n   ⏳ Deleting ALL table folders and data files...")
-                fs.delete(hadoop_path, True)  # True = recursive
-                print(f"   ✅ FORCE DELETED: {base_path}")
-                print(f"   ✅ Removed {len(folders)} table folders with ALL Parquet/metadata files")
+            if fs.exists(hadoop_path):
+                # List all folders/files
+                status_list = fs.listStatus(hadoop_path)
+                folders = []
+                
+                for status in status_list:
+                    path_str = str(status.getPath())
+                    folder_name = path_str.split("/")[-1]
+                    folders.append(folder_name)
+                
+                print(f"\n   Found {len(folders)} items in {base_path}:")
+                for folder in folders:
+                    print(f"      • {folder}")
+                
+                if len(folders) > 0:
+                    # Delete entire folder recursively
+                    print(f"\n   ⏳ Deleting {base_path}...")
+                    fs.delete(hadoop_path, True)  # True = recursive
+                    print(f"   ✅ FORCE DELETED: {base_path}")
+                    total_folders_deleted += len(folders)
+                else:
+                    print(f"\n   ℹ️  No items to delete in {base_path}")
             else:
-                print(f"\n   ℹ️  No folders to delete")
-        else:
-            print(f"\n   ℹ️  Path does not exist: {base_path}")
+                print(f"\n   ℹ️  Path does not exist: {base_path}")
+        
+        if total_folders_deleted > 0:
+            print(f"\n   ✅ Total: Removed {total_folders_deleted} folders/files")
             
     except Exception as e:
         print(f"   ⚠️  Warning: Could not cleanup MinIO: {e}")
