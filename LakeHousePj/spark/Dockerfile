@@ -31,8 +31,13 @@ RUN curl -L https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/${HADOOP
 RUN curl -L https://repo1.maven.org/maven2/org/postgresql/postgresql/${POSTGRESQL_JDBC_VERSION}/postgresql-${POSTGRESQL_JDBC_VERSION}.jar \
     -o /opt/spark/jars/postgresql-${POSTGRESQL_JDBC_VERSION}.jar
 
-# Install Python dependencies (psycopg2 for direct PostgreSQL access)
-RUN pip install --no-cache-dir psycopg2-binary
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    psycopg2-binary \
+    pandas \
+    pyarrow \
+    underthesea \
+    emoji
 
 # Install MinIO client for UTF-8 file uploads
 RUN wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O /usr/local/bin/mc && \

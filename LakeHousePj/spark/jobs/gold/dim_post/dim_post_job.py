@@ -113,17 +113,14 @@ def join_with_videos_table(spark, df_posts: DataFrame) -> DataFrame:
         "read_status"
     ).filter(F.col("read_status") == 1)  # Only get links with read_status = 1
     
-    # Join on post_url = url
+    # INNER JOIN: Only keep posts that exist in tiktok_videos
     df_joined = df_posts.join(
         df_videos,
         df_posts["post_url"] == df_videos["url"],
-        how="left"
+        how="inner"
     ).drop("url")
     
-    # Check for missing joins (shouldn't happen based on user's guarantee)
-    missing_count = df_joined.filter(F.col("keyword").isNull()).count()
-    if missing_count > 0:
-        print(f"⚠️  Warning: {missing_count} posts have no matching video record")
+    print(f"   ✅ Kept {df_joined.count():,} posts that exist in tiktok_videos")
     
     return df_joined
 
