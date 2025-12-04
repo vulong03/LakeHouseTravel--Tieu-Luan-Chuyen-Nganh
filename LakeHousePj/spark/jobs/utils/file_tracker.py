@@ -320,7 +320,7 @@ def log_ingestion_to_postgres(
     
     try:
         # DEBUG: Show connection attempt
-        print(f"🔌 Connecting to PostgreSQL: {postgres_conn_params.get('host')}:{postgres_conn_params.get('port')}/{postgres_conn_params.get('database')}")
+        print(f"Connecting to PostgreSQL: {postgres_conn_params.get('host')}:{postgres_conn_params.get('port')}/{postgres_conn_params.get('database')}")
         
         conn = psycopg2.connect(**postgres_conn_params)
         cursor = conn.cursor()
@@ -362,7 +362,7 @@ def log_ingestion_to_postgres(
         ))
         
         conn.commit()
-        print(f"💾 PostgreSQL commit successful")
+        print(f"PostgreSQL commit successful")
         
         cursor.close()
         conn.close()

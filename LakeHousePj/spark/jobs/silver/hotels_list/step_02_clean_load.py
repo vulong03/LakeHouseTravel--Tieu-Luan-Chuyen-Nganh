@@ -55,7 +55,7 @@ def remove_nulls(df):
     
     if removed > 0 and before_count > 0:
         pct = removed / before_count * 100
-        print(f"✅ Đã loại bỏ {removed:,} bản ghi NULL ({pct:.2f}%)")
+        print(f"Đã loại bỏ {removed:,} bản ghi NULL ({pct:.2f}%)")
     return df, removed
 
 
@@ -71,7 +71,7 @@ def remove_duplicates(df):
     
     if removed > 0 and before_count > 0:
         pct = removed / before_count * 100
-        print(f"✅ Đã loại bỏ {removed:,} bản ghi trùng ({pct:.2f}%)")
+        print(f"Đã loại bỏ {removed:,} bản ghi trùng ({pct:.2f}%)")
     return df, removed
 
 
@@ -114,7 +114,7 @@ def validate_urls(df):
     removed = before_count - after_count
     
     if removed > 0:
-        print(f"✅ Đã loại bỏ {removed:,} URL không hợp lệ")
+        print(f"Đã loại bỏ {removed:,} URL không hợp lệ")
     return df, removed
 
 
@@ -222,7 +222,7 @@ def clean_and_load(spark):
     print("\nBước 2: Đọc dữ liệu đã transform từ 01_transformed/...")
     df = spark.read.parquet(transformed_path)
     original_count = df.count()
-    print(f"✅ Đã đọc {original_count:,} bản ghi từ Scratch")
+    print(f"Đã đọc {original_count:,} bản ghi từ Scratch")
     
     # Lấy thông tin file nguồn để tracking
     source_file = df.select("source_file").first()[0]
@@ -245,9 +245,9 @@ def clean_and_load(spark):
     pct_total = (total_removed / original_count * 100) if original_count > 0 else 0.0
     
     print("\nTóm tắt bước làm sạch:")
-    print(f"   Số bản ghi ban đầu: {original_count:,}")
-    print(f"   Số bản ghi sau khi làm sạch: {cleaned_count:,}")
-    print(f"   Đã loại bỏ: {total_removed:,} bản ghi ({pct_total:.2f}%)")
+    print(f"Số bản ghi ban đầu: {original_count:,}")
+    print(f"Số bản ghi sau khi làm sạch: {cleaned_count:,}")
+    print(f"Đã loại bỏ: {total_removed:,} bản ghi ({pct_total:.2f}%)")
     
     # 4. Phân bố theo tỉnh sau khi làm sạch
     print("\nPhân bố theo tỉnh (sau khi làm sạch):")
@@ -269,7 +269,7 @@ def clean_and_load(spark):
     # Tính row_checksum cho phát hiện thay đổi
     df = calculate_row_checksum(df, BUSINESS_COLUMNS)
     
-    print(f"✅ Đã thêm ingestion_timestamp và tính row_checksum cho {cleaned_count:,} bản ghi")
+    print(f"Đã thêm ingestion_timestamp và tính row_checksum cho {cleaned_count:,} bản ghi")
     
     # 6. MERGE vào Silver table (UPSERT mode)
     print("\nBước 5: MERGE vào Silver Iceberg table (chế độ UPSERT)...")
@@ -321,20 +321,20 @@ def clean_and_load(spark):
         file_size_bytes=source_size_bytes
     )
     
-    print("✅ Đã ghi log vào tracking database")
+    print("Đã ghi log vào tracking database")
     
     # (Tuỳ chọn) Bước 6: Dọn dẹp thư mục tạm nếu cần – hiện tại chưa triển khai để tránh thay đổi logic pipeline
     
     # 8. Tóm tắt cuối cùng
     print(f"\n{'=' * 80}")
-    print("✅ NHIỆM VỤ 2 HOÀN TẤT THÀNH CÔNG")
+    print("NHIỆM VỤ 2 HOÀN TẤT THÀNH CÔNG")
     print(f"{'=' * 80}")
-    print(f"   Tổng bản ghi xử lý:   {original_count:,}")
-    print(f"   Sau khi làm sạch:     {cleaned_count:,}")
-    print(f"   Bản ghi thay đổi:     {stats['inserted'] + stats['updated']:,}")
-    print(f"      - Inserted:        {stats['inserted']:,}")
-    print(f"      - Updated:         {stats['updated']:,}")
-    print(f"      - Skipped:         {stats['skipped']:,}")
+    print(f"Tổng bản ghi xử lý:   {original_count:,}")
+    print(f"Sau khi làm sạch:     {cleaned_count:,}")
+    print(f"Bản ghi thay đổi:     {stats['inserted'] + stats['updated']:,}")
+    print(f"Inserted:        {stats['inserted']:,}")
+    print(f"Updated:         {stats['updated']:,}")
+    print(f"Skipped:         {stats['skipped']:,}")
     print(f"{'=' * 80}")
     
     return stats
@@ -360,17 +360,17 @@ def main():
         # Tạo Silver table nếu chưa tồn tại
         print("Đang tạo Silver table (nếu chưa tồn tại)...")
         create_silver_table(spark)
-        print(f"✅ Silver table sẵn sàng: {SILVER_TABLE}\n")
+        print(f"Silver table sẵn sàng: {SILVER_TABLE}\n")
         
         # Chạy luồng Clean & Load
         stats = clean_and_load(spark)
         
-        print("\n✅ PIPELINE HOÀN TẤT")
-        print(f"   Tổng số bản ghi thay đổi (insert + update): {stats['inserted'] + stats['updated']:,}")
+        print("\nPIPELINE HOÀN TẤT")
+        print(f"Tổng số bản ghi thay đổi (insert + update): {stats['inserted'] + stats['updated']:,}")
         
     except Exception as e:
         print(f"\n{'=' * 80}")
-        print("❌ NHIỆM VỤ 2 THẤT BẠI")
+        print("NHIỆM VỤ 2 THẤT BẠI")
         print(f"{'=' * 80}")
         print(f"Lỗi: {e}\n")
         import traceback
@@ -379,7 +379,6 @@ def main():
     
     finally:
         spark.stop()
-
 
 if __name__ == "__main__":
     main()
