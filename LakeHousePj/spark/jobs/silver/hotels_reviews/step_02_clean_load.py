@@ -73,16 +73,7 @@ def parse_review_date(df):
         .drop("review_date", "_day", "_month", "_year") \
         .withColumnRenamed("review_date_parsed", "review_date")
 
-    total_count = df.count()
-    null_before = df.filter(F.col("review_date").isNull()).count()
-    parsed_count = df_with_date.filter(F.col("review_date").isNotNull()).count()
-
-    print(f"Tổng số bản ghi: {total_count:,}")
-    print(f"NULL trước khi parse: {null_before:,}")
-    print(f"Parse thành công: {parsed_count:,}")
-    if total_count - null_before > 0:
-        print(f"Tỷ lệ parse: {(parsed_count / (total_count - null_before) * 100):.2f}%")
-
+    print("Parse review_date hoàn tất")
     return df_with_date
 
 
@@ -92,11 +83,29 @@ def clean_and_transform(df):
     """
     print("\nĐang áp dụng bước làm sạch dữ liệu và transform...")
 
-    # 1. Parse review_date
-    df_cleaned = parse_review_date(df)
+    # 1. Filter NULL records FIRST (before any transformation)
+    print("\nĐang loại các bản ghi có NULL ở `review_date`, `traveler_type`, `review_score`, `room_type`...")
+    before_null_filter = df.count()
+    df_cleaned = df.filter(
+        (F.col("review_date").isNotNull()) &
+        (F.col("traveler_type").isNotNull()) &
+        (F.col("review_score").isNotNull()) &
+        (F.col("room_type").isNotNull()) &
+        (F.col("review_title").isNotNull()) &
+        (F.col("reviewer_name").isNotNull()) &
+        (F.col("reviewer_country").isNotNull())
+    )
+    after_null_filter = df_cleaned.count()
+    removed_nulls = before_null_filter - after_null_filter
+    print(f"Số bản ghi trước khi filter NULL: {before_null_filter:,}")
+    print(f"Số bản ghi sau khi filter NULL:  {after_null_filter:,}")
+    print(f"Số bản ghi bị loại (NULL):       {removed_nulls:,}")
 
-    # 2. Convert review_score
-    print("Đang convert review_score (String → Double)...")
+    # 2. Parse review_date
+    df_cleaned = parse_review_date(df_cleaned)
+
+    # 3. Convert review_score
+    print("\nĐang convert review_score (String → Double)...")
     df_cleaned = df_cleaned.withColumn(
         "review_score",
         F.when(
@@ -105,7 +114,7 @@ def clean_and_transform(df):
         ).otherwise(F.lit(None).cast(DoubleType()))
     )
 
-    # 3. Chuẩn hoá stay_date
+    # 4. Chuẩn hoá stay_date
     print("\nĐang chuẩn hoá stay_date: lowercase và bỏ 'tháng' trước khi extract month/year...")
     df_cleaned = df_cleaned.withColumn("_stay_raw", F.lower(F.coalesce(F.col("stay_date"), F.lit(""))))
     df_cleaned = df_cleaned.withColumn("_stay_raw", F.regexp_replace(F.col("_stay_raw"), r"tháng[:\s]*", ""))
@@ -120,23 +129,11 @@ def clean_and_transform(df):
         ).otherwise(F.lit(None).cast(DateType()))
     )
 
-    try:
-        total_stay = df_cleaned.count()
-        parsed_stay = df_cleaned.filter((F.col("_stay_month") != "") & (F.col("_stay_year") != "")).count()
-        print(f"Tổng bản ghi stay_date: {total_stay:,}, parse được MM/YYYY: {parsed_stay:,}")
-    except Exception:
-        pass
-
     df_cleaned = df_cleaned.drop("_stay_raw", "_stay_month", "_stay_year")
+    print("Parse stay_date hoàn tất")
 
-    # 4. Clean mạnh review_positive / review_negative / review_title
-    print("\nĐang làm sạch text columns `review_positive`, `review_negative`, `review_title` (lowercase, loại ký tự lạ)...")
-    try:
-        before_pos_null = df_cleaned.filter(F.col("review_positive").isNull()).count()
-        before_neg_null = df_cleaned.filter(F.col("review_negative").isNull()).count()
-        before_title_null = df_cleaned.filter(F.col("review_title").isNull()).count()
-    except Exception:
-        before_pos_null = before_neg_null = before_title_null = None
+    # 5. Clean mạnh review_positive / review_negative / review_title
+    print("\nĐang làm sạch text columns (lowercase, remove HTML/URLs/special chars)...")
 
     def clean_text(col_name: str):
         return F.when(
@@ -165,43 +162,12 @@ def clean_and_transform(df):
         .withColumn("review_negative", F.regexp_replace(F.col("review_negative"), r"\s+", " ")) \
         .withColumn("review_title", F.regexp_replace(F.col("review_title"), r"\s+", " "))
 
-    try:
-        after_pos_null = df_cleaned.filter(F.col("review_positive").isNull()).count()
-        after_neg_null = df_cleaned.filter(F.col("review_negative").isNull()).count()
-        after_title_null = df_cleaned.filter(F.col("review_title").isNull()).count()
-        if before_pos_null is not None:
-            print(f"review_positive NULL trước: {before_pos_null}, sau: {after_pos_null}")
-            print(f"review_negative NULL trước: {before_neg_null}, sau: {after_neg_null}")
-            print(f"review_title NULL trước: {before_title_null}, sau: {after_title_null}")
-    except Exception:
-        pass
+    print("Text cleaning hoàn tất")
 
-    # 7. Loại bản ghi có NULL ở các cột business quan trọng
-    print("\nĐang loại các bản ghi có NULL ở `review_date`, `traveler_type`, `review_score`, `room_type`...")
-    before_null_filter = df_cleaned.count()
-    df_cleaned = df_cleaned.filter(
-        (F.col("review_date").isNotNull()) &
-        (F.col("traveler_type").isNotNull()) &
-        (F.col("review_score").isNotNull()) &
-        (F.col("room_type").isNotNull()) &
-        (F.col("review_title").isNotNull()) &
-        (F.col("reviewer_name").isNotNull()) &
-        (F.col("reviewer_country").isNotNull())
-    )
-    after_null_filter = df_cleaned.count()
-    removed_nulls = before_null_filter - after_null_filter
-    print(f"Số bản ghi trước khi filter NULL: {before_null_filter:,}")
-    print(f"Số bản ghi sau khi filter NULL:  {after_null_filter:,}")
-    print(f"Số bản ghi bị loại (NULL):       {removed_nulls:,}")
-
-    # 8. Keep cleaned room_type as-is (no grouping)
-    print("\nĐang giữ nguyên `room_type` đã được làm sạch (không gom nhóm)...")
-
-    # 9. Thêm ingestion_timestamp
-    print("Đang thêm cột ingestion_timestamp (TimestampType)...")
+    # 6. Thêm ingestion_timestamp
     df_cleaned = df_cleaned.withColumn("ingestion_timestamp", F.lit(datetime.now()))
 
-    print("\nSample dữ liệu sau khi làm sạch:")
+    print("\nClean & Transform hoàn tất. Sample dữ liệu:")
     df_cleaned.select(
         "hotel_name", "review_date", "review_score", "traveler_type", "room_type"
     ).show(5, truncate=False)
