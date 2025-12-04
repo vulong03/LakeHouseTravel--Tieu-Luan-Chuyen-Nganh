@@ -16,6 +16,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 import mlflow
 import os
+import time
 from io import BytesIO
 from minio import Minio
 from minio.error import S3Error
@@ -34,6 +35,17 @@ FORECAST_PREFIX = "ml_forecast/"
 MLFLOW_TRACKING_URI = "postgresql://lakehouse_user:lakehouse_pass@postgres:5432/mlflow_db"
 MODEL_NAME = "province_hotness_forecaster"
 
+# Cache configuration
+CACHE_DURATION = 300  # 5 minutes
+_forecast_cache = {"data": None, "timestamp": 0}
+
+# Debug mode
+DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+
+def debug_print(*args, **kwargs):
+    if DEBUG:
+        print(*args, **kwargs)
+
 # Region mapping
 REGIONS = {
     "Tất cả": None,
@@ -49,7 +61,13 @@ REGIONS = {
 
 
 def load_forecast_data():
-    """Load forecast data from MinIO Parquet files (latest run folder)"""
+    """Load forecast data from MinIO Parquet files (latest run folder) with caching"""
+    # Check cache
+    now = time.time()
+    if _forecast_cache["data"] is not None and (now - _forecast_cache["timestamp"]) < CACHE_DURATION:
+        print("📦 Using cached data")
+        return _forecast_cache["data"], None
+    
     try:
         # List all objects in forecast directory
         objects = MINIO_CLIENT.list_objects(BUCKET_NAME, prefix=FORECAST_PREFIX, recursive=True)
@@ -61,8 +79,9 @@ def load_forecast_data():
                 parquet_files.append(obj.object_name)
         
         if not parquet_files:
-            print("⚠️ No forecast files found!")
-            return pd.DataFrame()
+            error_msg = "⚠️ Không tìm thấy file dự báo trong MinIO!"
+            print(error_msg)
+            return pd.DataFrame(), error_msg
         
         print(f"📂 Found {len(parquet_files)} parquet files")
         
@@ -76,8 +95,9 @@ def load_forecast_data():
                 run_folders.add(run_folder)
         
         if not run_folders:
-            print("⚠️ No valid run folders found!")
-            return pd.DataFrame()
+            error_msg = "⚠️ Không tìm thấy folder dự báo hợp lệ!"
+            print(error_msg)
+            return pd.DataFrame(), error_msg
         
         # Sort folders by timestamp (descending) and get latest
         latest_run_folder = sorted(run_folders, reverse=True)[0]
@@ -100,8 +120,9 @@ def load_forecast_data():
                 continue
         
         if not df_list:
-            print("⚠️ No data loaded from parquet files!")
-            return pd.DataFrame()
+            error_msg = "⚠️ Không thể đọc dữ liệu từ parquet files!"
+            print(error_msg)
+            return pd.DataFrame(), error_msg
         
         # Concatenate all dataframes
         df = pd.concat(df_list, ignore_index=True)
@@ -111,16 +132,22 @@ def load_forecast_data():
         print(f"   - Unique regions: {df['region'].nunique()}")
         print(f"   - Date range: {df['forecast_date'].min()} to {df['forecast_date'].max()}")
         
-        return df
+        # Update cache
+        _forecast_cache["data"] = df
+        _forecast_cache["timestamp"] = now
+        
+        return df, None
         
     except S3Error as e:
-        print(f"❌ MinIO error: {str(e)}")
-        return pd.DataFrame()
+        error_msg = f"❌ Lỗi kết nối MinIO: {str(e)}"
+        print(error_msg)
+        return pd.DataFrame(), error_msg
     except Exception as e:
-        print(f"❌ Error loading forecast data: {str(e)}")
+        error_msg = f"❌ Lỗi load dữ liệu: {str(e)}"
+        print(error_msg)
         import traceback
         traceback.print_exc()
-        return pd.DataFrame()
+        return pd.DataFrame(), error_msg
     
 def get_model_info():
     """Get latest model information from MLflow"""
@@ -150,24 +177,70 @@ def get_model_info():
 def recommend_provinces(start_month, end_month, region, top_n):
     """
     Recommend top provinces based on forecasted hotness
-    
-    Args:
-        start_month: Starting horizon month (1-12)
-        end_month: Ending horizon month (1-12)
-        region: Region filter (North/Central/South or None)
-        top_n: Number of top provinces to return
-    
-    Returns:
-        DataFrame with recommendations and plotly figure
     """
     # Load forecast data
-    df = load_forecast_data()
+    df, load_error = load_forecast_data()
+    
+    if load_error:
+        error_html = f"""
+<div style="background: #ff4444; padding: 20px; border-radius: 8px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
+    <h3 style="margin-top: 0;">❌ Lỗi hệ thống</h3>
+    <p>{load_error}</p>
+    <p style="margin-top: 15px; font-size: 14px;">Vui lòng kiểm tra kết nối MinIO hoặc chạy lại forecast job!</p>
+</div>
+        """
+        return pd.DataFrame(), None, error_html
     
     if df.empty:
-        return pd.DataFrame(), None, "⚠️ Không thể load dữ liệu forecast!"
+        return pd.DataFrame(), None, "⚠️ Không có dữ liệu forecast!"
+    
+    print(f"\n🔍 Available horizon_months: {sorted(df['horizon_month'].unique())}")
+    print(f"🔍 Available year_months: {sorted(df['year_month'].unique())}")
+    
+    # Show horizon to year_month mapping and detect duplicates
+    horizon_mapping = df[['horizon_month', 'year_month']].drop_duplicates().sort_values('horizon_month')
+    print(f"🔍 Horizon → Year_Month mapping:")
+    
+    year_month_counts = {}
+    for _, row in horizon_mapping.iterrows():
+        ym = row['year_month']
+        h = row['horizon_month']
+        print(f"   Horizon {h} → {ym}")
+        
+        if ym not in year_month_counts:
+            year_month_counts[ym] = []
+        year_month_counts[ym].append(h)
+    
+    # Check for duplicate mappings
+    duplicates = {ym: horizons for ym, horizons in year_month_counts.items() if len(horizons) > 1}
+    if duplicates:
+        print(f"⚠️ WARNING: Duplicate year_month mappings detected!")
+        for ym, horizons in duplicates.items():
+            print(f"   {ym} is mapped from horizons: {horizons}")
+    
+    # Validate requested months are available
+    available_horizons = set(df['horizon_month'].unique())
+    requested_horizons = set(range(start_month, end_month + 1))
+    missing_horizons = requested_horizons - available_horizons
+    
+    if missing_horizons:
+        missing_str = ", ".join(map(str, sorted(missing_horizons)))
+        available_str = ", ".join(map(str, sorted(available_horizons)))
+        warning_html = f"""
+<div style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%); padding: 20px; border-radius: 12px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
+    <h3 style="margin-top: 0; font-size: 20px;">⚠️ Thiếu dữ liệu cho một số tháng</h3>
+    <p style="margin: 10px 0; font-size: 16px;"><strong>Tháng bị thiếu:</strong> {missing_str}</p>
+    <p style="margin: 10px 0; font-size: 16px;"><strong>Tháng có sẵn:</strong> {available_str}</p>
+    <p style="margin-top: 15px; font-size: 14px; opacity: 0.9;">💡 Vui lòng chọn khoảng thời gian khác hoặc chạy lại forecast job để cập nhật dữ liệu!</p>
+</div>
+        """
+        return pd.DataFrame(), None, warning_html
     
     # Filter by horizon months
     df_filtered = df[(df['horizon_month'] >= start_month) & (df['horizon_month'] <= end_month)]
+    
+    debug_print(f"🔍 After horizon filter: {len(df_filtered)} rows")
+    debug_print(f"🔍 Filtered year_months: {sorted(df_filtered['year_month'].unique())}")
     
     # Filter by region
     if region != "Tất cả":
@@ -175,7 +248,15 @@ def recommend_provinces(start_month, end_month, region, top_n):
         df_filtered = df_filtered[df_filtered['region'] == region_code]
     
     if df_filtered.empty:
-        return pd.DataFrame(), None, "⚠️ Không có dữ liệu phù hợp với bộ lọc!"
+        empty_html = f"""
+<div style="background: linear-gradient(135deg, #ffd43b 0%, #ffa733 100%); padding: 20px; border-radius: 12px; color: #333; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
+    <h3 style="margin-top: 0; font-size: 20px;">⚠️ Không có dữ liệu phù hợp</h3>
+    <p style="margin: 10px 0;"><strong>Vùng:</strong> {region}</p>
+    <p style="margin: 10px 0;"><strong>Khoảng thời gian:</strong> Tháng {start_month}-{end_month}</p>
+    <p style="margin-top: 15px; font-size: 14px;">💡 Vui lòng thử lại với bộ lọc khác!</p>
+</div>
+        """
+        return pd.DataFrame(), None, empty_html
     
     # Calculate average hotness for each province
     province_avg = df_filtered.groupby(['province_sk', 'province_name', 'region']).agg({
@@ -192,9 +273,9 @@ def recommend_provinces(start_month, end_month, region, top_n):
     
     # Create time series chart for top provinces
     top_provinces = province_avg['province_sk'].tolist()
-    df_chart = df_filtered[df_filtered['province_sk'].isin(top_provinces)]
+    df_chart = df_filtered[df_filtered['province_sk'].isin(top_provinces)].copy()
     
-    # IMPORTANT: Sort by horizon_month to ensure correct chronological order
+    # Pre-sort for better performance
     df_chart = df_chart.sort_values(['province_sk', 'horizon_month'])
     
     # Map region codes to Vietnamese
@@ -210,12 +291,15 @@ def recommend_provinces(start_month, end_month, region, top_n):
     }
     df_chart['region_vn'] = df_chart['region'].map(region_map)
     
-    # Convert year_month to datetime format for proper display
+    # Use year_month (YYYYMM) instead of forecast_date
     df_chart['date'] = pd.to_datetime(df_chart['year_month'].astype(str), format='%Y%m')
     df_chart['month_label'] = df_chart['date'].dt.strftime('%m/%Y')
     
     # Sort by date to ensure correct plotting order
-    df_chart = df_chart.sort_values('date')
+    df_chart = df_chart.sort_values(['province_name', 'date'])
+    
+    debug_print(f"🔍 Chart data range: {df_chart['date'].min()} to {df_chart['date'].max()}")
+    debug_print(f"🔍 Unique dates in chart: {sorted(df_chart['date'].unique())}")
     
     # Create interactive line chart
     fig = go.Figure()
@@ -273,27 +357,83 @@ def recommend_provinces(start_month, end_month, region, top_n):
         tickangle=-45
     )
     
-    # Model info message with better formatting
+    # Check for missing provinces
+    num_provinces_in_data = df['province_sk'].nunique()
+    num_provinces_filtered = df_filtered['province_sk'].nunique()
+    num_months_selected = end_month - start_month + 1
+    num_actual_months = df_filtered['year_month'].nunique()  # Số tháng THỰC TẾ sau khi filter
+    
+    missing_province_warning = ""
+    if num_provinces_in_data < 62:
+        missing_count = 62 - num_provinces_in_data
+        missing_province_warning = f"""
+<div style="background: #ffd43b; padding: 15px; margin-top: 10px; border-radius: 8px; color: #333; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+    ⚠️ <strong>Lưu ý:</strong> Thiếu dữ liệu cho {missing_count} tỉnh (do không đủ dữ liệu lịch sử để dự báo)
+</div>
+        """
+    
+    # Model info message
     model_info = get_model_info()
     if model_info:
+        # Calculate actual date range from filtered data
+        unique_months = sorted(df_filtered['year_month'].unique())
+        if len(unique_months) > 0:
+            start_date = pd.to_datetime(str(unique_months[0]), format='%Y%m')
+            end_date = pd.to_datetime(str(unique_months[-1]), format='%Y%m')
+            date_range_str = f"{start_date.strftime('%m/%Y')} - {end_date.strftime('%m/%Y')}"
+        else:
+            date_range_str = "N/A"
+        
+        # Warning if actual months != selected months (due to duplicate horizon mapping)
+        month_warning = ""
+        if num_actual_months != num_months_selected:
+            month_warning = f"""
+<div style="background: #ff9800; padding: 12px; margin-top: 10px; border-radius: 8px; color: white; font-size: 14px;">
+    ⚠️ <strong>Cảnh báo:</strong> Chọn {num_months_selected} tháng nhưng chỉ có {num_actual_months} tháng dữ liệu thực tế (do lỗi horizon mapping trong forecast job)
+</div>
+            """
+        
         info_msg = f"""
 <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 12px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
     <h3 style="margin-top: 0; font-size: 18px;">✅ Thông tin Model</h3>
     <p style="margin: 8px 0;"><strong>Model:</strong> {MODEL_NAME} <span style="background: rgba(255,255,255,0.3); padding: 3px 8px; border-radius: 5px;">v{model_info['version']}</span></p>
     <p style="margin: 8px 0;"><strong>📊 Độ chính xác:</strong> RMSE={model_info['test_rmse']:.4f} | MAE={model_info['test_mae']:.4f} | R²={model_info['test_r2']:.4f}</p>
     <p style="margin: 8px 0;"><strong>🕒 Trained:</strong> {model_info['trained_at']}</p>
-    <p style="margin: 8px 0;"><strong>📈 Dữ liệu:</strong> {len(df_filtered)} predictions ({len(province_avg)} tỉnh × {end_month - start_month + 1} tháng)</p>
+    <p style="margin: 8px 0;"><strong>📈 Dữ liệu gốc:</strong> {num_provinces_in_data}/62 tỉnh × 12 tháng = {len(df)} predictions</p>
+    <p style="margin: 8px 0;"><strong>🔍 Đã lọc:</strong> {num_provinces_filtered} tỉnh × {num_actual_months} tháng thực tế (chọn {num_months_selected}) = {len(df_filtered)} predictions | {date_range_str}</p>
+    <p style="margin: 8px 0;"><strong>🎯 Hiển thị:</strong> Top {len(province_avg)} tỉnh</p>
 </div>
+{month_warning}
+{missing_province_warning}
         """
     else:
+        # Calculate actual date range from filtered data
+        unique_months = sorted(df_filtered['year_month'].unique())
+        if len(unique_months) > 0:
+            start_date = pd.to_datetime(str(unique_months[0]), format='%Y%m')
+            end_date = pd.to_datetime(str(unique_months[-1]), format='%Y%m')
+            date_range_str = f"{start_date.strftime('%m/%Y')} - {end_date.strftime('%m/%Y')}"
+        else:
+            date_range_str = "N/A"
+        
+        # Warning if actual months != selected months
+        month_warning = ""
+        if num_actual_months != num_months_selected:
+            month_warning = f"""
+<div style="background: #ff9800; padding: 12px; margin-top: 10px; border-radius: 8px; color: white; font-size: 14px;">
+    ⚠️ <strong>Cảnh báo:</strong> Chọn {num_months_selected} tháng nhưng chỉ có {num_actual_months} tháng dữ liệu thực tế (do lỗi horizon mapping trong forecast job)
+</div>
+            """
+        
         info_msg = f"""
 <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 20px; border-radius: 12px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
-    <p style="margin: 0;">✅ Đã tạo {len(province_avg)} recommendations từ {len(df_filtered)} predictions</p>
+    <p style="margin: 0;">✅ Đã tạo {len(province_avg)} recommendations | {num_provinces_filtered} tỉnh × {num_actual_months} tháng thực tế (chọn {num_months_selected}) = {len(df_filtered)} predictions | {date_range_str}</p>
 </div>
+{month_warning}
+{missing_province_warning}
         """
     
     return result_df, fig, info_msg
-
 
 def create_interface():
     """Create Gradio interface"""
@@ -320,20 +460,6 @@ def create_interface():
         font-size: 1.1em;
         opacity: 0.95;
         margin: 5px 0;
-    }
-    .filter-card {
-        background: white;
-        padding: 25px;
-        border-radius: 12px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-        border: 1px solid #e5e7eb;
-    }
-    .result-card {
-        background: white;
-        padding: 25px;
-        border-radius: 12px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-        border: 1px solid #e5e7eb;
     }
     .info-box {
         background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
@@ -365,6 +491,8 @@ def create_interface():
             with gr.Column(scale=1):
                 gr.HTML('<div class="filter-card">')
                 gr.Markdown("### ⚙️ Bộ lọc tìm kiếm")
+                
+                search_btn = gr.Button("🔍 Tìm kiếm", variant="primary", size="sm")
                 
                 start_month = gr.Slider(
                     minimum=1, 
@@ -400,8 +528,6 @@ def create_interface():
                     info="Hiển thị bao nhiêu điểm đến?"
                 )
                 
-                search_btn = gr.Button("🔍 Tìm kiếm ngay", variant="primary", size="lg", scale=2)
-                
                 gr.HTML('</div>')
                 
                 # Info box
@@ -411,7 +537,7 @@ def create_interface():
                                 padding: 20px; border-radius: 12px; margin-top: 20px; 
                                 box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
                         <p style="margin: 0; color: #333; font-weight: 500;">
-                            ℹ️ Nhấn <strong>'Tìm kiếm ngay'</strong> để xem kết quả dự báo
+                            ℹ️ Nhấn <strong>'Tìm kiếm'</strong> để xem kết quả dự báo
                         </p>
                     </div>
                     """
