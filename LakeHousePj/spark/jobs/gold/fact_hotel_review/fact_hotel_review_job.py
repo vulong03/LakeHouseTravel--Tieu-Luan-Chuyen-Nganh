@@ -60,22 +60,15 @@ def create_fact_table(spark):
     schema = StructType([
         StructField("fact_id", LongType(), False),
         StructField("hotel_sk", IntegerType(), True),
-        StructField("traveler_type_sk", IntegerType(), True),
-        StructField("room_type_sk", IntegerType(), True),
         StructField("country_sk", IntegerType(), True),
         StructField("stay_date_sk", IntegerType(), True),
-        StructField("review_date_sk", IntegerType(), True),
+        StructField("traveler_type_sk", IntegerType(), True),
+        StructField("room_type_sk", IntegerType(), True),
         StructField("review_score", DoubleType(), True),
         StructField("reviewer_name", StringType(), True),
         StructField("review_title", StringType(), True),
         StructField("review_positive", StringType(), True),
         StructField("review_negative", StringType(), True),
-        StructField("is_low_score", BooleanType(), False),
-        StructField("is_high_score", BooleanType(), False),
-        StructField("review_score_bucket", StringType(), True),
-        StructField("created_at", TimestampType(), False),
-        StructField("updated_at", TimestampType(), False),
-        StructField("is_active", BooleanType(), False),
     ])
 
     create_iceberg_table_if_not_exists(
@@ -168,61 +161,33 @@ def transform(spark, df: DataFrame) -> DataFrame:
         how="left",
     )
 
-    # join with dim_date for stay_date and review_date
-    joined = joined.withColumn("_stay_date", F.to_date(F.col("stay_date"))) \
-                   .withColumn("_review_date", F.to_date(F.col("review_date")))
+    # join with dim_date for stay_date only
+    joined = joined.withColumn("_stay_date", F.to_date(F.col("stay_date")))
 
+    df_date_stay = df_date.withColumnRenamed("date_sk", "stay_date_sk").withColumnRenamed("full_date", "stay_full_date").alias("d1")
     joined = joined.join(
-        df_date.withColumnRenamed("date_sk", "stay_date_sk"),
-        joined["_stay_date"] == df_date["full_date"],
-        how="left",
-    ).withColumnRenamed("date_sk", "_tmp_date_sk").drop("_tmp_date_sk")
-
-    # Because we used df_date earlier, join again properly (left join aliasing)
-    df_date_alias = df_date.withColumnRenamed("date_sk", "date_sk_review").withColumnRenamed("full_date", "full_date_review")
-    joined = joined.join(
-        df_date_alias,
-        joined["_review_date"] == df_date_alias["full_date_review"],
+        df_date_stay,
+        joined["_stay_date"] == F.col("d1.stay_full_date"),
         how="left",
     )
-
-    # Compute flags and buckets
-    joined = joined.withColumn(
-        "is_low_score",
-        F.when(F.col("review_score").isNotNull() & (F.col("review_score") <= F.lit(LOW_SCORE_THRESHOLD)), True).otherwise(False),
-    ).withColumn(
-        "is_high_score",
-        F.when(F.col("review_score").isNotNull() & (F.col("review_score") >= F.lit(HIGH_SCORE_THRESHOLD)), True).otherwise(False),
-    )
-
-    # bucket by nearest integer
-    joined = joined.withColumn("review_score_bucket", F.when(F.col("review_score").isNotNull(), F.round(F.col("review_score")).cast(StringType())).otherwise(F.lit(None)))
 
     # Generate surrogate fact_id
-    window = Window.orderBy("_review_date", "hotel_name")
+    window = Window.orderBy("review_date", "hotel_name")
     final = joined.withColumn("fact_id", F.row_number().over(window).cast(LongType()))
 
-    # Build final select with chosen column names
-    now = F.current_timestamp()
+    # Build final select with chosen column names (match diagram)
     result = final.select(
         F.col("fact_id"),
         F.col("hotel_sk_final").alias("hotel_sk"),
-        F.col("traveler_type_sk"),
-        F.col("room_type_sk").alias("room_type_sk"),
         F.col("country_sk"),
         F.col("stay_date_sk"),
-        F.col("date_sk_review").alias("review_date_sk"),
+        F.col("traveler_type_sk"),
+        F.col("room_type_sk"),
         F.col("review_score"),
         F.col("reviewer_name"),
         F.col("review_title"),
         F.col("review_positive"),
         F.col("review_negative"),
-        F.col("is_low_score"),
-        F.col("is_high_score"),
-        F.col("review_score_bucket"),
-        now.alias("created_at"),
-        now.alias("updated_at"),
-        F.lit(True).alias("is_active"),
     )
 
     print("Transformation complete. Columns:")
