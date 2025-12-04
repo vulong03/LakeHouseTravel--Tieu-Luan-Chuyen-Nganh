@@ -81,11 +81,11 @@ def create_dim_author_table(spark):
 
 def load_source_data(spark) -> DataFrame:
     """Load author data from Silver layer"""
-    print(f"\n📥 Loading source data from: {SOURCE_SILVER_TABLE}")
+    print(f"\nLoading source data from: {SOURCE_SILVER_TABLE}")
     df = spark.table(SOURCE_SILVER_TABLE)
     
     original_count = df.count()
-    print(f"✅ Loaded {original_count:,} records from Silver")
+    print(f"Loaded {original_count:,} records from Silver")
     
     return df
 
@@ -100,29 +100,29 @@ def validate_and_normalize_author_data(df: DataFrame) -> DataFrame:
     3. author_url: trim only (nullable OK)
     4. Deduplicate by author_tag (take latest based on crawl_time)
     """
-    print("\n🔧 Validating and normalizing author data...")
+    print("\nValidating and normalizing author data...")
     
     original_count = df.count()
-    print(f"   📊 Original records: {original_count:,}")
+    print(f"Original records: {original_count:,}")
     
     # Step 1: Filter NULL/empty author_tag
-    print("   ✅ Step 1: Filtering NULL/empty author_tag...")
+    print("Step 1: Filtering NULL/empty author_tag...")
     df = df.filter(
         F.col("author_tag").isNotNull() & 
         (F.trim(F.col("author_tag")) != "")
     )
     after_filter_count = df.count()
     filtered_out = original_count - after_filter_count
-    print(f"      Filtered out: {filtered_out:,} records ({filtered_out/original_count*100:.2f}%)")
+    print(f"Filtered out: {filtered_out:,} records ({filtered_out/original_count*100:.2f}%)")
     
     # Step 2: Normalize author_tag (trim + remove @ prefix)
-    print("   ✅ Step 2: Normalizing author_tag (trim + remove @ prefix)...")
+    print("Step 2: Normalizing author_tag (trim + remove @ prefix)...")
     df = df.withColumn("author_tag", 
         F.regexp_replace(F.trim(F.col("author_tag")), "^@", "")
     )
     
     # Step 3: Normalize author_name (trim only)
-    print("   ✅ Step 3: Normalizing author_name (trim only)...")
+    print("Step 3: Normalizing author_name (trim only)...")
     df = df.withColumn("author_name",
         F.when(
             F.col("author").isNotNull(),
@@ -131,7 +131,7 @@ def validate_and_normalize_author_data(df: DataFrame) -> DataFrame:
     )
     
     # Step 4: Normalize author_url (trim only)
-    print("   ✅ Step 4: Normalizing author_url (trim only)...")
+    print("Step 4: Normalizing author_url (trim only)...")
     df = df.withColumn("author_url",
         F.when(
             F.col("author_url").isNotNull(),
@@ -140,7 +140,7 @@ def validate_and_normalize_author_data(df: DataFrame) -> DataFrame:
     )
     
     # Step 5: Handle duplicates (take latest based on crawl_time or ingestion_timestamp)
-    print("   ✅ Step 5: Deduplicating by author_tag (take latest)...")
+    print("Step 5: Deduplicating by author_tag (take latest)...")
     window_spec = Window.partitionBy("author_tag").orderBy(
         F.coalesce(F.col("crawl_time"), F.col("ingestion_timestamp")).desc()
     )
@@ -150,8 +150,8 @@ def validate_and_normalize_author_data(df: DataFrame) -> DataFrame:
     
     final_count = df.count()
     duplicates_removed = after_filter_count - final_count
-    print(f"      Removed duplicates: {duplicates_removed:,} records")
-    print(f"      Final unique authors: {final_count:,}")
+    print(f"Removed duplicates: {duplicates_removed:,} records")
+    print(f"Final unique authors: {final_count:,}")
     
     return df
 
@@ -165,7 +165,7 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
     2. Add metadata columns (created_at, updated_at, is_active)
     3. Generate surrogate key 'author_sk' using row_number
     """
-    print("\n🔄 Transforming to dimension format...")
+    print("\nTransforming to dimension format...")
     
     current_timestamp = F.current_timestamp()
     
@@ -177,13 +177,13 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
     )
     
     # Step 2: Add metadata columns
-    print("   ⏰ Adding SCD metadata...")
+    print("Adding SCD metadata...")
     df = df.withColumn("created_at", current_timestamp)
     df = df.withColumn("updated_at", current_timestamp)
     df = df.withColumn("is_active", F.lit(True))
     
     # Step 3: Generate surrogate key
-    print("   🔑 Generating surrogate keys...")
+    print("Generating surrogate keys...")
     window_spec = Window.orderBy("author_tag")
     df = df.withColumn("author_sk", F.row_number().over(window_spec))
     
@@ -198,7 +198,7 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
         "is_active"
     )
     
-    print("✅ Transformation complete")
+    print("Transformation complete")
     df.printSchema()
     df.show(10, truncate=False)
     
@@ -211,22 +211,22 @@ def write_to_gold_table(spark, df: DataFrame, record_count: int):
     
     Mode: OVERWRITE (full refresh for Type 1 SCD)
     """
-    print(f"\n💾 Writing to Gold table: {GOLD_TABLE_FULL}")
-    print(f"   📊 Records to write: {record_count:,}")
+    print(f"\nWriting to Gold table: {GOLD_TABLE_FULL}")
+    print(f"Records to write: {record_count:,}")
     
     # Write to Iceberg table
     df.writeTo(GOLD_TABLE_FULL) \
         .using("iceberg") \
         .overwritePartitions()  # Full refresh
     
-    print(f"✅ Successfully wrote {record_count:,} records to {GOLD_TABLE_FULL}")
+    print(f"Successfully wrote {record_count:,} records to {GOLD_TABLE_FULL}")
 
 
 def validate_results(spark):
     """
     Validate the created dimension table
     """
-    print("\n✅ Validating results...")
+    print("\nValidating results...")
     
     df = spark.table(GOLD_TABLE_FULL)
     
@@ -234,17 +234,17 @@ def validate_results(spark):
     authors_with_name = df.filter(F.col("author_name").isNotNull()).count()
     authors_with_url = df.filter(F.col("author_url").isNotNull()).count()
     
-    print("\n📊 Validation Summary:")
-    print(f"   Total authors: {total_count:,}")
-    print(f"   Authors with name: {authors_with_name:,} ({authors_with_name/total_count*100:.2f}%)")
-    print(f"   Authors with URL: {authors_with_url:,} ({authors_with_url/total_count*100:.2f}%)")
+    print("\nValidation Summary:")
+    print(f"Total authors: {total_count:,}")
+    print(f"Authors with name: {authors_with_name:,} ({authors_with_name/total_count*100:.2f}%)")
+    print(f"Authors with URL: {authors_with_url:,} ({authors_with_url/total_count*100:.2f}%)")
     
-    print("\n👤 Sample authors:")
+    print("\nSample authors:")
     df.select("author_sk", "author_tag", "author_name", "author_url") \
         .orderBy("author_sk") \
         .show(20, truncate=False)
     
-    print("\n📈 Top 20 authors by tag (alphabetical):")
+    print("\nTop 20 authors by tag (alphabetical):")
     df.select("author_sk", "author_tag", "author_name") \
         .orderBy("author_tag") \
         .show(20, truncate=False)
@@ -308,9 +308,9 @@ def main():
         )
         
         print("\n" + "=" * 80)
-        print("✅ dim_author job completed successfully!")
-        print(f"   Records: {record_count:,}")
-        print(f"   Execution time: {execution_time:.2f}s")
+        print("dim_author job completed successfully!")
+        print(f"Records: {record_count:,}")
+        print(f"Execution time: {execution_time:.2f}s")
         print("=" * 80)
         
     except Exception as e:
@@ -322,7 +322,7 @@ def main():
         )
         
         print("\n" + "=" * 80)
-        print(f"❌ dim_author job failed: {e}")
+        print(f"dim_author job failed: {e}")
         print("=" * 80)
         import traceback
         traceback.print_exc()
@@ -330,7 +330,6 @@ def main():
     
     finally:
         spark.stop()
-
 
 if __name__ == "__main__":
     main()

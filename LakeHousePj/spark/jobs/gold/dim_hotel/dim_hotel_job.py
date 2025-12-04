@@ -87,17 +87,17 @@ def create_dim_hotel_table(spark):
 
 def load_source_data(spark) -> DataFrame:
     """Load hotel data from Silver layer"""
-    print(f"\n📥 Loading source data from: {SOURCE_HOTELS_TABLE}")
+    print(f"\nLoading source data from: {SOURCE_HOTELS_TABLE}")
     df = spark.table(SOURCE_HOTELS_TABLE)
 
     cnt = df.count()
-    print(f"✅ Loaded {cnt:,} records from {SOURCE_HOTELS_TABLE}")
+    print(f"Loaded {cnt:,} records from {SOURCE_HOTELS_TABLE}")
     return df
 
 
 def join_with_dim_province(spark, df: DataFrame) -> DataFrame:
     """Join with dim_province to get province_sk"""
-    print("\n🔗 Joining with dim_province...")
+    print("\nJoining with dim_province...")
 
     df_province = spark.table(DIM_PROVINCE_TABLE).select(
         "province_sk",
@@ -116,17 +116,17 @@ def join_with_dim_province(spark, df: DataFrame) -> DataFrame:
 
     missing_count = df_joined.filter(F.col("province").isNotNull() & F.col("province_sk").isNull()).count()
     if missing_count > 0:
-        print(f"⚠️  Warning: {missing_count} hotels have province but no matching province_sk")
+        print(f"Warning: {missing_count} hotels have province but no matching province_sk")
 
     return df_joined
 
 
 def deduplicate_by_hotel_url(df: DataFrame) -> DataFrame:
     """Deduplicate by hotel_url keeping the latest record"""
-    print("\n🔧 Deduplicating by hotel_url (keep latest)...")
+    print("\nDeduplicating by hotel_url (keep latest)...")
 
     original_count = df.count()
-    print(f"   📊 Original records: {original_count:,}")
+    print(f"Original records: {original_count:,}")
 
     # Order by latest `ingestion_timestamp`. `crawl_time` is intentionally
     # not used/processed for this job, so we rely on `ingestion_timestamp` only.
@@ -140,15 +140,14 @@ def deduplicate_by_hotel_url(df: DataFrame) -> DataFrame:
 
     final_count = df.count()
     removed = original_count - final_count
-    print(f"   ✅ Removed duplicates: {removed:,} records")
-    print(f"   ✅ Final unique hotels: {final_count:,}")
+    print(f"Removed duplicates: {removed:,} records")
+    print(f"Final unique hotels: {final_count:,}")
 
     return df
 
-
 def transform_to_dimension(df: DataFrame) -> DataFrame:
     """Transform to dimension table format"""
-    print("\n🔄 Transforming to dimension format...")
+    print("\nTransforming to dimension format...")
 
     current_timestamp = F.current_timestamp()
 
@@ -164,13 +163,13 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
     )
 
     # Add metadata
-    print("   ⏰ Adding SCD metadata...")
+    print("Adding SCD metadata...")
     df = df.withColumn("created_at", current_timestamp)
     df = df.withColumn("updated_at", current_timestamp)
     df = df.withColumn("is_active", F.lit(True))
 
     # Generate surrogate key
-    print("   🔑 Generating surrogate keys...")
+    print("Generating surrogate keys...")
     window_spec = Window.orderBy("hotel_url")
     df = df.withColumn("hotel_sk", F.row_number().over(window_spec))
 
@@ -190,7 +189,7 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
         "is_active",
     )
 
-    print("✅ Transformation complete")
+    print("Transformation complete")
     df.printSchema()
     df.show(10, truncate=False)
 
@@ -199,19 +198,19 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
 
 def write_to_gold_table(spark, df: DataFrame, record_count: int):
     """Write dimension data to Gold Iceberg table"""
-    print(f"\n💾 Writing to Gold table: {GOLD_TABLE_FULL}")
-    print(f"   📊 Records to write: {record_count:,}")
+    print(f"\nWriting to Gold table: {GOLD_TABLE_FULL}")
+    print(f"Records to write: {record_count:,}")
 
     df.writeTo(GOLD_TABLE_FULL) \
       .using("iceberg") \
       .overwritePartitions()
 
-    print(f"✅ Successfully wrote {record_count:,} records to {GOLD_TABLE_FULL}")
+    print(f"Successfully wrote {record_count:,} records to {GOLD_TABLE_FULL}")
 
 
 def validate_results(spark):
     """Validate the created dimension table"""
-    print("\n✅ Validating results...")
+    print("\nValidating results...")
 
     df = spark.table(GOLD_TABLE_FULL)
 
@@ -219,12 +218,12 @@ def validate_results(spark):
     with_province = df.filter(F.col("province_sk").isNotNull()).count()
     with_name = df.filter(F.col("hotel_name").isNotNull()).count()
 
-    print("\n📊 Validation Summary:")
-    print(f"   Total hotels: {total_count:,}")
-    print(f"   Hotels with province_sk: {with_province:,} ({with_province/total_count*100:.2f}%)")
-    print(f"   Hotels with name: {with_name:,} ({with_name/total_count*100:.2f}%)")
+    print("\nValidation Summary:")
+    print(f"Total hotels: {total_count:,}")
+    print(f"Hotels with province_sk: {with_province:,} ({with_province/total_count*100:.2f}%)")
+    print(f"Hotels with name: {with_name:,} ({with_name/total_count*100:.2f}%)")
 
-    print("\n📝 Sample hotels:")
+    print("\nSample hotels:")
     df.select("hotel_sk", "hotel_url", "hotel_name", "province_sk") \
       .orderBy("hotel_sk") \
       .show(20, truncate=False)
@@ -285,9 +284,9 @@ def main():
         )
 
         print("\n" + "=" * 80)
-        print("✅ dim_hotel job completed successfully!")
-        print(f"   Records: {record_count:,}")
-        print(f"   Execution time: {execution_time:.2f}s")
+        print("dim_hotel job completed successfully!")
+        print(f"Records: {record_count:,}")
+        print(f"Execution time: {execution_time:.2f}s")
         print("=" * 80)
 
     except Exception as e:
@@ -298,7 +297,7 @@ def main():
         )
 
         print("\n" + "=" * 80)
-        print(f"❌ dim_hotel job failed: {e}")
+        print(f"dim_hotel job failed: {e}")
         print("=" * 80)
         import traceback
         traceback.print_exc()
@@ -306,7 +305,6 @@ def main():
 
     finally:
         spark.stop()
-
 
 if __name__ == "__main__":
     main()

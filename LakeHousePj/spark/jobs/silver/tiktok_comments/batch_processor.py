@@ -44,7 +44,7 @@ def read_partitions_batch(
         - unioned_df: Single DataFrame containing all batch data
         - batch_metadata: List of dicts with file tracking info
     """
-    print(f"   📖 Reading {len(post_urls)} partitions...")
+    print(f"Reading {len(post_urls)} partitions...")
     
     dataframes = []
     batch_metadata = []
@@ -70,26 +70,25 @@ def read_partitions_batch(
                         "record_count": df_partition.count()
                     })
             else:
-                print(f"   ⚠️  Empty partition: {post_url}")
+                print(f"Empty partition: {post_url}")
         
         except Exception as e:
-            print(f"   ⚠️  Error reading partition {post_url}: {e}")
+            print(f"Error reading partition {post_url}: {e}")
             continue
     
     if not dataframes:
         raise ValueError("No valid partitions found in batch")
     
     # Union all DataFrames
-    print(f"   🔗 Unioning {len(dataframes)} DataFrames...")
+    print(f"Unioning {len(dataframes)} DataFrames...")
     df_unioned = dataframes[0]
     for df in dataframes[1:]:
         df_unioned = df_unioned.union(df)
     
     total_records = sum(m["record_count"] for m in batch_metadata)
-    print(f"   ✅ Unioned {len(dataframes)} partitions → {total_records:,} records")
+    print(f"Unioned {len(dataframes)} partitions → {total_records:,} records")
     
     return df_unioned, batch_metadata
-
 
 def process_posts_batch(
     spark: SparkSession,
@@ -122,7 +121,7 @@ def process_posts_batch(
         Tuple of (records_loaded, files_skipped)
     """
     print(f"\n{'='*80}")
-    print(f"📦 BATCH {batch_id}: Processing {len(batch_post_urls)} posts")
+    print(f"BATCH {batch_id}: Processing {len(batch_post_urls)} posts")
     print(f"{'='*80}")
     
     try:
@@ -132,11 +131,11 @@ def process_posts_batch(
         )
         
         # Apply cleaning
-        print(f"   🧹 Applying data cleaning...")
+        print(f"Applying data cleaning...")
         df_cleaned = cleaning_func(df_batch)
         
         # Calculate row_checksum
-        print(f"   🔐 Calculating row_checksum...")
+        print(f"Calculating row_checksum...")
         df_with_checksum = calculate_row_checksum(df_cleaned, business_columns)
         
         # Update ingestion_timestamp
@@ -147,16 +146,16 @@ def process_posts_batch(
         
         # Single APPEND for entire batch
         total_records = df_final.count()
-        print(f"   💾 Appending {total_records:,} records to {silver_table}...")
+        print(f"Appending {total_records:,} records to {silver_table}...")
         
         df_final.writeTo(silver_table) \
             .using("iceberg") \
             .append()
         
-        print(f"   ✅ Batch appended successfully!")
+        print(f"Batch appended successfully!")
         
         # Log each file individually to PostgreSQL
-        print(f"   📝 Logging {len(batch_metadata)} files to PostgreSQL...")
+        print(f"Logging {len(batch_metadata)} files to PostgreSQL...")
         
         for file_meta in batch_metadata:
             bronze_file_path = f"{bronze_base_path}/{file_meta['source_file']}"
@@ -181,15 +180,15 @@ def process_posts_batch(
                 file_size_bytes=file_meta["source_file_size_bytes"]
             )
         
-        print(f"   ✅ All {len(batch_metadata)} files logged")
+        print(f"All {len(batch_metadata)} files logged")
         
         return total_records, 0
     
     except Exception as e:
-        print(f"   ❌ Batch {batch_id} FAILED: {e}")
+        print(f"Batch {batch_id} FAILED: {e}")
         
         # Log failed files
-        print(f"   📝 Logging {len(batch_post_urls)} files as FAILED...")
+        print(f"Logging {len(batch_post_urls)} files as FAILED...")
         
         for post_url in batch_post_urls:
             metadata = mapping.get(post_url)
@@ -217,11 +216,10 @@ def process_posts_batch(
                     file_size_bytes=metadata["source_file_size_bytes"]
                 )
         
-        print(f"   📝 Logged {len(batch_post_urls)} failed files")
+        print(f"Logged {len(batch_post_urls)} failed files")
         
         # Return 0 loaded, all skipped (failed)
         return 0, len(batch_post_urls)
-
 
 def process_comments_batch(
     spark: SparkSession,
@@ -257,7 +255,7 @@ def process_comments_batch(
         Tuple of (records_loaded, files_skipped)
     """
     print(f"\n{'='*80}")
-    print(f"📦 BATCH {batch_id}: Processing {len(batch_post_urls)} comment partitions")
+    print(f"BATCH {batch_id}: Processing {len(batch_post_urls)} comment partitions")
     print(f"{'='*80}")
     
     try:
@@ -266,7 +264,7 @@ def process_comments_batch(
         batch_metadata = []
         empty_partitions = []
         
-        print(f"   📖 Reading {len(batch_post_urls)} partitions...")
+        print(f"Reading {len(batch_post_urls)} partitions...")
         
         for post_url in batch_post_urls:
             try:
@@ -299,12 +297,12 @@ def process_comments_batch(
                         })
             
             except Exception as e:
-                print(f"   ⚠️  Error reading partition {post_url}: {e}")
+                print(f"Error reading partition {post_url}: {e}")
                 continue
         
         # Log empty partitions as skipped
         if empty_partitions:
-            print(f"   📝 Logging {len(empty_partitions)} empty partitions as skipped...")
+            print(f"Logging {len(empty_partitions)} empty partitions as skipped...")
             
             for empty_meta in empty_partitions:
                 bronze_file_path = f"{bronze_base_path}/{empty_meta['source_file']}"
@@ -331,24 +329,24 @@ def process_comments_batch(
         
         # If no valid data, return early
         if not valid_dataframes:
-            print(f"   ⏭️  Batch {batch_id}: All partitions empty - skipping")
+            print(f"Batch {batch_id}: All partitions empty - skipping")
             return 0, len(empty_partitions)
         
         # Union valid DataFrames
-        print(f"   🔗 Unioning {len(valid_dataframes)} DataFrames...")
+        print(f"Unioning {len(valid_dataframes)} DataFrames...")
         df_unioned = valid_dataframes[0]
         for df in valid_dataframes[1:]:
             df_unioned = df_unioned.union(df)
         
         total_records = sum(m["record_count"] for m in batch_metadata)
-        print(f"   ✅ Unioned {len(valid_dataframes)} partitions → {total_records:,} records")
+        print(f"Unioned {len(valid_dataframes)} partitions → {total_records:,} records")
         
         # Apply cleaning
-        print(f"   🧹 Applying data cleaning...")
+        print(f"Applying data cleaning...")
         df_cleaned = cleaning_func(df_unioned)
         
         # Calculate row_checksum
-        print(f"   🔐 Calculating row_checksum...")
+        print(f"Calculating row_checksum...")
         df_with_checksum = calculate_row_checksum(df_cleaned, business_columns)
         
         # Update ingestion_timestamp
@@ -359,16 +357,16 @@ def process_comments_batch(
         
         # Single APPEND for entire batch
         final_count = df_final.count()
-        print(f"   💾 Appending {final_count:,} records to {silver_table}...")
+        print(f"Appending {final_count:,} records to {silver_table}...")
         
         df_final.writeTo(silver_table) \
             .using("iceberg") \
             .append()
         
-        print(f"   ✅ Batch appended successfully!")
+        print(f"Batch appended successfully!")
         
         # Log each file with data to PostgreSQL
-        print(f"   📝 Logging {len(batch_metadata)} files to PostgreSQL...")
+        print(f"Logging {len(batch_metadata)} files to PostgreSQL...")
         
         for file_meta in batch_metadata:
             bronze_file_path = f"{bronze_base_path}/{file_meta['source_file']}"
@@ -393,15 +391,15 @@ def process_comments_batch(
                 file_size_bytes=file_meta["source_file_size_bytes"]
             )
         
-        print(f"   ✅ All {len(batch_metadata)} files logged")
+        print(f"All {len(batch_metadata)} files logged")
         
         return final_count, len(empty_partitions)
     
     except Exception as e:
-        print(f"   ❌ Batch {batch_id} FAILED: {e}")
+        print(f"Batch {batch_id} FAILED: {e}")
         
         # Log all files as failed
-        print(f"   📝 Logging {len(batch_post_urls)} files as FAILED...")
+        print(f"Logging {len(batch_post_urls)} files as FAILED...")
         
         for post_url in batch_post_urls:
             metadata = mapping.get(post_url)
@@ -429,19 +427,16 @@ def process_comments_batch(
                     file_size_bytes=metadata["source_file_size_bytes"]
                 )
         
-        print(f"   📝 Logged {len(batch_post_urls)} failed files")
+        print(f"Logged {len(batch_post_urls)} failed files")
         
         return 0, len(batch_post_urls)
-
 
 def create_batches(post_urls: List[str], batch_size: int) -> List[List[str]]:
     """
     Split list of post_urls into batches.
-    
     Args:
         post_urls: Full list of post_urls to process
         batch_size: Number of partitions per batch
-    
     Returns:
         List of batches (each batch is a list of post_urls)
     """
@@ -450,9 +445,9 @@ def create_batches(post_urls: List[str], batch_size: int) -> List[List[str]]:
         batch = post_urls[i:i + batch_size]
         batches.append(batch)
     
-    print(f"\n📦 Created {len(batches)} batches (batch size: {batch_size})")
-    print(f"   Total partitions: {len(post_urls)}")
-    print(f"   Full batches: {len([b for b in batches if len(b) == batch_size])}")
-    print(f"   Last batch size: {len(batches[-1])}")
+    print(f"\nCreated {len(batches)} batches (batch size: {batch_size})")
+    print(f"Total partitions: {len(post_urls)}")
+    print(f"Full batches: {len([b for b in batches if len(b) == batch_size])}")
+    print(f"Last batch size: {len(batches[-1])}")
     
     return batches

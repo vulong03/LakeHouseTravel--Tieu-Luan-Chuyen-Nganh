@@ -268,7 +268,7 @@ def main():
             },
         )
 
-        print("\n✅ fact_hotel_review_daily completed successfully")
+        print("\nfact_hotel_review_daily completed successfully")
 
     except Exception as e:
         logger.log_job_failure(
@@ -276,7 +276,7 @@ def main():
             table_name=GOLD_TABLE_FULL,
             error_message=str(e),
         )
-        print(f"\n❌ Job failed: {e}")
+        print(f"\nJob failed: {e}")
         import traceback
         traceback.print_exc()
         raise

@@ -92,18 +92,18 @@ def create_dim_post_table(spark):
 
 def load_source_data(spark) -> DataFrame:
     """Load post data from Silver layer"""
-    print(f"\n📥 Loading source data from: {SOURCE_POSTS_TABLE}")
+    print(f"\nLoading source data from: {SOURCE_POSTS_TABLE}")
     df_posts = spark.table(SOURCE_POSTS_TABLE)
     
     posts_count = df_posts.count()
-    print(f"✅ Loaded {posts_count:,} records from {SOURCE_POSTS_TABLE}")
+    print(f"Loaded {posts_count:,} records from {SOURCE_POSTS_TABLE}")
     
     return df_posts
 
 
 def join_with_videos_table(spark, df_posts: DataFrame) -> DataFrame:
     """Join with tiktok_videos to get keyword, target_type, has_sub"""
-    print("\n🔗 Joining with tiktok_videos table...")
+    print("\nJoining with tiktok_videos table...")
     
     df_videos = spark.table(SOURCE_VIDEOS_TABLE).select(
         "url",
@@ -120,14 +120,14 @@ def join_with_videos_table(spark, df_posts: DataFrame) -> DataFrame:
         how="inner"
     ).drop("url")
     
-    print(f"   ✅ Kept {df_joined.count():,} posts that exist in tiktok_videos")
+    print(f"Kept {df_joined.count():,} posts that exist in tiktok_videos")
     
     return df_joined
 
 
 def extract_province_from_keyword(df: DataFrame) -> DataFrame:
     """Extract province name from keyword (remove 'du lịch ' prefix)"""
-    print("\n🔧 Extracting province from keyword...")
+    print("\nExtracting province from keyword...")
     
     df = df.withColumn(
         "_province_name",
@@ -142,7 +142,7 @@ def extract_province_from_keyword(df: DataFrame) -> DataFrame:
 
 def join_with_dim_author(spark, df: DataFrame) -> DataFrame:
     """Join with dim_author to get author_sk"""
-    print("\n🔗 Joining with dim_author...")
+    print("\nJoining with dim_author...")
     
     # Load dim_author
     df_author = spark.table(DIM_AUTHOR_TABLE).select(
@@ -168,14 +168,14 @@ def join_with_dim_author(spark, df: DataFrame) -> DataFrame:
     
     missing_count = df_joined.filter(F.col("author_sk").isNull()).count()
     if missing_count > 0:
-        print(f"⚠️  Warning: {missing_count} posts have no matching author")
+        print(f"Warning: {missing_count} posts have no matching author")
     
     return df_joined
 
 
 def join_with_dim_province(spark, df: DataFrame) -> DataFrame:
     """Join with dim_province to get province_sk"""
-    print("\n🔗 Joining with dim_province...")
+    print("\nJoining with dim_province...")
     
     # Load dim_province
     df_province = spark.table(DIM_PROVINCE_TABLE).select(
@@ -194,14 +194,14 @@ def join_with_dim_province(spark, df: DataFrame) -> DataFrame:
         F.col("keyword").isNotNull() & F.col("province_sk").isNull()
     ).count()
     if missing_count > 0:
-        print(f"⚠️  Warning: {missing_count} posts have keyword but no matching province")
+        print(f"Warning: {missing_count} posts have keyword but no matching province")
     
     return df_joined
 
 
 def join_with_dim_date(spark, df: DataFrame) -> DataFrame:
     """Join with dim_date to get crawl_date_sk & post_date_sk"""
-    print("\n🔗 Joining with dim_date...")
+    print("\nJoining with dim_date...")
     
     # Load dim_date
     df_date = spark.table(DIM_DATE_TABLE).select(
@@ -245,20 +245,20 @@ def join_with_dim_date(spark, df: DataFrame) -> DataFrame:
         F.col("crawl_time").isNotNull() & F.col("crawl_date_sk").isNull()
     ).count()
     if missing_crawl > 0:
-        print(f"⚠️  Warning: {missing_crawl} posts have crawl_time but no matching date in dim_date")
+        print(f"Warning: {missing_crawl} posts have crawl_time but no matching date in dim_date")
     
     missing_post = df_joined.filter(
         F.col("post_date").isNotNull() & F.col("post_date_sk").isNull()
     ).count()
     if missing_post > 0:
-        print(f"⚠️  Warning: {missing_post} posts have post_date but no matching date in dim_date")
+        print(f"Warning: {missing_post} posts have post_date but no matching date in dim_date")
     
     return df_joined
 
 
 def transform_has_sub(df: DataFrame) -> DataFrame:
     """Convert has_sub from string 'no'/'yes' to boolean"""
-    print("\n🔧 Converting has_sub to boolean...")
+    print("\nConverting has_sub to boolean...")
     
     df = df.withColumn(
         "has_sub",
@@ -280,10 +280,10 @@ def deduplicate_by_post_url(df: DataFrame) -> DataFrame:
     
     This ensures each post_url appears only once in the dimension table.
     """
-    print("\n🔧 Deduplicating by post_url (keep latest)...")
+    print("\nDeduplicating by post_url (keep latest)...")
     
     original_count = df.count()
-    print(f"   📊 Original records: {original_count:,}")
+    print(f"Original records: {original_count:,}")
     
     # Window function to rank by post_url, ordered by latest crawl_time/ingestion_timestamp
     window_spec = Window.partitionBy("post_url").orderBy(
@@ -296,8 +296,8 @@ def deduplicate_by_post_url(df: DataFrame) -> DataFrame:
     
     final_count = df.count()
     duplicates_removed = original_count - final_count
-    print(f"   ✅ Removed duplicates: {duplicates_removed:,} records")
-    print(f"   ✅ Final unique posts: {final_count:,}")
+    print(f"Removed duplicates: {duplicates_removed:,} records")
+    print(f"Final unique posts: {final_count:,}")
     
     return df
 
@@ -312,7 +312,7 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
     3. Add metadata columns
     4. Generate surrogate key
     """
-    print("\n🔄 Transforming to dimension format...")
+    print("\nTransforming to dimension format...")
     
     current_timestamp = F.current_timestamp()
     
@@ -333,13 +333,13 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
     )
     
     # Step 2: Add metadata columns
-    print("   ⏰ Adding SCD metadata...")
+    print("Adding SCD metadata...")
     df = df.withColumn("created_at", current_timestamp)
     df = df.withColumn("updated_at", current_timestamp)
     df = df.withColumn("is_active", F.lit(True))
     
     # Step 3: Generate surrogate key
-    print("   🔑 Generating surrogate keys...")
+    print("Generating surrogate keys...")
     window_spec = Window.orderBy("post_url")
     df = df.withColumn("post_sk", F.row_number().over(window_spec))
     
@@ -360,7 +360,7 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
         "is_active"
     )
     
-    print("✅ Transformation complete")
+    print("Transformation complete")
     df.printSchema()
     df.show(10, truncate=False)
     
@@ -369,19 +369,19 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
 
 def write_to_gold_table(spark, df: DataFrame, record_count: int):
     """Write dimension data to Gold Iceberg table"""
-    print(f"\n💾 Writing to Gold table: {GOLD_TABLE_FULL}")
-    print(f"   📊 Records to write: {record_count:,}")
+    print(f"\nWriting to Gold table: {GOLD_TABLE_FULL}")
+    print(f"Records to write: {record_count:,}")
     
     df.writeTo(GOLD_TABLE_FULL) \
         .using("iceberg") \
         .overwritePartitions()
     
-    print(f"✅ Successfully wrote {record_count:,} records to {GOLD_TABLE_FULL}")
+    print(f"Successfully wrote {record_count:,} records to {GOLD_TABLE_FULL}")
 
 
 def validate_results(spark):
     """Validate the created dimension table"""
-    print("\n✅ Validating results...")
+    print("\nValidating results...")
     
     df = spark.table(GOLD_TABLE_FULL)
     
@@ -392,15 +392,15 @@ def validate_results(spark):
     with_post_date = df.filter(F.col("post_date_sk").isNotNull()).count()
     with_description = df.filter(F.col("post_description").isNotNull()).count()
     
-    print("\n📊 Validation Summary:")
-    print(f"   Total posts: {total_count:,}")
-    print(f"   Posts with author_sk: {with_author:,} ({with_author/total_count*100:.2f}%)")
-    print(f"   Posts with province_sk: {with_province:,} ({with_province/total_count*100:.2f}%)")
-    print(f"   Posts with crawl_date_sk: {with_crawl_date:,} ({with_crawl_date/total_count*100:.2f}%)")
-    print(f"   Posts with post_date_sk: {with_post_date:,} ({with_post_date/total_count*100:.2f}%)")
-    print(f"   Posts with description: {with_description:,} ({with_description/total_count*100:.2f}%)")
+    print("\nValidation Summary:")
+    print(f"Total posts: {total_count:,}")
+    print(f"Posts with author_sk: {with_author:,} ({with_author/total_count*100:.2f}%)")
+    print(f"Posts with province_sk: {with_province:,} ({with_province/total_count*100:.2f}%)")
+    print(f"Posts with crawl_date_sk: {with_crawl_date:,} ({with_crawl_date/total_count*100:.2f}%)")
+    print(f"Posts with post_date_sk: {with_post_date:,} ({with_post_date/total_count*100:.2f}%)")
+    print(f"Posts with description: {with_description:,} ({with_description/total_count*100:.2f}%)")
     
-    print("\n📝 Sample posts:")
+    print("\nSample posts:")
     df.select("post_sk", "post_url", "author_sk", "province_sk", "crawl_date_sk", "post_date_sk", "keyword") \
         .orderBy("post_sk") \
         .show(20, truncate=False)
@@ -478,9 +478,9 @@ def main():
         )
         
         print("\n" + "=" * 80)
-        print("✅ dim_post job completed successfully!")
-        print(f"   Records: {record_count:,}")
-        print(f"   Execution time: {execution_time:.2f}s")
+        print("dim_post job completed successfully!")
+        print(f"Records: {record_count:,}")
+        print(f"Execution time: {execution_time:.2f}s")
         print("=" * 80)
         
     except Exception as e:
@@ -491,7 +491,7 @@ def main():
         )
         
         print("\n" + "=" * 80)
-        print(f"❌ dim_post job failed: {e}")
+        print(f"dim_post job failed: {e}")
         print("=" * 80)
         import traceback
         traceback.print_exc()
@@ -499,7 +499,6 @@ def main():
     
     finally:
         spark.stop()
-
 
 if __name__ == "__main__":
     main()

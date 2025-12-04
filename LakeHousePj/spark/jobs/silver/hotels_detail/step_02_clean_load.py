@@ -1,7 +1,6 @@
 """
 Silver Layer - Hotels Detail - Step 2: Clean & Load
 Read from Scratch, apply cleaning, and MERGE into Silver Iceberg table
-
 Based on original transform_booking_hotels_detail.py:
 - UPSERT mode (MERGE): UPDATE changed records, INSERT new records
 - Row-level checksum for change detection
@@ -76,8 +75,7 @@ def create_silver_table_if_needed(spark):
         }
     )
     
-    print(f"✅ Silver table ready: {SILVER_TABLE}")
-
+    print(f"Silver table ready: {SILVER_TABLE}")
 
 def normalize_province(df):
     """Chuẩn hoá tên tỉnh:
@@ -93,7 +91,6 @@ def normalize_province(df):
         )
     )
     return df
-
 
 def get_latest_scratch_run(spark):
     """Get the latest run folder from Scratch bucket"""
@@ -129,12 +126,12 @@ def get_latest_scratch_run(spark):
         
         latest_path = f"{SCRATCH_BASE_PATH}/{latest_run}"
         print(f"Latest Scratch run: {latest_run}")
-        print(f"   Path: {latest_path}")
+        print(f"Path: {latest_path}")
         
         return latest_path, latest_run
         
     except Exception as e:
-        print(f"❌ Error finding latest Scratch run: {e}")
+        print(f"Error finding latest Scratch run: {e}")
         raise
 
 
@@ -175,7 +172,7 @@ def clean_and_load_to_silver(spark):
         df = normalize_province(df)
     
     # 2. Parse rating_score to Double (remove non-numeric characters)
-    print(f"   Converting rating_score to Double...")
+    print(f"Converting rating_score to Double...")
     df = df.withColumn(
         "rating_score",
         F.when(
@@ -185,7 +182,7 @@ def clean_and_load_to_silver(spark):
     )
     
     # 3. Làm sạch review_count_text: chỉ lấy số, sau đó đổi tên thành review_count
-    print(f"   Extracting review_count from review_count_text và thay thế trực tiếp...")
+    print(f"Extracting review_count from review_count_text và thay thế trực tiếp...")
     df = df.withColumn(
         "review_count_text",
         F.when(
@@ -200,7 +197,7 @@ def clean_and_load_to_silver(spark):
         df = df.drop("review_count_text")
     
     # 4. Clean top_amenities - remove duplicate commas and spaces
-    print(f"   Cleaning top_amenities...")
+    print(f"Cleaning top_amenities...")
     df = df.withColumn(
         "top_amenities",
         F.when(
@@ -253,10 +250,6 @@ def clean_and_load_to_silver(spark):
     print("\nDrop cột 'activities'...")
     df = df.drop("activities")
 
-    # (Đã loại bỏ) Trước đây lọc các dòng thiếu dữ liệu quan trọng.
-    # Yêu cầu hiện tại: không loại bỏ hàng thiếu dữ liệu ở bước này,
-    # chỉ thực hiện các phép biến đổi và giữ lại tất cả hàng.
-
     # Làm sạch cụm “Xem tất cả ... tiện nghi” ở cuối cột top_amenities
     print("\nLoại bỏ cụm 'Xem tất cả ... tiện nghi' ở cuối cột top_amenities...")
     df = df.withColumn(
@@ -268,9 +261,9 @@ def clean_and_load_to_silver(spark):
     cleaned_count = df.count()
     removed_count = original_count - cleaned_count
 
-    print(f"   Original records: {original_count:,}")
-    print(f"   Cleaned records: {cleaned_count:,}")
-    print(f"   Removed: {removed_count:,}")
+    print(f"Original records: {original_count:,}")
+    print(f"Cleaned records: {cleaned_count:,}")
+    print(f"Removed: {removed_count:,}")
     
     # Calculate row checksum for change detection (PRESERVED FROM ORIGINAL)
     print(f"\nCalculating row checksums for change detection...")
@@ -282,9 +275,9 @@ def clean_and_load_to_silver(spark):
     
     # MERGE into Silver table (UPSERT mode - PRESERVED FROM ORIGINAL)
     print(f"\nMERGE into Silver table (UPSERT mode)...")
-    print(f"   Target: {SILVER_TABLE}")
-    print(f"   Business Key: {BUSINESS_KEY}")
-    print(f"   Strategy: UPDATE if changed, INSERT if new, SKIP if unchanged")
+    print(f"Target: {SILVER_TABLE}")
+    print(f"Business Key: {BUSINESS_KEY}")
+    print(f"Strategy: UPDATE if changed, INSERT if new, SKIP if unchanged")
     
     stats = merge_into_bronze(
         spark=spark,
@@ -296,10 +289,10 @@ def clean_and_load_to_silver(spark):
     
     # Print statistics
     print(f"\nMERGE Results:")
-    print(f"   ✅ Inserted: {stats['inserted']:,} new records")
-    print(f"   Updated: {stats['updated']:,} changed records")
-    print(f"   Skipped: {stats['skipped']:,} unchanged records")
-    print(f"   Total processed: {stats['inserted'] + stats['updated'] + stats['skipped']:,}")
+    print(f"Inserted: {stats['inserted']:,} new records")
+    print(f"Updated: {stats['updated']:,} changed records")
+    print(f"Skipped: {stats['skipped']:,} unchanged records")
+    print(f"Total processed: {stats['inserted'] + stats['updated'] + stats['skipped']:,}")
     
     # Get source file info for tracking (added by Step 1)
     source_file_info = df.select("source_file", "source_file_checksum", "source_file_size_bytes").first()
@@ -338,7 +331,7 @@ def clean_and_load_to_silver(spark):
         ingestion_details=ingestion_details,
         file_size_bytes=source_size_bytes
     )
-    print(f"✅ Logged to PostgreSQL tracking")
+    print(f"Logged to PostgreSQL tracking")
     
     return stats
 
@@ -360,15 +353,15 @@ def main():
         stats = clean_and_load_to_silver(spark)
         
         print("\n" + "=" * 80)
-        print(f"✅ STEP 2 COMPLETED")
+        print(f"STEP 2 COMPLETED")
         print("=" * 80)
-        print(f"   ✅ Inserted: {stats['inserted']:,}")
-        print(f"   Updated: {stats['updated']:,}")
-        print(f"   Skipped: {stats['skipped']:,}")
-        print(f"\n✅ Hotels Detail pipeline finished successfully!")
+        print(f"Inserted: {stats['inserted']:,}")
+        print(f"Updated: {stats['updated']:,}")
+        print(f"Skipped: {stats['skipped']:,}")
+        print(f"\nHotels Detail pipeline finished successfully!")
         
     except Exception as e:
-        print(f"\n❌ ERROR: {e}")
+        print(f"\nERROR: {e}")
         import traceback
         traceback.print_exc()
         

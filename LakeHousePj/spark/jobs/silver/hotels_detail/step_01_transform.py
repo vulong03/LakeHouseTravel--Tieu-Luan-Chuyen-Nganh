@@ -59,7 +59,6 @@ def get_latest_bronze_file(spark, bronze_base_path):
     """
     Find the latest Bronze file based on timestamp in filename
     Bronze filename format: vietnam_hotels_detail_YYYYMMDD_HHMMSS_checksum.csv
-    
     PRESERVED FROM ORIGINAL LOGIC
     """
     from pyspark.sql.functions import input_file_name
@@ -94,7 +93,7 @@ def get_latest_bronze_file(spark, bronze_base_path):
         return latest[2], latest[1], latest[3]  # file_path, checksum, file_name
         
     except Exception as e:
-        print(f"❌ LỖI khi tìm file Bronze mới nhất: {e}")
+        print(f"LỖI khi tìm file Bronze mới nhất: {e}")
         raise
 
 
@@ -110,12 +109,12 @@ def validate_data(df):
     total_nulls = sum(null_checks.values())
     
     if total_nulls > 0:
-        print(f"⚠️  Cảnh báo: Tìm thấy giá trị NULL trong các cột quan trọng:")
+        print(f"Cảnh báo: Tìm thấy giá trị NULL trong các cột quan trọng:")
         for col_name, null_count in null_checks.items():
             if null_count > 0:
-                print(f"   - {col_name}: {null_count} NULLs")
+                print(f"{col_name}: {null_count} NULLs")
         
-        print(f"   ✅ Lọc bỏ {total_nulls} bản ghi có NULL ở các trường quan trọng (yêu cầu chất lượng Silver)")
+        print(f"Lọc bỏ {total_nulls} bản ghi có NULL ở các trường quan trọng (yêu cầu chất lượng Silver)")
         
         # Build filter condition
         filter_conditions = [F.col(col).isNotNull() for col in NOT_NULL_COLUMNS]
@@ -126,10 +125,10 @@ def validate_data(df):
         df_clean = df.filter(combined_filter)
         
         clean_count = df_clean.count()
-        print(f"   ✅ Số bản ghi sạch còn lại: {clean_count}")
+        print(f"Số bản ghi sạch còn lại: {clean_count}")
         return df_clean
     else:
-        print(f"✅ Kiểm tra dữ liệu hợp lệ - không có NULL trong các cột quan trọng")
+        print(f"Kiểm tra dữ liệu hợp lệ - không có NULL trong các cột quan trọng")
         return df
 
 
@@ -137,7 +136,6 @@ def clean_province_column(df):
     """
     Clean province column for S3-safe partitioning
     Remove special characters, URL encoding, and amenities text
-    
     PRESERVED FROM ORIGINAL LOGIC
     """
     print(f"\nLàm sạch cột 'province' để đặt tên partition an toàn cho S3...")
@@ -152,30 +150,29 @@ def clean_province_column(df):
     
     return df_cleaned
 
-
 def transform_to_scratch(spark):
     """
     Transform Bronze CSV to Parquet in Scratch bucket
     Based on original transform logic
     """
     print(f"Bắt đầu chuyển đổi: Bronze → Scratch")
-    print(f"   Nguồn: {BRONZE_BASE_PATH}")
-    print(f"   Đích: {SCRATCH_BASE_PATH}")
+    print(f"Nguồn: {BRONZE_BASE_PATH}")
+    print(f"Đích: {SCRATCH_BASE_PATH}")
     
     # Find latest Bronze file
     latest_file_path, file_checksum, file_name = get_latest_bronze_file(spark, BRONZE_BASE_PATH)
     
     print(f"\nĐang xử lý: {file_name}")
-    print(f"   Checksum: {file_checksum}")
+    print(f"Checksum: {file_checksum}")
     
     # Check if already processed in Silver layer
     print(f"\nKiểm tra tracking database...")
     if check_if_file_ingested(file_checksum, POSTGRES_CONN, layer='silver'):
-        print(f"   Đã được xử lý trong lớp Silver")
-        print(f"      Checksum: {file_checksum}")
-        print(f"      Bỏ qua bước transform")
+        print(f"Đã được xử lý trong lớp Silver")
+        print(f"Checksum: {file_checksum}")
+        print(f"Bỏ qua bước transform")
         return 0
-    print(f"   Tệp mới, tiến hành chuyển đổi")
+    print(f"Tệp mới, tiến hành chuyển đổi")
     
     # Get file size
     file_size_bytes = get_s3_file_size(spark, latest_file_path)
@@ -205,9 +202,9 @@ def transform_to_scratch(spark):
     
     # Show data quality stats (PRESERVED FROM ORIGINAL)
     print(f"\nThống kê chất lượng dữ liệu:")
-    print(f"   - Hotels có rating: {df.filter(F.col('rating_score').isNotNull() & (F.col('rating_score') != '')).count():,}")
-    print(f"   - Hotels có review: {df.filter(F.col('review_count_text').isNotNull() & (F.col('review_count_text') != '')).count():,}")
-    print(f"   - Hotels có activities: {df.filter(F.col('activities').isNotNull() & (F.col('activities') != '')).count():,}")
+    print(f"Hotels có rating: {df.filter(F.col('rating_score').isNotNull() & (F.col('rating_score') != '')).count():,}")
+    print(f"Hotels có review: {df.filter(F.col('review_count_text').isNotNull() & (F.col('review_count_text') != '')).count():,}")
+    print(f"Hotels có activities: {df.filter(F.col('activities').isNotNull() & (F.col('activities') != '')).count():,}")
     
     # Add metadata columns (for tracking in Step 2)
     df_with_metadata = df \
@@ -226,9 +223,9 @@ def transform_to_scratch(spark):
     
     # Write to Scratch bucket (Parquet format, partitioned by province)
     print(f"\nGhi ra Scratch bucket...")
-    print(f"   Đường dẫn: {output_path}")
-    print(f"   Định dạng: Parquet (nén Snappy)")
-    print(f"   Partition theo: province")
+    print(f"Đường dẫn: {output_path}")
+    print(f"Định dạng: Parquet (nén Snappy)")
+    print(f"Partition theo: province")
     
     df_with_metadata.write \
         .mode("overwrite") \
@@ -237,12 +234,11 @@ def transform_to_scratch(spark):
     
     final_count = df_with_metadata.count()
     
-    print(f"\n✅ Chuyển đổi hoàn tất!")
-    print(f"   Số bản ghi đã ghi: {final_count:,}")
-    print(f"   Output: {output_path}")
+    print(f"Chuyển đổi hoàn tất!")
+    print(f"Số bản ghi đã ghi: {final_count:,}")
+    print(f"Output: {output_path}")
     
     return output_path, final_count
-
 
 def main():
     print("=" * 80)
@@ -266,13 +262,13 @@ def main():
         output_path, record_count = result
         
         print("\n" + "=" * 80)
-        print(f"✅ STEP 1 HOÀN TẤT: {record_count:,} bản ghi đã chuyển sang Scratch")
+        print(f"STEP 1 HOÀN TẤT: {record_count:,} bản ghi đã chuyển sang Scratch")
         print("=" * 80)
-        print(f"\n📂 Vị trí output: {output_path}")
+        print(f"\nVị trí output: {output_path}")
         print(f"\nTiếp theo: Chạy Step 2 (Clean & Load lên Silver)")
         
     except Exception as e:
-        print(f"\n❌ LỖI: {e}")
+        print(f"\nLỖI: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
@@ -280,7 +276,6 @@ def main():
     finally:
         if spark:
             spark.stop()
-
 
 if __name__ == "__main__":
     main()

@@ -4,8 +4,7 @@ RESET ALL SILVER LAYER - Complete Cleanup
 - Clear ALL PostgreSQL tracking logs for Silver layer
 - Clean ALL scratch bucket tmp folders
 - Drop and recreate ALL Silver tables
-
-⚠️  WARNING: This will delete ALL data in Silver layer!
+WARNING: This will delete ALL data in Silver layer!
 """
 
 import sys
@@ -36,17 +35,16 @@ SILVER_TABLES = [
     "tiktok_post_comments"
 ]
 
-
 def clear_all_postgres_tracking():
     """Clear ALL PostgreSQL tracking logs for Silver layer"""
     print(f"\n{'=' * 80}")
-    print(f"1️⃣  CLEARING POSTGRESQL TRACKING LOGS")
+    print(f"1. CLEARING POSTGRESQL TRACKING LOGS")
     print(f"{'=' * 80}")
     
     try:
         conn = psycopg2.connect(**POSTGRES_CONN)
         cursor = conn.cursor()
-        
+
         # Count all Silver tracking records
         cursor.execute("""
             SELECT COUNT(*) FROM file_ingestion_log 
@@ -54,7 +52,7 @@ def clear_all_postgres_tracking():
         """)
         count_before = cursor.fetchone()[0]
         
-        print(f"\n   Found {count_before} tracking records in Silver layer")
+        print(f"Found {count_before} tracking records in Silver layer")
         
         if count_before > 0:
             # Show breakdown by table
@@ -66,35 +64,34 @@ def clear_all_postgres_tracking():
                 ORDER BY count DESC
             """)
             
-            print(f"\n   Breakdown by table:")
+            print(f"Breakdown by table:")
             for row in cursor.fetchall():
                 table_name, count = row
                 print(f"      • {table_name}: {count} records")
             
             # Delete ALL Silver tracking records
-            print(f"\n   ⏳ Deleting all Silver tracking records...")
+            print(f"Deleting all Silver tracking records...")
             cursor.execute("""
                 DELETE FROM file_ingestion_log 
                 WHERE layer = 'silver'
             """)
             conn.commit()
             
-            print(f"   ✅ Deleted {count_before} tracking records")
+            print(f"Deleted {count_before} tracking records")
         else:
-            print(f"   ℹ️  No tracking records to delete")
+            print(f"No tracking records to delete")
         
         cursor.close()
         conn.close()
         
     except Exception as e:
-        print(f"   ⚠️  Warning: Could not clear tracking: {e}")
-        print(f"      (This is OK if table doesn't exist yet)")
-
+        print(f"Warning: Could not clear tracking: {e}")
+        print(f"(This is OK if table doesn't exist yet)")
 
 def delete_all_silver_tables_data(spark):
     """Delete all data from ALL Silver Iceberg tables"""
     print(f"\n{'=' * 80}")
-    print(f"2️⃣  DELETING ALL SILVER TABLES DATA")
+    print(f"2. DELETING ALL SILVER TABLES DATA")
     print(f"{'=' * 80}")
     
     try:
@@ -105,15 +102,15 @@ def delete_all_silver_tables_data(spark):
         tables = spark.sql(f"SHOW TABLES IN silver.{SILVER_DATABASE}").collect()
         existing_tables = [t.tableName for t in tables]
         
-        print(f"\n   Found {len(existing_tables)} tables in Silver database:")
+        print(f"Found {len(existing_tables)} tables in Silver database:")
         for table in existing_tables:
-            print(f"      • {table}")
+            print(f" • {table}")
         
         if not existing_tables:
-            print(f"\n   ℹ️  No tables found in Silver database")
+            print(f"No tables found in Silver database")
             return
         
-        print(f"\n   ⏳ Deleting data from all tables...")
+        print(f"Deleting data from all tables...")
         
         total_deleted = 0
         for table_name in existing_tables:
@@ -124,38 +121,37 @@ def delete_all_silver_tables_data(spark):
                 count_before = spark.sql(f"SELECT COUNT(*) as count FROM {full_table}").collect()[0]['count']
                 
                 if count_before > 0:
-                    print(f"\n      {table_name}:")
-                    print(f"         Records before: {count_before:,}")
+                    print(f"\n{table_name}:")
+                    print(f"Records before: {count_before:,}")
                     
                     # Delete all records
                     spark.sql(f"DELETE FROM {full_table} WHERE 1=1")
                     
                     # Verify
                     count_after = spark.sql(f"SELECT COUNT(*) as count FROM {full_table}").collect()[0]['count']
-                    print(f"         Records after: {count_after:,}")
-                    print(f"         ✅ Deleted: {count_before:,} records")
+                    print(f"Records after: {count_after:,}")
+                    print(f"Deleted: {count_before:,} records")
                     
                     total_deleted += count_before
                 else:
-                    print(f"\n      {table_name}: Already empty ✓")
+                    print(f"{table_name}: Already empty ✓")
                     
             except Exception as e:
-                print(f"\n      {table_name}: ⚠️  Error - {e}")
+                print(f"{table_name}:  Error - {e}")
         
-        print(f"\n   {'=' * 70}")
-        print(f"   ✅ TOTAL DELETED: {total_deleted:,} records from {len(existing_tables)} tables")
-        print(f"   {'=' * 70}")
+        print(f"\n{'=' * 70}")
+        print(f"TOTAL DELETED: {total_deleted:,} records from {len(existing_tables)} tables")
+        print(f"{'=' * 70}")
             
     except Exception as e:
-        print(f"   ❌ Error: {e}")
+        print(f"Error: {e}")
         import traceback
         traceback.print_exc()
-
 
 def drop_all_silver_tables(spark):
     """Drop ALL Silver tables"""
     print(f"\n{'=' * 80}")
-    print(f"3️⃣  DROPPING ALL SILVER TABLES")
+    print(f"3. DROPPING ALL SILVER TABLES")
     print(f"{'=' * 80}")
     
     try:
@@ -167,10 +163,10 @@ def drop_all_silver_tables(spark):
         existing_tables = [t.tableName for t in tables]
         
         if not existing_tables:
-            print(f"\n   ℹ️  No tables to drop")
+            print(f"No tables to drop")
             return
         
-        print(f"\n   ⏳ Dropping {len(existing_tables)} tables...")
+        print(f"Dropping {len(existing_tables)} tables...")
         
         dropped_count = 0
         for table_name in existing_tables:
@@ -179,34 +175,33 @@ def drop_all_silver_tables(spark):
             try:
                 # Use PURGE to force delete data files
                 spark.sql(f"DROP TABLE IF EXISTS {full_table} PURGE")
-                print(f"      ✅ Dropped: {table_name} (with PURGE)")
+                print(f"Dropped: {table_name} (with PURGE)")
                 dropped_count += 1
             except Exception as e:
-                print(f"      ⚠️  Could not drop {table_name}: {e}")
+                print(f"Could not drop {table_name}: {e}")
         
-        print(f"\n   ✅ Dropped {dropped_count} tables")
+        print(f"Dropped {dropped_count} tables")
         
         # Verify Silver database is empty
         remaining = spark.sql(f"SHOW TABLES IN {SILVER_DATABASE}").collect()
         if remaining:
-            print(f"\n   ⚠️  Warning: {len(remaining)} tables still remain:")
+            print(f"Warning: {len(remaining)} tables still remain:")
             for t in remaining:
-                print(f"      • {t.tableName}")
+                print(f" • {t.tableName}")
         else:
-            print(f"\n   ✅ Silver database is now EMPTY")
+            print(f"Silver database is now EMPTY")
         
     except Exception as e:
-        print(f"   ❌ Error: {e}")
+        print(f"Error: {e}")
         import traceback
         traceback.print_exc()
-
 
 def cleanup_silver_minio_bucket(spark):
     """FORCE DELETE all files in Silver MinIO bucket"""
     print(f"\n{'=' * 80}")
-    print(f"3.5️⃣  FORCE CLEANING SILVER MINIO BUCKET")
+    print(f"4. FORCE CLEANING SILVER MINIO BUCKET")
     print(f"{'=' * 80}")
-    print(f"\n   ⚠️  Manually deleting ALL files in s3a://silver/lakehouse/...")
+    print(f"\nManually deleting ALL files in s3a://silver/lakehouse/...")
     
     try:
         hadoop_conf = spark._jsc.hadoopConfiguration()
@@ -229,30 +224,29 @@ def cleanup_silver_minio_bucket(spark):
                 folder_name = path_str.split("/")[-1]
                 folders.append(folder_name)
             
-            print(f"\n   Found {len(folders)} table folders to delete:")
+            print(f"Found {len(folders)} table folders to delete:")
             for folder in folders:
-                print(f"      • {folder}")
+                print(f"  • {folder}")
             
             if len(folders) > 0:
                 # Delete entire lakehouse folder (all tables)
-                print(f"\n   ⏳ Deleting ALL table folders and data files...")
+                print(f"Deleting ALL table folders and data files...")
                 fs.delete(hadoop_path, True)  # True = recursive
-                print(f"   ✅ FORCE DELETED: {base_path}")
-                print(f"   ✅ Removed {len(folders)} table folders with ALL Parquet/metadata files")
+                print(f"FORCE DELETED: {base_path}")
+                print(f"Removed {len(folders)} table folders with ALL Parquet/metadata files")
             else:
-                print(f"\n   ℹ️  No folders to delete")
+                print(f"No folders to delete")
         else:
-            print(f"\n   ℹ️  Path does not exist: {base_path}")
+            print(f"Path does not exist: {base_path}")
             
     except Exception as e:
-        print(f"   ⚠️  Warning: Could not cleanup MinIO: {e}")
-        print(f"   💡 Try manual cleanup via MinIO Console: http://localhost:9001")
-
+        print(f"Warning: Could not cleanup MinIO: {e}")
+        print(f"Try manual cleanup via MinIO Console: http://localhost:9001")
 
 def cleanup_all_scratch_bucket(spark):
     """Clean up ALL scratch bucket tmp folders"""
     print(f"\n{'=' * 80}")
-    print(f"4️⃣  CLEANING SCRATCH BUCKET")
+    print(f"5. CLEANING SCRATCH BUCKET")
     print(f"{'=' * 80}")
     
     try:
@@ -271,26 +265,25 @@ def cleanup_all_scratch_bucket(spark):
             status_list = fs.listStatus(hadoop_path)
             folders = [str(status.getPath()).split("/")[-1] for status in status_list]
             
-            print(f"\n   Found {len(folders)} table folders:")
+            print(f"Found {len(folders)} table folders:")
             for folder in folders:
                 print(f"      • {folder}")
             
             # Delete entire Silver pipeline folder
-            print(f"\n   ⏳ Deleting all tmp folders...")
+            print(f"Deleting all tmp folders...")
             fs.delete(hadoop_path, True)  # True = recursive
-            print(f"   ✅ Deleted: {base_path}")
-            print(f"   ✅ Removed {len(folders)} table folders with all run histories")
+            print(f"Deleted: {base_path}")
+            print(f"Removed {len(folders)} table folders with all run histories")
         else:
-            print(f"\n   ℹ️  No tmp folders found")
+            print(f"No tmp folders found")
             
     except Exception as e:
-        print(f"   ⚠️  Warning: Could not cleanup scratch: {e}")
-
+        print(f"Warning: Could not cleanup scratch: {e}")
 
 def cleanup_gold_scratch_bucket(spark):
     """Clean up Gold scratch bucket as well (if needed)"""
     print(f"\n{'=' * 80}")
-    print(f"5️⃣  CLEANING GOLD SCRATCH BUCKET (Optional)")
+    print(f"6. CLEANING GOLD SCRATCH BUCKET (Optional)")
     print(f"{'=' * 80}")
     
     try:
@@ -309,26 +302,25 @@ def cleanup_gold_scratch_bucket(spark):
             status_list = fs.listStatus(hadoop_path)
             folders = [str(status.getPath()).split("/")[-1] for status in status_list]
             
-            print(f"\n   Found {len(folders)} Gold table folders:")
+            print(f"Found {len(folders)} Gold table folders:")
             for folder in folders:
-                print(f"      • {folder}")
+                print(f"    • {folder}")
             
             # Delete entire Gold pipeline folder
-            print(f"\n   ⏳ Deleting all Gold tmp folders...")
+            print(f"Deleting all Gold tmp folders...")
             fs.delete(hadoop_path, True)  # True = recursive
-            print(f"   ✅ Deleted: {base_path}")
+            print(f"Deleted: {base_path}")
         else:
-            print(f"\n   ℹ️  No Gold tmp folders found")
+            print(f"No Gold tmp folders found")
             
     except Exception as e:
-        print(f"   ℹ️  Info: {e}")
-
+        print(f"Info: {e}")
 
 def main():
     print("\n" + "=" * 80)
-    print("⚠️  ⚠️  ⚠️   RESET ALL SILVER LAYER   ⚠️  ⚠️  ⚠️")
+    print("RESET ALL SILVER LAYER")
     print("=" * 80)
-    print("\n🔥 THIS WILL DELETE EVERYTHING IN SILVER LAYER! 🔥\n")
+    print("\nTHIS WILL DELETE EVERYTHING IN SILVER LAYER! \n")
     print("Actions:")
     print("   1. Clear ALL PostgreSQL tracking logs (layer='silver')")
     print("   2. Delete ALL data from Silver Iceberg tables")
@@ -336,7 +328,7 @@ def main():
     print("   4. Clean ALL scratch bucket tmp folders")
     print("   5. Clean Gold scratch bucket (optional)")
     print("\n" + "=" * 80)
-    print("⚠️  THIS IS A DESTRUCTIVE OPERATION - NO UNDO!")
+    print("THIS IS A DESTRUCTIVE OPERATION - NO UNDO!")
     print("=" * 80 + "\n")
     
     spark = None
@@ -346,7 +338,7 @@ def main():
         clear_all_postgres_tracking()
         
         # Step 2-5: Spark operations
-        print(f"\n🔥 Starting Spark session...")
+        print(f"\n Starting Spark session...")
         spark = get_spark_session(app_name="Reset_All_Silver_Layer")
         
         delete_all_silver_tables_data(spark)
@@ -357,19 +349,19 @@ def main():
         
         # Final summary
         print(f"\n" + "=" * 80)
-        print(f"✅ ✅ ✅  COMPLETE RESET SUCCESSFUL  ✅ ✅ ✅")
+        print(f"COMPLETE RESET SUCCESSFUL")
         print(f"=" * 80)
         print(f"")
-        print(f"📊 Summary:")
+        print(f"Summary:")
         print(f"   • PostgreSQL tracking: ALL Silver records cleared")
         print(f"   • Silver tables: ALL dropped (with PURGE)")
         print(f"   • MinIO Silver bucket: ALL data files FORCE DELETED")
         print(f"   • Scratch bucket: ALL tmp folders cleaned")
         print(f"   • Gold scratch: Cleaned (if existed)")
         print(f"")
-        print(f"🏗️  Silver layer is now completely clean!")
+        print(f"Silver layer is now completely clean!")
         print(f"")
-        print(f"🚀 Next steps:")
+        print(f"Next steps:")
         print(f"   1. Re-run Bronze ingestion (if needed)")
         print(f"   2. Run Silver pipelines for each table:")
         print(f"      • hotels_list")
@@ -383,7 +375,7 @@ def main():
         
     except Exception as e:
         print(f"\n{'=' * 80}")
-        print(f"❌ RESET FAILED")
+        print(f"RESET FAILED")
         print(f"{'=' * 80}")
         print(f"Error: {e}")
         print("")
@@ -394,7 +386,6 @@ def main():
     finally:
         if spark:
             spark.stop()
-
-
+            
 if __name__ == "__main__":
     main()

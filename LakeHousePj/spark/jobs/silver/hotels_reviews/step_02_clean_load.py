@@ -77,11 +77,11 @@ def parse_review_date(df):
     null_before = df.filter(F.col("review_date").isNull()).count()
     parsed_count = df_with_date.filter(F.col("review_date").isNotNull()).count()
 
-    print(f"   Tổng số bản ghi: {total_count:,}")
-    print(f"   NULL trước khi parse: {null_before:,}")
-    print(f"   Parse thành công: {parsed_count:,}")
+    print(f"Tổng số bản ghi: {total_count:,}")
+    print(f"NULL trước khi parse: {null_before:,}")
+    print(f"Parse thành công: {parsed_count:,}")
     if total_count - null_before > 0:
-        print(f"   Tỷ lệ parse: {(parsed_count / (total_count - null_before) * 100):.2f}%")
+        print(f"Tỷ lệ parse: {(parsed_count / (total_count - null_before) * 100):.2f}%")
 
     return df_with_date
 
@@ -123,7 +123,7 @@ def clean_and_transform(df):
     try:
         total_stay = df_cleaned.count()
         parsed_stay = df_cleaned.filter((F.col("_stay_month") != "") & (F.col("_stay_year") != "")).count()
-        print(f"   Tổng bản ghi stay_date: {total_stay:,}, parse được MM/YYYY: {parsed_stay:,}")
+        print(f"Tổng bản ghi stay_date: {total_stay:,}, parse được MM/YYYY: {parsed_stay:,}")
     except Exception:
         pass
 
@@ -170,18 +170,14 @@ def clean_and_transform(df):
         after_neg_null = df_cleaned.filter(F.col("review_negative").isNull()).count()
         after_title_null = df_cleaned.filter(F.col("review_title").isNull()).count()
         if before_pos_null is not None:
-            print(f"   review_positive NULL trước: {before_pos_null}, sau: {after_pos_null}")
-            print(f"   review_negative NULL trước: {before_neg_null}, sau: {after_neg_null}")
-            print(f"   review_title NULL trước: {before_title_null}, sau: {after_title_null}")
+            print(f"review_positive NULL trước: {before_pos_null}, sau: {after_pos_null}")
+            print(f"review_negative NULL trước: {before_neg_null}, sau: {after_neg_null}")
+            print(f"review_title NULL trước: {before_title_null}, sau: {after_title_null}")
     except Exception:
         pass
 
-    # 5. (Removed) No light cleaning applied to `room_type` — value will be kept as in source
-
-    # 6. (Removed) No normalization or mapping applied to `traveler_type`
-
     # 7. Loại bản ghi có NULL ở các cột business quan trọng
-    print("\n⚠️  Đang loại các bản ghi có NULL ở `review_date`, `traveler_type`, `review_score`, `room_type`...")
+    print("\nĐang loại các bản ghi có NULL ở `review_date`, `traveler_type`, `review_score`, `room_type`...")
     before_null_filter = df_cleaned.count()
     df_cleaned = df_cleaned.filter(
         (F.col("review_date").isNotNull()) &
@@ -194,9 +190,9 @@ def clean_and_transform(df):
     )
     after_null_filter = df_cleaned.count()
     removed_nulls = before_null_filter - after_null_filter
-    print(f"   Số bản ghi trước khi filter NULL: {before_null_filter:,}")
-    print(f"   Số bản ghi sau khi filter NULL:  {after_null_filter:,}")
-    print(f"   Số bản ghi bị loại (NULL):       {removed_nulls:,}")
+    print(f"Số bản ghi trước khi filter NULL: {before_null_filter:,}")
+    print(f"Số bản ghi sau khi filter NULL:  {after_null_filter:,}")
+    print(f"Số bản ghi bị loại (NULL):       {removed_nulls:,}")
 
     # 8. Keep cleaned room_type as-is (no grouping)
     print("\nĐang giữ nguyên `room_type` đã được làm sạch (không gom nhóm)...")
@@ -242,12 +238,12 @@ def get_latest_scratch_run(spark):
 
         latest_path = f"{SCRATCH_BASE_PATH}/{latest_run}"
         print(f"Run Scratch mới nhất: {latest_run}")
-        print(f"   Path: {latest_path}")
+        print(f"Path: {latest_path}")
 
         return latest_path, latest_run
 
     except Exception as e:
-        print(f"❌ Lỗi khi tìm Scratch run mới nhất: {e}")
+        print(f"Lỗi khi tìm Scratch run mới nhất: {e}")
         raise
 
 
@@ -266,9 +262,7 @@ def create_silver_table(spark):
         StructField("review_score", DoubleType(), True),
         StructField("review_positive", StringType(), True),
         StructField("review_negative", StringType(), True),
-
         StructField("row_checksum", StringType(), False),
-
         StructField("ingestion_timestamp", TimestampType(), False),
         StructField("source_file", StringType(), False),
         StructField("source_file_checksum", StringType(), False),
@@ -313,15 +307,15 @@ def deduplicate_with_left_anti_join(spark, df_new):
         duplicate_count = total_count - new_count
 
         print("\nKết quả deduplication:")
-        print(f"   Tổng từ Scratch: {total_count:,}")
-        print(f"   Bản ghi mới: {new_count:,}")
-        print(f"   Bản ghi trùng (bỏ qua): {duplicate_count:,}")
+        print(f"Tổng từ Scratch: {total_count:,}")
+        print(f"Bản ghi mới: {new_count:,}")
+        print(f"Bản ghi trùng (bỏ qua): {duplicate_count:,}")
 
         return df_deduplicated, new_count, duplicate_count
 
     except Exception as e:
         print(f"Silver table rỗng hoặc chưa tồn tại ({e})")
-        print("   Tất cả bản ghi đều là mới (lần ingest đầu tiên)")
+        print("Tất cả bản ghi đều là mới (lần ingest đầu tiên)")
         new_count = df_new.count()
         return df_new, new_count, 0
 
@@ -331,8 +325,8 @@ def clean_and_load_to_silver(spark):
     Main ETL: Đọc Scratch Parquet → Clean → Deduplicate → Load vào Silver
     """
     print("STEP 2: Clean & Load (Scratch → Silver)")
-    print(f"   Source (Scratch): {SCRATCH_BASE_PATH}")
-    print(f"   Target (Silver): {SILVER_TABLE}")
+    print(f"Source (Scratch): {SCRATCH_BASE_PATH}")
+    print(f"Target (Silver): {SILVER_TABLE}")
 
     scratch_path, run_id = get_latest_scratch_run(spark)
 
@@ -343,7 +337,7 @@ def clean_and_load_to_silver(spark):
     print(f"Số bản ghi đọc từ Scratch: {scratch_count:,}")
 
     if scratch_count == 0:
-        print("⚠️  Không có dữ liệu trong Scratch - không có gì để xử lý")
+        print("Không có dữ liệu trong Scratch - không có gì để xử lý")
         return 0
 
     source_metadata = df_scratch.select(
@@ -357,9 +351,9 @@ def clean_and_load_to_silver(spark):
     source_size_bytes = source_metadata["source_file_size_bytes"]
 
     print("\nThông tin file nguồn:")
-    print(f"   Tên file: {source_file}")
-    print(f"   Checksum: {source_checksum}")
-    print(f"   Kích thước: {source_size_bytes / (1024 * 1024):.2f} MB")
+    print(f"Tên file: {source_file}")
+    print(f"Checksum: {source_checksum}")
+    print(f"Kích thước: {source_size_bytes / (1024 * 1024):.2f} MB")
 
     df_cleaned = clean_and_transform(df_scratch)
 
@@ -379,7 +373,7 @@ def clean_and_load_to_silver(spark):
         print(f"Số bản ghi sau filter ({filter_desc}): {filtered_count:,}")
 
         if filtered_count == 0:
-            print(f"⚠️  Không có bản ghi cho {filter_desc} - bỏ qua batch này")
+            print(f"Không có bản ghi cho {filter_desc} - bỏ qua batch này")
             return 0
 
     print(f"\nĐang tính row_checksum (MD5 trên {len(BUSINESS_COLUMNS)} cột business)...")
@@ -395,14 +389,14 @@ def clean_and_load_to_silver(spark):
             .using("iceberg") \
             .append()
 
-        print(f"✅ Append thành công {new_count:,} bản ghi vào Silver")
+        print(f"Append thành công {new_count:,} bản ghi vào Silver")
 
         print("\nThống kê Silver table sau khi load:")
         silver_df = spark.table(SILVER_TABLE)
         total_silver = silver_df.count()
-        print(f"   Tổng số bản ghi trong Silver: {total_silver:,}")
+        print(f"Tổng số bản ghi trong Silver: {total_silver:,}")
 
-        print("\n   Top 10 khách sạn theo số lượng review:")
+        print("\nTop 10 khách sạn theo số lượng review:")
         silver_df.groupBy("hotel_name") \
             .count() \
             .orderBy(F.desc("count")) \
@@ -444,7 +438,6 @@ def clean_and_load_to_silver(spark):
 
     return new_count
 
-
 def main():
     import argparse
     parser = argparse.ArgumentParser()
@@ -480,19 +473,18 @@ def main():
 
         print("\n" + "=" * 80)
         if record_count > 0:
-            print(f"✅ STEP 2 HOÀN TẤT: Đã load {record_count:,} bản ghi vào Silver")
+            print(f"STEP 2 HOÀN TẤT: Đã load {record_count:,} bản ghi vào Silver")
         else:
-            print("✅ STEP 2 HOÀN TẤT: Không có bản ghi mới để load")
+            print("STEP 2 HOÀN TẤT: Không có bản ghi mới để load")
         print("=" * 80)
 
     except Exception as e:
-        print(f"\n❌ LỖI: {e}")
+        print(f"\nLỖI: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
     finally:
         spark.stop()
-
 
 if __name__ == "__main__":
     main()

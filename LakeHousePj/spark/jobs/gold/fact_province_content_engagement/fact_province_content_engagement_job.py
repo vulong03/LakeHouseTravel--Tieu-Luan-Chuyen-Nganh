@@ -81,7 +81,7 @@ def create_fact_table(spark: SparkSession) -> None:
 
 def load_dim_post_data(spark: SparkSession) -> Tuple[DataFrame, Dict[str, Any]]:
     """Load the subset of dim_post required for aggregation and report stats."""
-    print("\n📥 Loading dim_post data...")
+    print("\nLoading dim_post data...")
     df = (
         spark.table(DIM_POST_TABLE)
         .select(
@@ -97,8 +97,8 @@ def load_dim_post_data(spark: SparkSession) -> Tuple[DataFrame, Dict[str, Any]]:
     total = df.count()
     provinces = df.select("province_sk").distinct().count()
     dates = df.select("post_date_sk").distinct().count()
-    print(f"   - Loaded {total:,} posts with province & post_date")
-    print(f"     · Distinct provinces: {provinces}, distinct dates: {dates}")
+    print(f"Loaded {total:,} posts with province & post_date")
+    print(f"Distinct provinces: {provinces}, distinct dates: {dates}")
 
     stats = {
         "total_records": total,
@@ -110,7 +110,7 @@ def load_dim_post_data(spark: SparkSession) -> Tuple[DataFrame, Dict[str, Any]]:
 
 def load_post_metrics_data(spark: SparkSession) -> Tuple[DataFrame, Dict[str, Any]]:
     """Load latest metrics per post from the silver table and log details."""
-    print("\n📥 Loading post metrics from silver...")
+    print("\nLoading post metrics from silver...")
     raw_df = spark.table(POST_METRICS_TABLE).select(
         "post_url",
         "likes",
@@ -143,9 +143,9 @@ def load_post_metrics_data(spark: SparkSession) -> Tuple[DataFrame, Dict[str, An
     raw_count = raw_df.count()
     latest_count = df.count()
     with_metrics = df.select("post_url").distinct().count()
-    print(f"   - Raw metric rows: {raw_count:,}")
-    print(f"   - Prepared latest metrics for {latest_count:,} rows")
-    print(f"     · Distinct posts with metrics: {with_metrics:,}")
+    print(f"Raw metric rows: {raw_count:,}")
+    print(f"Prepared latest metrics for {latest_count:,} rows")
+    print(f"Distinct posts with metrics: {with_metrics:,}")
 
     stats = {
         "raw_rows": raw_count,
@@ -162,7 +162,7 @@ def prepare_aggregated_fact(
     metric_stats: Dict[str, Any],
 ) -> Tuple[DataFrame, int]:
     """Join inputs, aggregate by province & date, and return fact DataFrame."""
-    print("\n🔄 Joining and aggregating data...")
+    print("\nJoining and aggregating data...")
 
     joined = (
         dim_post_df.alias("dp")
@@ -171,8 +171,8 @@ def prepare_aggregated_fact(
 
     matched_posts = joined.select("dp.post_sk").distinct().count()
     unmatched_posts = dim_stats["total_records"] - matched_posts
-    print(f"   - Joined posts with metrics: {matched_posts:,}")
-    print(f"   - Posts without metrics: {unmatched_posts:,}")
+    print(f"Joined posts with metrics: {matched_posts:,}")
+    print(f"Posts without metrics: {unmatched_posts:,}")
 
     prepared = (
         joined.select(
@@ -240,13 +240,13 @@ def prepare_aggregated_fact(
 
     fact_df = fact_df.cache()
     record_count = fact_df.count()
-    print(f"   - Aggregated {record_count:,} fact rows")
+    print(f"Aggregated {record_count:,} fact rows")
     return fact_df, record_count
 
 
 def write_to_gold_table(fact_df: DataFrame) -> None:
     """Persist the fact data to the Iceberg table."""
-    print("\n💾 Writing fact data to Gold table...")
+    print("\nWriting fact data to Gold table...")
     (
         fact_df.coalesce(1)
         .writeTo(GOLD_TABLE_FULL)
@@ -258,7 +258,7 @@ def write_to_gold_table(fact_df: DataFrame) -> None:
 
 def validate_results(fact_df: DataFrame) -> None:
     """Display basic statistics for sanity checking."""
-    print("\n✅ Validation sample (top provinces by engagement):")
+    print("\nValidation sample (top provinces by engagement):")
     (
         fact_df.orderBy(F.desc("engagement_score"))
         .select(
@@ -309,8 +309,8 @@ def main():
         fact_df.unpersist()
 
         print("\n============================================")
-        print("✅ fact_province_content_engagement completed!")
-        print(f"   Rows written: {record_count:,}")
+        print("fact_province_content_engagement completed!")
+        print(f"Rows written: {record_count:,}")
         print("============================================")
 
     except Exception as exc:
@@ -319,7 +319,7 @@ def main():
             table_name=GOLD_TABLE_FULL,
             error_message=str(exc),
         )
-        print("\n❌ Fact job failed!")
+        print("\nFact job failed!")
         raise
     finally:
         if fact_df is not None:

@@ -2,7 +2,6 @@
 Bronze Layer - RAW CSV Ingestion: Booking Hotels Detail
 Source: /data/raw/booking/vietnam_hotels_detail.csv
 Target: s3a://bronze/booking/raw/*.csv (versioned by timestamp + checksum)
-
 Purpose:
 - Copy raw CSV AS-IS (no transformation, multiLine support for long descriptions)
 - Add filename with timestamp + checksum for versioning
@@ -33,11 +32,9 @@ POSTGRES_CONN = {
     'password': 'lakehouse_pass'
 }
 
-
 def ingest_raw_csv_to_bronze(source_path: str, bronze_bucket: str, source_type: str):
     """
-    Ingest RAW CSV to Bronze layer (with multiLine support for detail descriptions)
-    
+    Ingest RAW CSV to Bronze layer (with multiLine support for detail descriptions)   
     Args:
         source_path: Local path to CSV file
         bronze_bucket: MinIO bucket name
@@ -45,31 +42,29 @@ def ingest_raw_csv_to_bronze(source_path: str, bronze_bucket: str, source_type: 
     """
     
     spark = get_spark_session(app_name=f"Bronze_RAW_Ingest_{source_type}")
-    
     try:
         file_name = os.path.basename(source_path)
         file_size = os.path.getsize(source_path)
-        
         print(f"=" * 80)
-        print(f"📥 BRONZE RAW INGESTION: {file_name}")
+        print(f"BRONZE RAW INGESTION: {file_name}")
         print(f"=" * 80)
-        print(f"📁 Source: {source_path}")
-        print(f"📊 Size: {file_size / 1024 / 1024:.2f} MB")
+        print(f"Source: {source_path}")
+        print(f"Size: {file_size / 1024 / 1024:.2f} MB")
         
         # Calculate checksum
-        print(f"\n1️⃣  Calculating file checksum...")
+        print(f"1. Calculating file checksum...")
         file_checksum = calculate_file_checksum(source_path)
-        print(f"   🔐 Checksum: {file_checksum}")
+        print(f"Checksum: {file_checksum}")
         
         # Check if already ingested
-        print(f"\n2️⃣  Checking if file already ingested...")
+        print(f"2. Checking if file already ingested...")
         if check_if_file_ingested(file_checksum, POSTGRES_CONN, layer='bronze'):
-            print(f"   ⏭️  File already exists in Bronze - Skipping")
+            print(f"File already exists in Bronze -> Skipping")
             return {'status': 'skipped', 'checksum': file_checksum}
-        print(f"   ✅ File is new - proceeding")
+        print(f"File is new - proceeding")
         
         # Read CSV raw (multiLine for descriptions) - ONLY FOR VALIDATION
-        print(f"\n3️⃣  Validating CSV file (multiLine mode)...")
+        print(f"3. Validating CSV file (multiLine mode)...")
         df = spark.read \
             .option("header", "true") \
             .option("inferSchema", "false") \
@@ -80,21 +75,21 @@ def ingest_raw_csv_to_bronze(source_path: str, bronze_bucket: str, source_type: 
         
         record_count = df.count()
         columns = df.columns
-        print(f"   📊 Records: {record_count}")
-        print(f"   📋 Columns: {len(columns)}")
+        print(f"Records: {record_count}")
+        print(f"Columns: {len(columns)}")
         
         # Generate timestamped filename
-        print(f"\n4️⃣  Generating versioned filename...")
+        print(f"4. Generating versioned filename...")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         base_name = os.path.splitext(file_name)[0]
         new_filename = f"{base_name}_{timestamp}_{file_checksum[:8]}.csv"
-        print(f"   📝 New filename: {new_filename}")
+        print(f"New filename: {new_filename}")
         
         # Upload ORIGINAL FILE directly (no repartition to preserve multiLine structure)
         bronze_output = f"s3a://{bronze_bucket}/lakehouse/{source_type}/raw/{new_filename}"
-        print(f"\n5️⃣  Uploading ORIGINAL file to Bronze...")
-        print(f"   📁 Target: {bronze_output}")
-        print(f"   ⚠️  Using direct file upload (no DataFrame repartition) to preserve multiLine CSV structure")
+        print(f"5. Uploading ORIGINAL file to Bronze...")
+        print(f"Target: {bronze_output}")
+        print(f"Using direct file upload (no DataFrame repartition) to preserve multiLine CSV structure")
         
         # Use single file uploader (preserves multiLine structure)
         upload_result = copy_file_to_bronze_with_utf8(
@@ -108,10 +103,10 @@ def ingest_raw_csv_to_bronze(source_path: str, bronze_bucket: str, source_type: 
             raise Exception(f"Upload failed: {upload_result.get('error', 'Unknown error')}")
         
         bronze_output = upload_result['location']
-        print(f"   ✅ Write completed")
+        print(f"Write completed")
         
         # Log to PostgreSQL
-        print(f"\n6️⃣  Logging to PostgreSQL...")
+        print(f"6. Logging to PostgreSQL...")
         
         ingestion_details = {
             "source_format": "csv",
@@ -135,7 +130,7 @@ def ingest_raw_csv_to_bronze(source_path: str, bronze_bucket: str, source_type: 
         )
         
         print(f"\n" + "=" * 80)
-        print(f"✅ BRONZE INGESTION COMPLETED")
+        print(f"BRONZE INGESTION COMPLETED")
         print(f"=" * 80)
         print(f"   Records: {record_count} | Checksum: {file_checksum[:8]}")
         print(f"=" * 80)
@@ -143,7 +138,7 @@ def ingest_raw_csv_to_bronze(source_path: str, bronze_bucket: str, source_type: 
         return {'status': 'success', 'filename': new_filename, 'records': record_count}
         
     except Exception as e:
-        print(f"\n❌ ERROR: {str(e)}")
+        print(f"ERROR: {str(e)}")
         try:
             log_ingestion_to_postgres(
                 file_path=source_path,
@@ -162,7 +157,6 @@ def ingest_raw_csv_to_bronze(source_path: str, bronze_bucket: str, source_type: 
     finally:
         spark.stop()
 
-
 def main():
     source_path = "/data/raw/booking/vietnam_hotels_detail.csv"
     bronze_bucket = "bronze"
@@ -179,9 +173,8 @@ def main():
     
     # Print result for test scripts
     if result and result.get('status') == 'skipped':
-        print("\n⏭️  SKIPPED - File already ingested")
+        print("SKIPPED - File already ingested")
         sys.exit(0)
-
 
 if __name__ == "__main__":
     main()

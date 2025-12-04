@@ -6,7 +6,6 @@ class SparkSubmitCommand:
     """
     Spark Submit command builder for Lakehouse jobs
     """
-    
     BASE_CMD = """
     docker exec lakehouse_spark_master /opt/spark/bin/spark-submit \
         --master spark://spark-master:7077 \
@@ -34,13 +33,11 @@ class SparkSubmitCommand:
     def build(cls, job_path: str, bucket: str = 'bronze', extra_conf: str = '', args: str = '') -> str:
         """
         Build Spark submit command
-        
         Args:
             job_path: Path to Spark job (e.g., /opt/spark/jobs/bronze/ingest_tiktok_videos.py)
             bucket: S3 bucket name (bronze, silver, gold)
             extra_conf: Additional Spark configurations
             args: Command-line arguments for the job
-            
         Returns:
             Complete spark-submit command
         """
@@ -64,13 +61,10 @@ class SparkSubmitCommand:
     def bronze_raw_job(cls, job_config: dict) -> str:
         """
         Bronze RAW ingestion job with cluster mode (direct file upload)
-        
         Args:
             job_config: Dict with 'script', 'source', 'bucket', 'type'
-            
         Returns:
             Complete spark-submit command for RAW ingestion
-        
         Note:
             Now uses cluster mode because:
             1. Bronze RAW jobs upload files DIRECTLY via mc client (no temp files)

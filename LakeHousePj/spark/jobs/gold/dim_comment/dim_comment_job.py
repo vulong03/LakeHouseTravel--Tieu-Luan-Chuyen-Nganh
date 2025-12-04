@@ -94,18 +94,18 @@ def create_dim_comment_table(spark):
 
 def load_source_data(spark) -> DataFrame:
     """Load comment data from Silver layer"""
-    print(f"\n📥 Loading source data from: {SOURCE_COMMENTS_TABLE}")
+    print(f"\nLoading source data from: {SOURCE_COMMENTS_TABLE}")
     df_comments = spark.table(SOURCE_COMMENTS_TABLE)
 
     comments_count = df_comments.count()
-    print(f"✅ Loaded {comments_count:,} records from {SOURCE_COMMENTS_TABLE}")
+    print(f"Loaded {comments_count:,} records from {SOURCE_COMMENTS_TABLE}")
 
     return df_comments
 
 
 def join_with_dim_post(spark, df: DataFrame) -> DataFrame:
     """Join with dim_post to get post_sk"""
-    print("\n🔗 Joining with dim_post...")
+    print("\nJoining with dim_post...")
     
     # Load dim_post
     df_post = spark.table(DIM_POST_TABLE).select(
@@ -122,14 +122,14 @@ def join_with_dim_post(spark, df: DataFrame) -> DataFrame:
     
     missing_count = df_joined.filter(F.col("post_sk").isNull()).count()
     if missing_count > 0:
-        print(f"⚠️  Warning: {missing_count} comments have no matching post in dim_post")
+        print(f"Warning: {missing_count} comments have no matching post in dim_post")
     
     return df_joined
 
 
 def join_with_dim_date(spark, df: DataFrame) -> DataFrame:
     """Join with dim_date to get comment_date_sk"""
-    print("\n🔗 Joining with dim_date...")
+    print("\nJoining with dim_date...")
     
     # Load dim_date
     df_date = spark.table(DIM_DATE_TABLE).select(
@@ -149,14 +149,14 @@ def join_with_dim_date(spark, df: DataFrame) -> DataFrame:
         F.col("comment_date").isNotNull() & F.col("comment_date_sk").isNull()
     ).count()
     if missing_count > 0:
-        print(f"⚠️  Warning: {missing_count} comments have comment_date but no matching date in dim_date")
+        print(f"Warning: {missing_count} comments have comment_date but no matching date in dim_date")
     
     return df_joined
 
 
 def transform_level_comment(df: DataFrame) -> DataFrame:
     """Convert level_comment from string 'Yes'/'No' to integer 1/2"""
-    print("\n🔧 Converting level_comment to integer...")
+    print("\nConverting level_comment to integer...")
     
     df = df.withColumn(
         "comment_level",
@@ -171,17 +171,16 @@ def transform_level_comment(df: DataFrame) -> DataFrame:
     
     return df
 
-
 def deduplicate_by_composite_key(df: DataFrame) -> DataFrame:
     """
     Deduplicate by (post_url, stt), keeping the latest record based on ingestion_timestamp
     
     This ensures each comment appears only once in the dimension table.
     """
-    print("\n🔧 Deduplicating by (post_url, stt) composite key...")
+    print("\nDeduplicating by (post_url, stt) composite key...")
     
     original_count = df.count()
-    print(f"   📊 Original records: {original_count:,}")
+    print(f"Original records: {original_count:,}")
     
     # Window function to rank by (post_url, stt), ordered by latest ingestion_timestamp
     window_spec = Window.partitionBy("post_url", "stt").orderBy(
@@ -194,8 +193,8 @@ def deduplicate_by_composite_key(df: DataFrame) -> DataFrame:
     
     final_count = df.count()
     duplicates_removed = original_count - final_count
-    print(f"   ✅ Removed duplicates: {duplicates_removed:,} records")
-    print(f"   ✅ Final unique comments: {final_count:,}")
+    print(f"Removed duplicates: {duplicates_removed:,} records")
+    print(f"Final unique comments: {final_count:,}")
     
     return df
 
@@ -210,7 +209,7 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
     3. Calculate row_checksum for MERGE
     4. Generate surrogate key (comment_sk)
     """
-    print("\n🔄 Transforming to dimension format...")
+    print("\nTransforming to dimension format...")
     
     current_timestamp = F.current_timestamp()
     
@@ -229,17 +228,17 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
     )
     
     # Step 2: Add metadata columns
-    print("   ⏰ Adding SCD metadata...")
+    print("Adding SCD metadata...")
     df = df.withColumn("created_at", current_timestamp)
     df = df.withColumn("updated_at", current_timestamp)
     df = df.withColumn("is_active", F.lit(True))
     
     # Step 3: Calculate row_checksum for MERGE
-    print("   🔐 Calculating row_checksum...")
+    print("Calculating row_checksum...")
     df = calculate_row_checksum(df, BUSINESS_COLUMNS)
     
     # Step 4: Generate surrogate key (comment_sk)
-    print("   🔑 Generating surrogate keys...")
+    print("Generating surrogate keys...")
     window_spec = Window.orderBy("post_url_nk", "stt")
     df = df.withColumn("comment_sk", F.row_number().over(window_spec))
     
@@ -262,7 +261,7 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
         "is_active"
     )
     
-    print("✅ Transformation complete")
+    print("Transformation complete")
     df.printSchema()
     df.show(10, truncate=False)
     
@@ -271,10 +270,10 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
 
 def merge_to_gold_table(spark, df: DataFrame, record_count: int):
     """MERGE dimension data into Gold Iceberg table (incremental load)"""
-    print(f"\n💾 MERGE into Gold table: {GOLD_TABLE_FULL}")
-    print(f"   📊 Records to merge: {record_count:,}")
-    print(f"   🔑 Business Keys: {', '.join(BUSINESS_KEY)}")
-    print(f"   Strategy: INSERT new, UPDATE changed, SKIP unchanged")
+    print(f"\nMERGE into Gold table: {GOLD_TABLE_FULL}")
+    print(f"Records to merge: {record_count:,}")
+    print(f"Business Keys: {', '.join(BUSINESS_KEY)}")
+    print(f"Strategy: INSERT new, UPDATE changed, SKIP unchanged")
     
     # All columns (exclude comment_sk for INSERT - will be auto-generated)
     all_columns = [
@@ -309,7 +308,7 @@ def merge_to_gold_table(spark, df: DataFrame, record_count: int):
 
 def validate_results(spark):
     """Validate the created dimension table"""
-    print("\n✅ Validating results...")
+    print("\nValidating results...")
     
     df = spark.table(GOLD_TABLE_FULL)
     
@@ -319,14 +318,14 @@ def validate_results(spark):
     level_1 = df.filter(F.col("comment_level") == 1).count()
     level_2 = df.filter(F.col("comment_level") == 2).count()
     
-    print("\n📊 Validation Summary:")
-    print(f"   Total comments: {total_count:,}")
-    print(f"   Comments with post_sk: {with_post_sk:,} ({with_post_sk/total_count*100:.2f}%)")
-    print(f"   Comments with comment_date_sk: {with_date_sk:,} ({with_date_sk/total_count*100:.2f}%)")
-    print(f"   Level 1 comments (No): {level_1:,} ({level_1/total_count*100:.2f}%)")
-    print(f"   Level 2 comments (Yes): {level_2:,} ({level_2/total_count*100:.2f}%)")
+    print("\nValidation Summary:")
+    print(f"Total comments: {total_count:,}")
+    print(f"Comments with post_sk: {with_post_sk:,} ({with_post_sk/total_count*100:.2f}%)")
+    print(f"Comments with comment_date_sk: {with_date_sk:,} ({with_date_sk/total_count*100:.2f}%)")
+    print(f"Level 1 comments (No): {level_1:,} ({level_1/total_count*100:.2f}%)")
+    print(f"Level 2 comments (Yes): {level_2:,} ({level_2/total_count*100:.2f}%)")
     
-    print("\n📝 Sample comments:")
+    print("\nSample comments:")
     df.select("comment_sk", "post_url_nk", "stt", "commenter_name", "comment_text", "comment_level") \
         .orderBy("comment_sk") \
         .show(20, truncate=True)
@@ -398,12 +397,12 @@ def main():
         )
         
         print("\n" + "=" * 80)
-        print("✅ dim_comment job completed successfully!")
-        print(f"   Records processed: {stats['total_processed']:,}")
-        print(f"   - Inserted: {stats['inserted']:,}")
-        print(f"   - Updated: {stats['updated']:,}")
-        print(f"   - Skipped: {stats['skipped']:,}")
-        print(f"   Execution time: {execution_time:.2f}s")
+        print("dim_comment job completed successfully!")
+        print(f"Records processed: {stats['total_processed']:,}")
+        print(f"Inserted: {stats['inserted']:,}")
+        print(f"Updated: {stats['updated']:,}")
+        print(f"Skipped: {stats['skipped']:,}")
+        print(f"Execution time: {execution_time:.2f}s")
         print("=" * 80)
         
     except Exception as e:
@@ -414,7 +413,7 @@ def main():
         )
         
         print("\n" + "=" * 80)
-        print(f"❌ dim_comment job failed: {e}")
+        print(f"dim_comment job failed: {e}")
         print("=" * 80)
         import traceback
         traceback.print_exc()
@@ -422,7 +421,6 @@ def main():
     
     finally:
         spark.stop()
-
 
 if __name__ == "__main__":
     main()

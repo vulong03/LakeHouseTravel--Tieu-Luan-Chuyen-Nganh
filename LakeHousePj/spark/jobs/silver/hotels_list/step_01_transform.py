@@ -45,7 +45,7 @@ def get_s3_file_size(spark, file_path):
           
         return size_bytes
     except Exception as e:
-        print(f"⚠️ Không thể lấy kích thước file: {e}")
+        print(f"Không thể lấy kích thước file: {e}")
         return 0
 
 def get_latest_bronze_file(spark, bronze_base_path):
@@ -84,7 +84,7 @@ def get_latest_bronze_file(spark, bronze_base_path):
         return latest[2], latest[1], latest[3], latest[0]  # path, checksum, filename, timestamp
         
     except Exception as e:
-        print(f"❌ Lỗi khi tìm file Bronze mới nhất: {e}")
+        print(f"Lỗi khi tìm file Bronze mới nhất: {e}")
         raise
 
 # ============================================================================
@@ -102,8 +102,8 @@ def transform_from_bronze(spark):
     """
     
     print(f"Task 1: Chuyển đổi từ Bronze")
-    print(f"   Nguồn: {BRONZE_BASE_PATH}")
-    print(f"   Đích: {PATHS['transformed']}")
+    print(f"Nguồn: {BRONZE_BASE_PATH}")
+    print(f"Đích: {PATHS['transformed']}")
     print(f"")
     
     # 1. Tìm file Bronze mới nhất
@@ -112,7 +112,7 @@ def transform_from_bronze(spark):
         spark, BRONZE_BASE_PATH
     )
     
-    print(f"   Đã chọn: {file_name}")
+    print(f"Đã chọn: {file_name}")
     
     # 2. Get file size
     file_size_bytes = get_s3_file_size(spark, latest_file_path)
@@ -120,11 +120,11 @@ def transform_from_bronze(spark):
     # 3. Check if already processed in Silver layer
     print(f"\nĐang kiểm tra cơ sở dữ liệu tracking...")
     if check_if_file_ingested(file_checksum, POSTGRES_CONN, layer='silver'):
-        print(f"   Đã xử lý ở layer Silver")
-        print(f"      Checksum: {file_checksum}")
-        print(f"      Bỏ qua chuyển đổi")
+        print(f"Đã xử lý ở layer Silver")
+        print(f"Checksum: {file_checksum}")
+        print(f"Bỏ qua chuyển đổi")
         return 0
-    print(f"   ✅ File mới, tiếp tục chuyển đổi")
+    print(f"File mới, tiếp tục chuyển đổi")
     
     # 4. Read CSV from Bronze
     print(f"\nĐang đọc CSV từ Bronze...")
@@ -135,7 +135,7 @@ def transform_from_bronze(spark):
         .csv(latest_file_path)
     
     total_records = df.count()
-    print(f"   ✅ Đã đọc {total_records:,} bản ghi")
+    print(f"Đã đọc {total_records:,} bản ghi")
     
     # 5. Add metadata columns (for tracking)
     print(f"\nĐang thêm cột metadata...")
@@ -146,7 +146,7 @@ def transform_from_bronze(spark):
         .withColumn("source_file_size_bytes", F.lit(file_size_bytes)) \
         .withColumn("extraction_timestamp", F.lit(datetime.now()))
     
-    print(f"   ✅ Đã thêm 5 cột metadata")
+    print(f"Đã thêm 5 cột metadata")
     
     # 6. Show sample data
     print(f"\nDữ liệu mẫu (3 dòng đầu):")
@@ -160,20 +160,20 @@ def transform_from_bronze(spark):
     
     # 8. Write to scratch bucket (NEW: Changed from writing to Silver)
     print(f"\nĐang ghi vào scratch bucket...")
-    print(f"   Đường dẫn: {PATHS['transformed']}")
+    print(f"Đường dẫn: {PATHS['transformed']}")
     
     df_with_metadata.write \
         .mode("overwrite") \
         .parquet(PATHS['transformed'])
     
-    print(f"   ✅ Đã ghi {total_records:,} bản ghi dưới dạng Parquet")
+    print(f"Đã ghi {total_records:,} bản ghi dưới dạng Parquet")
     
     # 9. Success summary
     print(f"\n{'=' * 80}")
-    print(f"✅ Task 1 HOÀN THÀNH")
-    print(f"   Số bản ghi đã chuyển đổi: {total_records:,}")
-    print(f"   Đầu ra: {PATHS['transformed']}")
-    print(f"   Tiếp theo: Chạy Task 2 (Clean)")
+    print(f"Task 1 HOÀN THÀNH")
+    print(f"Số bản ghi đã chuyển đổi: {total_records:,}")
+    print(f"Đầu ra: {PATHS['transformed']}")
+    print(f"Tiếp theo: Chạy Task 2 (Clean)")
     print(f"{ '=' * 80}")
     
     return total_records
@@ -198,12 +198,12 @@ def main():
         record_count = transform_from_bronze(spark)
         
         if record_count == 0:
-            print("\n⚠️ Không có dữ liệu mới để xử lý (đã được ingest)")
+            print("\nKhông có dữ liệu mới để xử lý (đã được ingest)")
             sys.exit(0)
         
     except Exception as e:
         print(f"\n{'=' * 80}")
-        print(f"❌ Tác vụ 1 THẤT BẠI")
+        print(f"Tác vụ 1 THẤT BẠI")
         print(f"{'=' * 80}")
         print(f"Lỗi: {e}")
         print("")

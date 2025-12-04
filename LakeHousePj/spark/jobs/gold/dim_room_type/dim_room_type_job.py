@@ -61,21 +61,21 @@ def create_dim_room_type_table(spark):
 
 def load_source(spark):
     source_full = f"{SOURCE_CATALOG}.{SOURCE_DATABASE}.{SOURCE_TABLE}"
-    print(f"\n📥 Loading room_type values from: {source_full}.{SOURCE_COLUMN}")
+    print(f"\nLoading room_type values from: {source_full}.{SOURCE_COLUMN}")
     df = spark.table(source_full).select(F.col(SOURCE_COLUMN).alias("room_type_name"))
     df = df.filter(F.col("room_type_name").isNotNull())
-    print(f"✅ Found {df.count()} raw rows (including duplicates)")
+    print(f"Found {df.count()} raw rows (including duplicates)")
     return df
 
 
 def transform(df):
-    print("\n🔄 Transforming room types to dimension format...")
+    print("\nTransforming room types to dimension format...")
     df = df.select(F.trim(F.col("room_type_name")).alias("room_type_name"))
     df = df.filter(F.col("room_type_name") != "")
     before = df.count()
     df = df.dropDuplicates(BUSINESS_KEY)
     after = df.count()
-    print(f"   • Deduplicated {before - after} rows; unique room types: {after}")
+    print(f"Deduplicated {before - after} rows; unique room types: {after}")
 
     current_ts = F.current_timestamp()
     window_spec = Window.orderBy("room_type_name")
@@ -95,16 +95,16 @@ def transform(df):
 
 def write_to_gold(df):
     count = df.count()
-    print(f"\n💾 Writing {count} records to {GOLD_TABLE_FULL}")
+    print(f"\nWriting {count} records to {GOLD_TABLE_FULL}")
     df.writeTo(GOLD_TABLE_FULL).using("iceberg").overwritePartitions()
-    print(f"✅ Wrote {count} records to {GOLD_TABLE_FULL}")
+    print(f"Wrote {count} records to {GOLD_TABLE_FULL}")
 
 
 def validate(spark):
-    print("\n✅ Validating dim_room_type...")
+    print("\nValidating dim_room_type...")
     df = spark.table(GOLD_TABLE_FULL)
     total = df.count()
-    print(f"   • Total room types: {total}")
+    print(f"Total room types: {total}")
     df.show(20, truncate=False)
 
 
@@ -140,7 +140,7 @@ def main():
             },
         )
 
-        print("\n✅ dim_room_type completed successfully")
+        print("\ndim_room_type completed successfully")
 
     except Exception as e:
         logger.log_job_failure(
@@ -148,7 +148,7 @@ def main():
             table_name=GOLD_TABLE_FULL,
             error_message=str(e),
         )
-        print(f"\n❌ Job failed: {e}")
+        print(f"\nJob failed: {e}")
         import traceback
 
         traceback.print_exc()

@@ -5,11 +5,9 @@ Health Check Functions for DAGs
 import subprocess
 import logging
 
-
 def check_docker_health(**context) -> bool:
     """
     Pre-flight check: Ensure Docker containers are running
-    
     Returns:
         True if all containers healthy, False otherwise
     """
@@ -32,14 +30,11 @@ def check_docker_health(**context) -> bool:
     logging.info("✓ All required containers are healthy")
     return True
 
-
 def check_containers_health(containers: list) -> bool:
     """
     Check specific containers health
-    
     Args:
-        containers: List of container names to check
-        
+        containers: List of container names to check   
     Returns:
         True if all containers healthy
     """
@@ -48,7 +43,6 @@ def check_containers_health(containers: list) -> bool:
             logging.error(f"Container {container} is not running")
             return False
     return True
-
 
 def _is_container_running(container_name: str) -> bool:
     """Check if a Docker container is running"""

@@ -5,11 +5,9 @@ Notification and Logging Helpers
 import logging
 from datetime import datetime
 
-
 def send_alert(message: str, level: str = 'info', **context):
     """
     Send alert notification (can be extended to Slack/Email/Telegram)
-    
     Args:
         message: Alert message
         level: Log level (info, warning, error)
@@ -23,11 +21,9 @@ def send_alert(message: str, level: str = 'info', **context):
     # if slack_webhook:
     #     requests.post(slack_webhook, json={"text": message})
 
-
 def log_dag_start(**context) -> dict:
     """
     Log DAG run start
-    
     Returns:
         Dict with run metadata
     """
@@ -51,11 +47,9 @@ def log_dag_start(**context) -> dict:
         'start_time': str(datetime.now())
     }
 
-
 def log_dag_complete(**context) -> str:
     """
     Log DAG run completion
-    
     Returns:
         Success message
     """
