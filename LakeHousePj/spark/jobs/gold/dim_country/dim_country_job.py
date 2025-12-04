@@ -66,10 +66,10 @@ def create_dim_country_table(spark):
 
 def load_source(spark):
     source_full = f"{SOURCE_CATALOG}.{SOURCE_DATABASE}.{SOURCE_TABLE}"
-    print(f"\n📥 Loading country values from: {source_full}.{SOURCE_COLUMN}")
+    print(f"\nLoading country values from: {source_full}.{SOURCE_COLUMN}")
     df = spark.table(source_full).select(F.col(SOURCE_COLUMN).alias("country_name"))
     df = df.filter(F.col("country_name").isNotNull())
-    print(f"✅ Found {df.count()} raw rows (including duplicates)")
+    print(f"Found {df.count()} raw rows (including duplicates)")
     return df
 
 
@@ -99,13 +99,13 @@ def map_region_py(name: str) -> str:
 
 
 def transform(df):
-    print("\n🔄 Transforming countries to dimension format...")
+    print("\nTransforming countries to dimension format...")
     df = df.select(F.trim(F.col("country_name")).alias("country_name"))
     df = df.filter(F.col("country_name") != "")
     before = df.count()
     df = df.dropDuplicates(BUSINESS_KEY)
     after = df.count()
-    print(f"   • Deduplicated {before - after} rows; unique countries: {after}")
+    print(f"Deduplicated {before - after} rows; unique countries: {after}")
 
     # map region using small python dict via UDF
     map_region_udf = F.udf(map_region_py, StringType())
@@ -129,16 +129,16 @@ def transform(df):
 
 def write_to_gold(df):
     count = df.count()
-    print(f"\n💾 Writing {count} records to {GOLD_TABLE_FULL}")
+    print(f"\nWriting {count} records to {GOLD_TABLE_FULL}")
     df.writeTo(GOLD_TABLE_FULL).using("iceberg").overwritePartitions()
-    print(f"✅ Wrote {count} records to {GOLD_TABLE_FULL}")
+    print(f"Wrote {count} records to {GOLD_TABLE_FULL}")
 
 
 def validate(spark):
-    print("\n✅ Validating dim_country...")
+    print("\nValidating dim_country...")
     df = spark.table(GOLD_TABLE_FULL)
     total = df.count()
-    print(f"   • Total countries: {total}")
+    print(f"Total countries: {total}")
     df.show(50, truncate=False)
 
 
@@ -174,7 +174,7 @@ def main():
             },
         )
 
-        print("\n✅ dim_country completed successfully")
+        print("\ndim_country completed successfully")
 
     except Exception as e:
         logger.log_job_failure(
@@ -182,14 +182,13 @@ def main():
             table_name=GOLD_TABLE_FULL,
             error_message=str(e),
         )
-        print(f"\n❌ Job failed: {e}")
+        print(f"\nJob failed: {e}")
         import traceback
 
         traceback.print_exc()
         raise
     finally:
         spark.stop()
-
 
 if __name__ == "__main__":
     main()

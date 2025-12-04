@@ -12,7 +12,6 @@ from urllib.parse import quote, unquote
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.window import Window
 
-
 def list_scratch_partitions(spark: SparkSession, scratch_path: str) -> List[Tuple[str, str]]:
     """
     List unique post_urls with their LATEST source file (by checksum/timestamp).
@@ -42,7 +41,7 @@ def list_scratch_partitions(spark: SparkSession, scratch_path: str) -> List[Tupl
         df_all_combinations = df.select("post_url", "source_file_checksum").distinct()
         total_combinations = df_all_combinations.count()
         
-        # ✅ OPTION A: Keep only LATEST file for each post_url
+        # OPTION A: Keep only LATEST file for each post_url
         # Use Window function to rank by checksum (descending = newest first)
         window_spec = Window.partitionBy("post_url").orderBy(F.desc("source_file_checksum"))
         
@@ -61,16 +60,16 @@ def list_scratch_partitions(spark: SparkSession, scratch_path: str) -> List[Tupl
         unique_urls = len(combinations)
         skipped_files = total_combinations - unique_urls
         
-        print(f"📂 Found {total_combinations} total file combinations in Scratch data")
-        print(f"   ✅ Keeping {unique_urls} LATEST files (one per unique post_url)")
+        print(f"Found {total_combinations} total file combinations in Scratch data")
+        print(f"Keeping {unique_urls} LATEST files (one per unique post_url)")
         if skipped_files > 0:
-            print(f"   ⏭️  Skipping {skipped_files} older duplicate files")
-            print(f"   💡 Strategy: For duplicate URLs, only process the NEWEST crawl")
+            print(f"Skipping {skipped_files} older duplicate files")
+            print(f"Strategy: For duplicate URLs, only process the NEWEST crawl")
         
         return combinations
         
     except Exception as e:
-        print(f"❌ Error listing partitions: {e}")
+        print(f"Error listing partitions: {e}")
         raise
 
 def decode_partition_value(partition_dir: str) -> str:
@@ -143,8 +142,8 @@ def build_partition_to_file_mapping(
             ...
         }
     """
-    print(f"\n📋 Building partition → source file mapping...")
-    print(f"   Input file combinations: {len(file_combinations)}")
+    print(f"\nBuilding partition → source file mapping...")
+    print(f"Input file combinations: {len(file_combinations)}")
     
     mapping = {}
     
@@ -154,7 +153,7 @@ def build_partition_to_file_mapping(
             .select("post_url", "source_file", "source_file_checksum", "source_file_size_bytes") \
             .distinct()
         
-        # ✅ FIX: Filter to keep ONLY the 1415 files selected by list_scratch_partitions()
+        # FIX: Filter to keep ONLY the 1415 files selected by list_scratch_partitions()
         # Create DataFrame from file_combinations to use as filter
         from pyspark.sql.types import StructType, StructField, StringType
         
@@ -185,17 +184,17 @@ def build_partition_to_file_mapping(
                 "source_file_size_bytes": row.source_file_size_bytes
             }
         
-        print(f"   ✅ Mapped {len(mapping)} entries (LATEST files only)")
+        print(f"Mapped {len(mapping)} entries (LATEST files only)")
         
         # Verify count matches
         if len(mapping) != len(file_combinations):
-            print(f"   ⚠️  WARNING: Mapping count mismatch!")
-            print(f"   Expected: {len(file_combinations)}, Got: {len(mapping)}")
+            print(f"WARNING: Mapping count mismatch!")
+            print(f"Expected: {len(file_combinations)}, Got: {len(mapping)}")
         
         return mapping
         
     except Exception as e:
-        print(f"❌ Error building partition mapping: {e}")
+        print(f"Error building partition mapping: {e}")
         raise
 
 def filter_unprocessed_partitions(
@@ -222,7 +221,7 @@ def filter_unprocessed_partitions(
     """
     from utils.file_tracker import check_if_file_ingested
     
-    print(f"\n🔍 Filtering unprocessed partitions...")
+    print(f"\nFiltering unprocessed partitions...")
     
     unprocessed_items = []
     skipped_by_checksum = 0
@@ -234,9 +233,9 @@ def filter_unprocessed_partitions(
         try:
             df_existing = spark.table(silver_table_posts).select("post_url").distinct()
             existing_post_urls = {row.post_url for row in df_existing.collect()}
-            print(f"   Found {len(existing_post_urls):,} existing post_urls in Silver table")
+            print(f"Found {len(existing_post_urls):,} existing post_urls in Silver table")
         except Exception as e:
-            print(f"   ⚠️  Could not check Silver table (may not exist yet): {e}")
+            print(f"Could not check Silver table (may not exist yet): {e}")
             existing_post_urls = set()
     
     for composite_key, metadata in mapping.items():
@@ -251,16 +250,16 @@ def filter_unprocessed_partitions(
         # Check 2: post_url already exists in Silver?
         if post_url in existing_post_urls:
             skipped_by_post_url += 1
-            print(f"   ⏭️  Skipping {post_url[:50]}... (already in Silver)")
+            print(f"Skipping {post_url[:50]}... (already in Silver)")
             continue
         
         # Both checks passed → add to unprocessed
         unprocessed_items.append(metadata)
     
-    print(f"   Total entries: {len(mapping)}")
-    print(f"   Skipped by checksum (already logged): {skipped_by_checksum}")
-    print(f"   Skipped by post_url (already in Silver): {skipped_by_post_url}")
-    print(f"   To process: {len(unprocessed_items)}")
+    print(f"Total entries: {len(mapping)}")
+    print(f"Skipped by checksum (already logged): {skipped_by_checksum}")
+    print(f"Skipped by post_url (already in Silver): {skipped_by_post_url}")
+    print(f"To process: {len(unprocessed_items)}")
     
     return unprocessed_items
 
@@ -281,5 +280,5 @@ def get_partition_count(spark: SparkSession, scratch_path: str, post_url: str) -
         df = spark.read.parquet(scratch_path).filter(F.col("post_url") == post_url)
         return df.count()
     except Exception as e:
-        print(f"⚠️  Warning: Could not count partition {post_url}: {e}")
+        print(f"Warning: Could not count partition {post_url}: {e}")
         return 0

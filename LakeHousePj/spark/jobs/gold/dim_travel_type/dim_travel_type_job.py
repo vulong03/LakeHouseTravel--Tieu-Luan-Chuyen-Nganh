@@ -61,21 +61,21 @@ def create_dim_traveler_type_table(spark):
 
 def load_source(spark):
     source_full = f"{SOURCE_CATALOG}.{SOURCE_DATABASE}.{SOURCE_TABLE}"
-    print(f"\n📥 Loading traveler_type values from: {source_full}.{SOURCE_COLUMN}")
+    print(f"\nLoading traveler_type values from: {source_full}.{SOURCE_COLUMN}")
     df = spark.table(source_full).select(F.col(SOURCE_COLUMN).alias("traveler_type_name"))
     df = df.filter(F.col("traveler_type_name").isNotNull())
-    print(f"✅ Found {df.count()} raw rows (including duplicates)")
+    print(f"Found {df.count()} raw rows (including duplicates)")
     return df
 
 
 def transform(df):
-    print("\n🔄 Transforming traveler types to dimension format...")
+    print("\nTransforming traveler types to dimension format...")
     df = df.select(F.trim(F.col("traveler_type_name")).alias("traveler_type_name"))
     df = df.filter(F.col("traveler_type_name") != "")
     before = df.count()
     df = df.dropDuplicates(BUSINESS_KEY)
     after = df.count()
-    print(f"   • Deduplicated {before - after} rows; unique traveler types: {after}")
+    print(f"Deduplicated {before - after} rows; unique traveler types: {after}")
 
     current_ts = F.current_timestamp()
     window_spec = Window.orderBy("traveler_type_name")
@@ -95,16 +95,16 @@ def transform(df):
 
 def write_to_gold(df):
     count = df.count()
-    print(f"\n💾 Writing {count} records to {GOLD_TABLE_FULL}")
+    print(f"\nWriting {count} records to {GOLD_TABLE_FULL}")
     df.writeTo(GOLD_TABLE_FULL).using("iceberg").overwritePartitions()
-    print(f"✅ Wrote {count} records to {GOLD_TABLE_FULL}")
+    print(f"Wrote {count} records to {GOLD_TABLE_FULL}")
 
 
 def validate(spark):
-    print("\n✅ Validating dim_travel_type...")
+    print("\nValidating dim_travel_type...")
     df = spark.table(GOLD_TABLE_FULL)
     total = df.count()
-    print(f"   • Total traveler types: {total}")
+    print(f"Total traveler types: {total}")
     df.show(20, truncate=False)
 
 
@@ -140,7 +140,7 @@ def main():
             },
         )
 
-        print("\n✅ dim_travel_type completed successfully")
+        print("\ndim_travel_type completed successfully")
 
     except Exception as e:
         logger.log_job_failure(
@@ -148,7 +148,7 @@ def main():
             table_name=GOLD_TABLE_FULL,
             error_message=str(e),
         )
-        print(f"\n❌ Job failed: {e}")
+        print(f"\nJob failed: {e}")
         import traceback
 
         traceback.print_exc()

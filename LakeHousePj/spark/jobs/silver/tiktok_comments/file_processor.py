@@ -23,7 +23,6 @@ from pyspark.sql.types import TimestampType
 from utils.file_tracker import log_ingestion_to_postgres
 from utils.merge_utils import calculate_row_checksum
 
-
 def process_single_post_url(
     spark: SparkSession,
     post_url: str,
@@ -71,8 +70,8 @@ def process_single_post_url(
     file_checksum = file_meta['source_file_checksum']
     file_size = file_meta['source_file_size_bytes']
     
-    print(f"\n📄 Processing: {file_name}")
-    print(f"   Post URL: {post_url[:80]}...")
+    print(f"\nProcessing: {file_name}")
+    print(f"Post URL: {post_url[:80]}...")
     
     posts_count = 0
     comments_count = 0
@@ -82,7 +81,7 @@ def process_single_post_url(
         # ============================================================
         # STEP 1: Process POST
         # ============================================================
-        print(f"   📝 Processing post metadata...")
+        print(f"Processing post metadata...")
         
         # Read partition using data filter (NOT directory path)
         # This avoids URL encoding mismatch between Spark and Python
@@ -116,15 +115,15 @@ def process_single_post_url(
                 .append()
             
             posts_count = 1
-            print(f"      ✅ Post appended")
+            print(f"Post appended")
         else:
             posts_count = 0
-            print(f"      ⏭️  Post already exists in Silver (skipped)")
+            print(f"Post already exists in Silver (skipped)")
         
         # ============================================================
         # STEP 2: Process COMMENTS
         # ============================================================
-        print(f"   💬 Processing comments...")
+        print(f"Processing comments...")
         
         # Read partition using data filter (NOT directory path)
         df_comments = spark.read.parquet(scratch_path_comments) \
@@ -132,7 +131,7 @@ def process_single_post_url(
         comments_count_raw = df_comments.count()
         
         if comments_count_raw == 0:
-            print(f"      ⚠️  No comments for this post")
+            print(f"No comments for this post")
             comments_count = 0
         else:
             # Clean & transform
@@ -157,7 +156,7 @@ def process_single_post_url(
                 .append()
             
             comments_count = df_comments_final.count()
-            print(f"      ✅ {comments_count} comments appended")
+            print(f"{comments_count} comments appended")
         
         # ============================================================
         # STEP 3: LOG SUCCESS (Both tables processed successfully)
@@ -186,10 +185,10 @@ def process_single_post_url(
                 file_size_bytes=file_size,
                 postgres_conn_params=postgres_conn
             )
-            print(f"   ✅ Completed: {posts_count} post + {comments_count} comments (logged to PostgreSQL)")
+            print(f"Completed: {posts_count} post + {comments_count} comments (logged to PostgreSQL)")
         except Exception as log_error:
-            print(f"   ⚠️  WARNING: Processing succeeded but logging failed: {log_error}")
-            print(f"   ⚠️  Data is in Iceberg but NOT tracked in PostgreSQL!")
+            print(f"WARNING: Processing succeeded but logging failed: {log_error}")
+            print(f"Data is in Iceberg but NOT tracked in PostgreSQL!")
             # Don't fail - data already in Iceberg
         
         return posts_count, comments_count, status, None
@@ -199,7 +198,7 @@ def process_single_post_url(
         # STEP 4: LOG FAILURE (Either step failed)
         # ============================================================
         error_msg = str(e)
-        print(f"   ❌ Failed: {error_msg}")
+        print(f"Failed: {error_msg}")
         
         # Determine which step failed
         if posts_count == 0 and comments_count == 0:
@@ -233,11 +232,10 @@ def process_single_post_url(
                 postgres_conn_params=postgres_conn
             )
         except Exception as log_error:
-            print(f"   ⚠️  WARNING: Failed to log to PostgreSQL: {log_error}")
+            print(f"WARNING: Failed to log to PostgreSQL: {log_error}")
             # Continue anyway - don't fail the whole batch because of logging issue
         
         return posts_count, comments_count, 'failed', error_msg
-
 
 def create_batches(items: list, batch_size: int) -> list:
     """
@@ -254,10 +252,10 @@ def create_batches(items: list, batch_size: int) -> list:
     for i in range(0, len(items), batch_size):
         batches.append(items[i:i+batch_size])
     
-    print(f"\n📦 Created {len(batches)} batches (batch size: {batch_size})")
-    print(f"   Total items: {len(items)}")
-    print(f"   Full batches: {len([b for b in batches if len(b) == batch_size])}")
+    print(f"\nCreated {len(batches)} batches (batch size: {batch_size})")
+    print(f"Total items: {len(items)}")
+    print(f"Full batches: {len([b for b in batches if len(b) == batch_size])}")
     if batches:
-        print(f"   Last batch size: {len(batches[-1])}")
+        print(f"Last batch size: {len(batches[-1])}")
     
     return batches

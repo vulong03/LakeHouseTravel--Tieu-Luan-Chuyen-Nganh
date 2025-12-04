@@ -97,8 +97,8 @@ def load_from_postgres(spark):
     """
     Load dim_date data from PostgreSQL using JDBC
     """
-    print(f"\n📥 Loading data from PostgreSQL: {SOURCE_JDBC_URL}")
-    print(f"   Table: {SOURCE_TABLE}")
+    print(f"\nLoading data from PostgreSQL: {SOURCE_JDBC_URL}")
+    print(f"Table: {SOURCE_TABLE}")
     
     jdbc_properties = {
         "user": POSTGRES_USER,
@@ -113,7 +113,7 @@ def load_from_postgres(spark):
     )
     
     record_count = df.count()
-    print(f"✅ Loaded {record_count:,} records from PostgreSQL")
+    print(f"Loaded {record_count:,} records from PostgreSQL")
     df.printSchema()
     df.show(10, truncate=False)
     
@@ -126,7 +126,7 @@ def transform_to_dimension(df):
     - Ensure correct column order
     - Explicitly cast boolean columns to BooleanType (safe even if already boolean)
     """
-    print("\n🔄 Transforming to dimension format...")
+    print("\nTransforming to dimension format...")
     
     # Ensure columns are in correct order and explicitly cast boolean columns
     df = df.select(
@@ -152,7 +152,7 @@ def transform_to_dimension(df):
         F.col("is_year_end").cast(BooleanType()).alias("is_year_end")
     )
     
-    print("✅ Transformation complete")
+    print("Transformation complete")
     df.printSchema()
     df.show(10, truncate=False)
     
@@ -168,19 +168,19 @@ def write_to_gold_table(df, record_count=None):
         df: DataFrame to write
         record_count: Optional pre-computed count (to avoid counting twice)
     """
-    print(f"\n💾 Writing to Gold table: {GOLD_TABLE_FULL}")
+    print(f"\nWriting to Gold table: {GOLD_TABLE_FULL}")
     
     if record_count is None:
         record_count = df.count()
     
-    print(f"   📊 Records to write: {record_count:,}")
+    print(f"   Records to write: {record_count:,}")
     
     # Write to Iceberg table
     df.writeTo(GOLD_TABLE_FULL) \
         .using("iceberg") \
         .overwritePartitions()  # Full refresh
     
-    print(f"✅ Successfully wrote {record_count:,} records to {GOLD_TABLE_FULL}")
+    print(f"Successfully wrote {record_count:,} records to {GOLD_TABLE_FULL}")
     
     return record_count
 
@@ -189,21 +189,21 @@ def validate_results(spark):
     """
     Validate the created dimension table
     """
-    print("\n✅ Validating results...")
+    print("\nValidating results...")
     
     df = spark.table(GOLD_TABLE_FULL)
     
     total_count = df.count()
-    print(f"\n📊 Validation Summary:")
+    print(f"\nValidation Summary:")
     print(f"   Total dates: {total_count:,}")
     
     # Check date range
     min_date = df.agg(F.min("full_date").alias("min_date")).collect()[0]["min_date"]
     max_date = df.agg(F.max("full_date").alias("max_date")).collect()[0]["max_date"]
-    print(f"   Date range: {min_date} to {max_date}")
+    print(f"Date range: {min_date} to {max_date}")
     
     # Check year distribution
-    print("\n📅 Year distribution:")
+    print("\nYear distribution:")
     df.groupBy("year") \
         .agg(F.count("*").alias("count")) \
         .orderBy("year") \
@@ -211,10 +211,10 @@ def validate_results(spark):
     
     # Check weekend count
     weekend_count = df.filter(F.col("is_weekend") == True).count()
-    print(f"\n🏖️  Weekend days: {weekend_count:,}")
+    print(f"\nWeekend days: {weekend_count:,}")
     
     # Sample data
-    print("\n📍 Sample dates:")
+    print("\nSample dates:")
     df.orderBy("full_date") \
         .select("date_sk", "full_date", "year", "quarter_name", "month_name", "day_name", "is_weekend") \
         .show(10, truncate=False)
@@ -280,9 +280,9 @@ def main():
         )
         
         print("\n" + "=" * 80)
-        print("✅ dim_date job completed successfully!")
-        print(f"   Records: {record_count:,}")
-        print(f"   Execution time: {execution_time:.2f}s")
+        print("dim_date job completed successfully!")
+        print(f"Records: {record_count:,}")
+        print(f"Execution time: {execution_time:.2f}s")
         print("=" * 80)
         
     except Exception as e:
@@ -293,7 +293,7 @@ def main():
             error_message=str(e)
         )
         
-        print(f"\n❌ Job failed with error: {e}")
+        print(f"\nJob failed with error: {e}")
         import traceback
         traceback.print_exc()
         raise

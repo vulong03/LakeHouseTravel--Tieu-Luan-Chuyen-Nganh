@@ -108,13 +108,13 @@ def get_latest_scratch_run(spark, scratch_base_path):
         latest_run = run_dirs[0]
         
         latest_path = f"{scratch_base_path}/{latest_run}"
-        print(f"📂 Latest Scratch run: {latest_run}")
-        print(f"   Path: {latest_path}")
+        print(f"Latest Scratch run: {latest_run}")
+        print(f"Path: {latest_path}")
         
         return latest_path, latest_run
         
     except Exception as e:
-        print(f"❌ Error finding latest Scratch run: {e}")
+        print(f"Error finding latest Scratch run: {e}")
         raise
 
 
@@ -180,16 +180,16 @@ def parse_post_date(df):
     Returns:
         DataFrame with 'post_date' as DateType
     """
-    print("🔧 Parsing post_date (DD-MM-YYYY → DateType)...")
+    print("Parsing post_date (DD-MM-YYYY → DateType)...")
     
     total_records = df.count()
     null_before = df.filter(F.col("post_date").isNull()).count()
     
-    print(f"   Total records: {total_records:,}")
-    print(f"   NULL before parsing: {null_before}")
+    print(f"Total records: {total_records:,}")
+    print(f"NULL before parsing: {null_before}")
     
     # DEBUG: Sample raw post_date values before parsing (commented to speed up)
-    # print("\n   🔍 DEBUG: Sample raw post_date values:")
+    # print("\nDEBUG: Sample raw post_date values:")
     # df.select("post_url", "post_date") \
     #     .filter(F.col("post_date").isNotNull()) \
     #     .show(10, truncate=False)
@@ -211,17 +211,17 @@ def parse_post_date(df):
     )
     
     # DEBUG: Analyze unparseable dates (commented to speed up)
-    # print("\n   🔍 DEBUG: Analyzing unparseable dates...")
+    # print("\nDEBUG: Analyzing unparseable dates...")
     # df_unparseable = df_parsed.filter(
     #     (F.col("post_date").isNotNull()) &  # Has original value
     #     (F.col("post_date_parsed").isNull())  # But failed to parse
     # )
     # 
     # unparseable_count = df_unparseable.count()
-    # print(f"   Unparseable dates found: {unparseable_count}")
+    # print(f"Unparseable dates found: {unparseable_count}")
     # 
     # if unparseable_count > 0:
-    #     print("\n   📋 Sample unparseable date formats:")
+    #     print("\nSample unparseable date formats:")
     #     df_unparseable.select(
     #         "post_url",
     #         "post_date",
@@ -229,7 +229,7 @@ def parse_post_date(df):
     #     ).show(20, truncate=False)
     #     
     #     # Count by pattern
-    #     print("\n   📊 Unparseable date patterns:")
+    #     print("\nUnparseable date patterns:")
     #     df_unparseable.groupBy("post_date") \
     #         .count() \
     #         .orderBy(F.desc("count")) \
@@ -243,8 +243,8 @@ def parse_post_date(df):
     parsed_count = df_final.filter(F.col("post_date").isNotNull()).count()
     parse_rate = (parsed_count / total_records * 100) if total_records > 0 else 0
     
-    print(f"   Successfully parsed: {parsed_count:,}")
-    print(f"   Parse rate: {parse_rate:.2f}%")
+    print(f"Successfully parsed: {parsed_count:,}")
+    print(f"Parse rate: {parse_rate:.2f}%")
     
     return df_final
 
@@ -257,7 +257,7 @@ def parse_crawl_time(df):
     
     Strategy: Remove GMT timezone part, then parse with explicit pattern
     """
-    print(f"🔧 Parsing crawl_time (String → TimestampType)...")
+    print(f"Parsing crawl_time (String → TimestampType)...")
     
     # Remove " GMT+0700 (Indochina Time)" part, keep only "Sat Sep 27 2025 00:52:04"
     df_with_timestamp = df \
@@ -291,7 +291,7 @@ def parse_comment_time(df):
     Returns:
         DataFrame with comment_date as DateType
     """
-    print(f"🔧 Parsing comment time (Mixed format → DateType)...")
+    print(f"Parsing comment time (Mixed format → DateType)...")
     
     # Parse scrape_timestamp (YYYY-MM-DDTHH-MM-SS) to date
     df = df.withColumn("_scrape_date",
@@ -374,7 +374,7 @@ def clean_and_transform_posts(df):
     Returns:
         Cleaned DataFrame with proper types
     """
-    print(f"\n🧹 Applying data cleaning and transformations for POSTS...")
+    print(f"\nApplying data cleaning and transformations for POSTS...")
     
     # 1. Parse post_date (DD-MM-YYYY → DateType)
     df_cleaned = parse_post_date(df)
@@ -383,11 +383,11 @@ def clean_and_transform_posts(df):
     df_cleaned = parse_crawl_time(df_cleaned)
     
     # 3. Extract crawl_date from crawl_time (for partitioning)
-    print(f"🔧 Extracting crawl_date from crawl_time...")
+    print(f"Extracting crawl_date from crawl_time...")
     df_cleaned = df_cleaned.withColumn("crawl_date", F.to_date(F.col("crawl_time")))
     
     # 4. Convert metrics to INT (parse TikTok format: K, M, plain numbers)
-    print(f"🔧 Converting metrics (String → Int, parsing TikTok format: K/M)...")
+    print(f"Converting metrics (String → Int, parsing TikTok format: K/M)...")
     # likes: số lượng like của bài đăng
     # comments_count: số lượng comment hiển thị trên TikTok
     # saves: số lượt lưu (bookmark)
@@ -406,11 +406,11 @@ def clean_and_transform_posts(df):
         df_cleaned = df_cleaned.withColumn(col, parse_tiktok_number(F.col(col)))
     
     # 5. Update ingestion_timestamp to current datetime
-    print(f"🔧 Updating ingestion_timestamp (TimestampType)...")
+    print(f"Updating ingestion_timestamp (TimestampType)...")
     df_cleaned = df_cleaned.withColumn("ingestion_timestamp", F.lit(datetime.now()))
     
     # 6. Filter out posts with shares > 5M (invalid crawl data)
-    print(f"🔧 Filtering out posts with shares > 5M (invalid crawl data)...")
+    print(f"Filtering out posts with shares > 5M (invalid crawl data)...")
     count_before = df_cleaned.count()
     df_filtered = df_cleaned.filter(
         F.col("shares").isNull() | (F.col("shares") <= 5000000)
@@ -419,11 +419,11 @@ def clean_and_transform_posts(df):
     removed_count = count_before - count_after
     if removed_count > 0:
         removed_pct = (removed_count / count_before * 100) if count_before > 0 else 0
-        print(f"   Removed {removed_count:,} posts with shares > 5M ({removed_pct:.2f}%)")
-        print(f"   Valid posts remaining: {count_after:,}")
+        print(f"Removed {removed_count:,} posts with shares > 5M ({removed_pct:.2f}%)")
+        print(f"Valid posts remaining: {count_after:,}")
     
     # Show sample (commented out to speed up processing)
-    # print(f"\n📋 Sample cleaned posts data:")
+    # print(f"\nSample cleaned posts data:")
     # df_filtered.select(
     #     "post_url", "author", "post_date", "likes", "comments_count"
     # ).show(5, truncate=False)
@@ -451,13 +451,13 @@ def clean_and_transform_comments(df):
     Returns:
         Cleaned DataFrame with proper types
     """
-    print(f"\n🧹 Applying data cleaning and transformations for COMMENTS...")
+    print(f"\nApplying data cleaning and transformations for COMMENTS...")
     
     # 1. Parse comment time (mixed format → DateType)
     df_cleaned = parse_comment_time(df)
     
     # 2. Extract scrape_date from scrape_timestamp (for partitioning)
-    print(f"🔧 Extracting scrape_date from scrape_timestamp...")
+    print(f"Extracting scrape_date from scrape_timestamp...")
     df_cleaned = df_cleaned.withColumn("scrape_date",
         F.to_date(
             F.regexp_replace(F.col("scrape_timestamp"), "T", " ").substr(1, 10),
@@ -466,7 +466,7 @@ def clean_and_transform_comments(df):
     )
     
     # 3. Convert stt to INT (comment sequence number) - plain number only
-    print(f"🔧 Converting stt (String → Int)...")
+    print(f"Converting stt (String → Int)...")
     df_cleaned = df_cleaned.withColumn("stt",
         F.when(
             F.col("stt").isNotNull() & 
@@ -478,18 +478,18 @@ def clean_and_transform_comments(df):
     )
     
     # 4. Convert likes, number_of_replies to INT (parse TikTok format: K, M)
-    print(f"🔧 Converting likes and number_of_replies (String → Int, parsing TikTok format: K/M)...")
+    print(f"Converting likes and number_of_replies (String → Int, parsing TikTok format: K/M)...")
     for col in ['likes', 'number_of_replies']:
         df_cleaned = df_cleaned.withColumn(col, parse_tiktok_number(F.col(col)))
     
     # 5. Trim whitespace from text fields
-    print(f"🔧 Trimming whitespace from text fields...")
+    print(f"Trimming whitespace from text fields...")
     text_columns = ['ten', 'tag_ten', 'comment', 'replied_to_tag_name']
     for col in text_columns:
         df_cleaned = df_cleaned.withColumn(col, F.trim(F.col(col)))
     
     # 6. Validate level_comment (filter column shift errors)
-    print(f"🔧 Validating level_comment (filter column shift errors)...")
+    print(f"Validating level_comment (filter column shift errors)...")
     count_before_validation = df_cleaned.count()
     
     df_validated = df_cleaned.filter(
@@ -501,14 +501,14 @@ def clean_and_transform_comments(df):
     invalid_count = count_before_validation - count_after_validation
     invalid_pct = (invalid_count / count_before_validation * 100) if count_before_validation > 0 else 0
     
-    print(f"   Removed {invalid_count:,} comments with invalid level_comment ({invalid_pct:.2f}%)")
-    print(f"   ℹ️  Invalid values indicate column shift from Bronze parser (csv.DictReader)")
-    print(f"   Valid comments remaining: {count_after_validation:,}")
+    print(f"Removed {invalid_count:,} comments with invalid level_comment ({invalid_pct:.2f}%)")
+    print(f"Invalid values indicate column shift from Bronze parser (csv.DictReader)")
+    print(f"Valid comments remaining: {count_after_validation:,}")
     
     df_cleaned = df_validated
     
     # 7. Filter out invalid comments (empty or NULL comment text)
-    print(f"🔧 Filtering out invalid comments...")
+    print(f"Filtering out invalid comments...")
     count_before = df_cleaned.count()
     df_filtered = df_cleaned.filter(
         (F.col("comment").isNotNull()) & 
@@ -517,15 +517,15 @@ def clean_and_transform_comments(df):
     count_after = df_filtered.count()
     removed_count = count_before - count_after
     removed_pct = (removed_count / count_before * 100) if count_before > 0 else 0
-    print(f"   Removed {removed_count:,} comments with empty/NULL text ({removed_pct:.2f}%)")
-    print(f"   Valid comments remaining: {count_after:,}")
+    print(f"Removed {removed_count:,} comments with empty/NULL text ({removed_pct:.2f}%)")
+    print(f"Valid comments remaining: {count_after:,}")
     
     # 8. Update ingestion_timestamp to current datetime
-    print(f"🔧 Updating ingestion_timestamp (TimestampType)...")
+    print(f"Updating ingestion_timestamp (TimestampType)...")
     df_final = df_filtered.withColumn("ingestion_timestamp", F.lit(datetime.now()))
     
     # Show sample (commented out to speed up processing - would run 1,380+ times)
-    # print(f"\n📋 Sample cleaned comments data:")
+    # print(f"\nSample cleaned comments data:")
     # df_final.select(
     #     "post_url", "ten", "comment", "comment_date", "likes"
     # ).show(5, truncate=False)
@@ -677,7 +677,7 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
         Dict with statistics: posts_loaded, comments_loaded, files_success, files_failed
     """
     print(f"\n{'='*80}")
-    print(f"📦 PHASE 2: BATCH PROCESSING - Processing {len(unprocessed_items)} files in batches of {BATCH_SIZE}")
+    print(f"PHASE 2: BATCH PROCESSING - Processing {len(unprocessed_items)} files in batches of {BATCH_SIZE}")
     print(f"{'='*80}")
     
     # Create batches
@@ -694,7 +694,7 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
     # Process each batch
     for batch_id, batch_items in enumerate(batches, 1):
         print(f"\n{'='*80}")
-        print(f"📦 BATCH {batch_id}/{len(batches)}: Processing {len(batch_items)} files")
+        print(f"BATCH {batch_id}/{len(batches)}: Processing {len(batch_items)} files")
         print(f"{'='*80}")
         
         batch_posts_count = 0
@@ -717,12 +717,12 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
             # STEP 1: COLLECT POST_URLS FROM BATCH
             # ============================================================
             batch_post_urls = [item["post_url"] for item in batch_items]
-            print(f"\n📋 Batch contains {len(batch_post_urls)} post URLs")
+            print(f"\nBatch contains {len(batch_post_urls)} post URLs")
             
             # ============================================================
             # STEP 2: PROCESS POSTS (Read all → Union → Clean → Append once)
             # ============================================================
-            print(f"\n📝 Processing POSTS for batch {batch_id}...")
+            print(f"\nProcessing POSTS for batch {batch_id}...")
             
             # Read all posts from batch (using filter for all post_urls at once)
             try:
@@ -736,23 +736,23 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
                 else:
                     all_posts_data = []
             except Exception as e:
-                print(f"   ⚠️  Error reading posts: {e}")
+                print(f"Error reading posts: {e}")
                 all_posts_data = []
                 batch_files_failed += len(batch_post_urls)
             
             if not all_posts_data:
-                print(f"   ⏭️  No posts data in this batch")
+                print(f"No posts data in this batch")
             else:
                 # Use the single DataFrame (already filtered)
-                print(f"   📊 Processing posts data...")
+                print(f"Processing posts data...")
                 df_posts_raw = all_posts_data[0]
                 
                 # Clean & Transform
-                print(f"   🧹 Cleaning and transforming posts...")
+                print(f"Cleaning and transforming posts...")
                 df_posts_cleaned = clean_and_transform_posts(df_posts_raw)
                 
                 # Check duplicates with Silver (anti-join)
-                print(f"   🔍 Checking duplicates with Silver table...")
+                print(f"Checking duplicates with Silver table...")
                 df_silver_posts = spark.table(SILVER_TABLE_POSTS).select("post_url")
                 df_posts_new = df_posts_cleaned.join(
                     df_silver_posts,
@@ -761,40 +761,40 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
                 )
                 posts_new_count = df_posts_new.count()
                 posts_skipped = df_posts_cleaned.count() - posts_new_count
-                print(f"   New posts to append: {posts_new_count:,}")
-                print(f"   Posts already in Silver (skipped): {posts_skipped:,}")
+                print(f"New posts to append: {posts_new_count:,}")
+                print(f"Posts already in Silver (skipped): {posts_skipped:,}")
                 
                 if posts_new_count > 0:
                     # Calculate row checksum
-                    print(f"   🔐 Calculating row checksum...")
+                    print(f"Calculating row checksum...")
                     df_posts_final = calculate_row_checksum(
                         df_posts_new,
                         BUSINESS_COLUMNS_POSTS
                     )
                     
                     # Append to Silver (1 time for entire batch) with error handling
-                    print(f"   💾 Appending {posts_new_count:,} posts to Silver...")
+                    print(f"Appending {posts_new_count:,} posts to Silver...")
                     try:
                         df_posts_final.writeTo(SILVER_TABLE_POSTS) \
                             .using("iceberg") \
                             .append()
                         batch_posts_count = posts_new_count
                         posts_append_success = True
-                        print(f"   ✅ Posts appended successfully!")
+                        print(f"Posts appended successfully!")
                     except Exception as append_error:
-                        print(f"   ❌ Posts append failed: {append_error}")
+                        print(f"Posts append failed: {append_error}")
                         batch_posts_count = 0
                         posts_append_success = False
                         # Re-raise to be caught by outer exception handler
                         raise
                 else:
-                    print(f"   ⏭️  No new posts to append")
+                    print(f"No new posts to append")
                     posts_append_success = True  # No data to append is OK
             
             # ============================================================
             # STEP 3: PROCESS COMMENTS (Read all → Union → Clean → Append once)
             # ============================================================
-            print(f"\n💬 Processing COMMENTS for batch {batch_id}...")
+            print(f"\nProcessing COMMENTS for batch {batch_id}...")
             
             # Read all comments from batch (using filter for all post_urls at once)
             try:
@@ -808,22 +808,22 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
                 else:
                     all_comments_data = []
             except Exception as e:
-                print(f"   ⚠️  Error reading comments: {e}")
+                print(f"Error reading comments: {e}")
                 all_comments_data = []
             
             if not all_comments_data:
-                print(f"   ⏭️  No comments data in this batch")
+                print(f"No comments data in this batch")
             else:
                 # Use the single DataFrame (already filtered)
-                print(f"   📊 Processing comments data...")
+                print(f"Processing comments data...")
                 df_comments_raw = all_comments_data[0]
                 
                 # Clean & Transform
-                print(f"   🧹 Cleaning and transforming comments...")
+                print(f"Cleaning and transforming comments...")
                 df_comments_cleaned = clean_and_transform_comments(df_comments_raw)
                 
                 # Validate post_url exists in Silver Posts (prevent orphan comments)
-                print(f"   🔍 Validating post_url exists in Silver Posts...")
+                print(f"Validating post_url exists in Silver Posts...")
                 df_valid_posts = spark.table(SILVER_TABLE_POSTS).select("post_url").distinct()
                 df_comments_validated = df_comments_cleaned.join(
                     df_valid_posts,
@@ -833,10 +833,10 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
                 
                 orphan_count = df_comments_cleaned.count() - df_comments_validated.count()
                 if orphan_count > 0:
-                    print(f"   ⚠️  Filtered {orphan_count:,} orphan comments (post not in Silver)")
+                    print(f"Filtered {orphan_count:,} orphan comments (post not in Silver)")
                 
                 # Calculate row checksum
-                print(f"   🔐 Calculating row checksum...")
+                print(f"Calculating row checksum...")
                 df_comments_final = calculate_row_checksum(
                     df_comments_validated,
                     BUSINESS_COLUMNS_COMMENTS
@@ -844,16 +844,16 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
                 
                 # Append to Silver (1 time for entire batch) with error handling
                 comments_count = df_comments_final.count()
-                print(f"   💾 Appending {comments_count:,} comments to Silver...")
+                print(f"Appending {comments_count:,} comments to Silver...")
                 try:
                     df_comments_final.writeTo(SILVER_TABLE_COMMENTS) \
                         .using("iceberg") \
                         .append()
                     batch_comments_count = comments_count
                     comments_append_success = True
-                    print(f"   ✅ Comments appended successfully!")
+                    print(f"Comments appended successfully!")
                 except Exception as append_error:
-                    print(f"   ❌ Comments append failed: {append_error}")
+                    print(f"Comments append failed: {append_error}")
                     batch_comments_count = 0
                     comments_append_success = False
                     # Re-raise to be caught by outer exception handler
@@ -862,7 +862,7 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
             # ============================================================
             # STEP 4: LOG TO POSTGRESQL (per file, after batch append)
             # ============================================================
-            print(f"\n📝 Logging batch files to PostgreSQL...")
+            print(f"\nLogging batch files to PostgreSQL...")
             
             # Calculate record counts per file from final DataFrames
             for item in batch_items:
@@ -949,15 +949,15 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
             stats["batches_completed"] += 1
             
             print(f"\n{'='*40}")
-            print(f"📊 Batch {batch_id}/{len(batches)} summary:")
-            print(f"   Posts loaded: {batch_posts_count:,}")
-            print(f"   Comments loaded: {batch_comments_count:,}")
-            print(f"   Files success: {batch_files_success}/{len(batch_items)}")
-            print(f"   Files failed: {batch_files_failed}/{len(batch_items)}")
+            print(f"Batch {batch_id}/{len(batches)} summary:")
+            print(f"Posts loaded: {batch_posts_count:,}")
+            print(f"Comments loaded: {batch_comments_count:,}")
+            print(f"Files success: {batch_files_success}/{len(batch_items)}")
+            print(f"Files failed: {batch_files_failed}/{len(batch_items)}")
             print(f"{'='*40}")
             
         except Exception as e:
-            print(f"\n❌ ERROR in batch {batch_id}: {e}")
+            print(f"\nERROR in batch {batch_id}: {e}")
             import traceback
             traceback.print_exc()
             
@@ -983,7 +983,7 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
                     pass
             
             if not CONTINUE_ON_BATCH_FAILURE:
-                print(f"   Stopping execution (CONTINUE_ON_BATCH_FAILURE=False)")
+                print(f"Stopping execution (CONTINUE_ON_BATCH_FAILURE=False)")
                 break
     
     return stats
@@ -998,27 +998,25 @@ def print_summary(stats, total_files):
         total_files: Total number of files attempted
     """
     print(f"\n{'='*80}")
-    print(f"📊 FINAL SUMMARY")
+    print(f"FINAL SUMMARY")
     print(f"{'='*80}")
-    print(f"   Total files: {total_files}")
-    print(f"   Files success: {stats['files_success']}")
-    print(f"   Files failed: {stats['files_failed']}")
-    print(f"   Posts loaded: {stats['posts_loaded']:,}")
-    print(f"   Comments loaded: {stats['comments_loaded']:,}")
-    print(f"   Batches completed: {stats['batches_completed']}")
+    print(f"Total files: {total_files}")
+    print(f"Files success: {stats['files_success']}")
+    print(f"Files failed: {stats['files_failed']}")
+    print(f"Posts loaded: {stats['posts_loaded']:,}")
+    print(f"Comments loaded: {stats['comments_loaded']:,}")
+    print(f"Batches completed: {stats['batches_completed']}")
     
     if stats['files_failed'] > 0:
         success_rate = (stats['files_success'] / total_files * 100) if total_files > 0 else 0
-        print(f"\n⚠️  {stats['files_failed']} files failed ({success_rate:.1f}% success rate)")
-        print(f"   Check PostgreSQL file_ingestion_log WHERE status='failed' for details")
+        print(f"\n{stats['files_failed']} files failed ({success_rate:.1f}% success rate)")
+        print(f"Check PostgreSQL file_ingestion_log WHERE status='failed' for details")
     else:
-        print(f"\n✅ All files completed successfully!")
-
+        print(f"\nAll files completed successfully!")
 
 def clean_and_load_to_silver(spark):
     """
     Main ETL: Read Scratch Parquet → Clean (Batch) → Load to Silver
-    
     BATCH PROCESSING APPROACH:
     1. Phase 1: PREPARE - List partitions, build mapping, filter unprocessed
     2. Phase 2: BATCH PROCESSING - Process 30 files per batch, write once per batch
@@ -1027,24 +1025,24 @@ def clean_and_load_to_silver(spark):
     Returns:
         tuple: (posts_loaded, comments_loaded)
     """
-    print(f"🚀 STEP 2: Clean & Load (Scratch → Silver) - BATCH PROCESSING")
-    print(f"   Source 1 (Posts): {SCRATCH_BASE_PATH_POSTS}")
-    print(f"   Source 2 (Comments): {SCRATCH_BASE_PATH_COMMENTS}")
-    print(f"   Target 1: {SILVER_TABLE_POSTS}")
-    print(f"   Target 2: {SILVER_TABLE_COMMENTS}")
-    print(f"   Batch size: {BATCH_SIZE} files per batch (write once per batch)")
+    print(f"STEP 2: Clean & Load (Scratch → Silver) - BATCH PROCESSING")
+    print(f"Source 1 (Posts): {SCRATCH_BASE_PATH_POSTS}")
+    print(f"Source 2 (Comments): {SCRATCH_BASE_PATH_COMMENTS}")
+    print(f"Target 1: {SILVER_TABLE_POSTS}")
+    print(f"Target 2: {SILVER_TABLE_COMMENTS}")
+    print(f"Batch size: {BATCH_SIZE} files per batch (write once per batch)")
     
     # Get latest Scratch runs
     scratch_path_posts, run_id_posts = get_latest_scratch_run(spark, SCRATCH_BASE_PATH_POSTS)
     scratch_path_comments, run_id_comments = get_latest_scratch_run(spark, SCRATCH_BASE_PATH_COMMENTS)
     
-    print(f"\n   Latest runs:")
-    print(f"   - Posts: {run_id_posts}")
-    print(f"   - Comments: {run_id_comments}")
+    print(f"\nLatest runs:")
+    print(f"Posts: {run_id_posts}")
+    print(f"Comments: {run_id_comments}")
     
     # Phase 1: PREPARE (with enhanced debugging)
     print(f"\n{'='*80}")
-    print(f"📋 PHASE 1: PREPARE - List partitions & build mapping")
+    print(f"PHASE 1: PREPARE - List partitions & build mapping")
     print(f"{'='*80}")
     
     # List partitions from posts
@@ -1064,7 +1062,7 @@ def clean_and_load_to_silver(spark):
     )
     
     if not unprocessed_items:
-        print(f"\n✅ All files already processed!")
+        print(f"\nAll files already processed!")
         return 0, 0
     
     # Phase 2: BATCH PROCESSING
@@ -1085,7 +1083,7 @@ def clean_and_load_to_silver(spark):
 
 def main():
     print("=" * 80)
-    print("🔄 SILVER TIKTOK COMMENTS - STEP 2: CLEAN & LOAD (Scratch → Silver)")
+    print("SILVER TIKTOK COMMENTS - STEP 2: CLEAN & LOAD (Scratch → Silver)")
     print("=" * 80)
     
     spark = get_spark_session(app_name="Silver_TikTok_Comments_Step2_Clean_Load")
@@ -1094,37 +1092,36 @@ def main():
     # timestamps that include short weekday/month names. See Spark docs and upgrade notes.
     try:
         spark.conf.set("spark.sql.legacy.timeParserPolicy", "LEGACY")
-        print("⚙️  Set spark.sql.legacy.timeParserPolicy = LEGACY")
+        print("Set spark.sql.legacy.timeParserPolicy = LEGACY")
     except Exception:
         # Fail-open: if we cannot set the config for some reason, continue and let
         # the job fail later so the error is visible in logs.
-        print("⚠️  Could not set spark.sql.legacy.timeParserPolicy; proceeding without it")
+        print("Could not set spark.sql.legacy.timeParserPolicy; proceeding without it")
     
     try:
-        print("\n1️⃣  Creating Silver table schemas...")
+        print("\nCreating Silver table schemas...")
         create_silver_posts_table(spark)
         create_silver_comments_table(spark)
         
-        print("\n2️⃣  Cleaning and loading to Silver...")
+        print("\nCleaning and loading to Silver...")
         posts_count, comments_count = clean_and_load_to_silver(spark)
         
         print("\n" + "=" * 80)
         if posts_count > 0 or comments_count > 0:
-            print(f"✅ STEP 2 COMPLETED:")
-            print(f"   Posts loaded: {posts_count:,}")
-            print(f"   Comments loaded: {comments_count:,}")
+            print(f"STEP 2 COMPLETED:")
+            print(f"Posts loaded: {posts_count:,}")
+            print(f"Comments loaded: {comments_count:,}")
         else:
-            print(f"✅ STEP 2 COMPLETED: No new records to load")
+            print(f"STEP 2 COMPLETED: No new records to load")
         print("=" * 80)
         
     except Exception as e:
-        print(f"\n❌ ERROR: {e}")
+        print(f"\nERROR: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
     finally:
         spark.stop()
-
 
 if __name__ == "__main__":
     main()

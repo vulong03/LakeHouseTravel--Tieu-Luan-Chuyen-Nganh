@@ -89,7 +89,7 @@ def load_source_data(spark):
     - Province/city
     - Region
     """
-    print(f"\n📥 Loading source data from: {SOURCE_CSV_PATH}")
+    print(f"\nLoading source data from: {SOURCE_CSV_PATH}")
     
     df = spark.read.csv(
         SOURCE_CSV_PATH,
@@ -97,7 +97,7 @@ def load_source_data(spark):
         inferSchema=True
     )
     
-    print(f"✅ Loaded {df.count()} provinces")
+    print(f"Loaded {df.count()} provinces")
     df.printSchema()
     df.show(5, truncate=False)
     
@@ -115,7 +115,7 @@ def transform_to_dim_province(df):
     4. Add metadata columns (created_at, updated_at, is_active)
     5. Generate surrogate key 'province_sk' using row_number
     """
-    print(f"\n🔄 Transforming to dimension format...")
+    print(f"\nTransforming to dimension format...")
     
     current_timestamp = F.current_timestamp()
     
@@ -126,7 +126,7 @@ def transform_to_dim_province(df):
     )
     
     # Step 2: Map province_name_afterLaw
-    print(f"   📍 Mapping province_name_afterLaw...")
+    print(f"Mapping province_name_afterLaw...")
     
     # Create mapping expression using CASE WHEN
     mapping_expr = F.create_map(
@@ -142,20 +142,20 @@ def transform_to_dim_province(df):
     )
     
     # Step 3: Set is_city flag
-    print(f"   🏙️  Setting is_city flag for central municipalities...")
+    print(f"Setting is_city flag for central municipalities...")
     df = df.withColumn(
         "is_city",
         F.when(F.col("province_name").isin(CENTRAL_CITIES), True).otherwise(False)
     )
     
     # Step 4: Add metadata columns
-    print(f"   ⏰ Adding SCD metadata...")
+    print(f"Adding SCD metadata...")
     df = df.withColumn("created_at", current_timestamp)
     df = df.withColumn("updated_at", current_timestamp)
     df = df.withColumn("is_active", F.lit(True))
     
     # Step 5: Generate surrogate key
-    print(f"   🔑 Generating surrogate keys...")
+    print(f"Generating surrogate keys...")
     window_spec = Window.orderBy("province_name")
     df = df.withColumn("province_sk", F.row_number().over(window_spec))
     
@@ -171,7 +171,7 @@ def transform_to_dim_province(df):
         "is_active"
     )
     
-    print(f"✅ Transformation complete")
+    print(f"Transformation complete")
     df.printSchema()
     df.show(10, truncate=False)
     
@@ -184,24 +184,24 @@ def write_to_gold_table(spark, df):
     
     Mode: OVERWRITE (full refresh for Type 1 SCD)
     """
-    print(f"\n💾 Writing to Gold table: {GOLD_TABLE_FULL}")
+    print(f"\nWriting to Gold table: {GOLD_TABLE_FULL}")
     
     record_count = df.count()
-    print(f"   📊 Records to write: {record_count}")
+    print(f"Records to write: {record_count}")
     
     # Write to Iceberg table
     df.writeTo(GOLD_TABLE_FULL) \
         .using("iceberg") \
         .overwritePartitions()  # Full refresh
     
-    print(f"✅ Successfully wrote {record_count} records to {GOLD_TABLE_FULL}")
+    print(f"Successfully wrote {record_count} records to {GOLD_TABLE_FULL}")
 
 
 def validate_results(spark):
     """
     Validate the created dimension table
     """
-    print(f"\n✅ Validating results...")
+    print(f"\nValidating results...")
     
     df = spark.table(GOLD_TABLE_FULL)
     
@@ -209,24 +209,24 @@ def validate_results(spark):
     city_count = df.filter(F.col("is_city") == True).count()
     province_count = df.filter(F.col("is_city") == False).count()
     
-    print(f"\n📊 Validation Summary:")
-    print(f"   Total provinces/cities: {total_count}")
-    print(f"   Central municipalities: {city_count}")
-    print(f"   Provinces: {province_count}")
+    print(f"\nValidation Summary:")
+    print(f"Total provinces/cities: {total_count}")
+    print(f"Central municipalities: {city_count}")
+    print(f"Provinces: {province_count}")
     
-    print(f"\n🏙️  Central municipalities:")
+    print(f"\nCentral municipalities:")
     df.filter(F.col("is_city") == True) \
         .select("province_sk", "province_name", "province_name_afterLaw", "region") \
         .orderBy("province_name") \
         .show(truncate=False)
     
-    print(f"\n🔄 Provinces with name changes after law:")
+    print(f"\nProvinces with name changes after law:")
     df.filter(F.col("province_name") != F.col("province_name_afterLaw")) \
         .select("province_sk", "province_name", "province_name_afterLaw", "region") \
         .orderBy("province_name") \
         .show(20, truncate=False)
     
-    print(f"\n📍 Sample by region:")
+    print(f"\nSample by region:")
     df.groupBy("region") \
         .agg(F.count("*").alias("province_count")) \
         .orderBy("region") \
@@ -288,9 +288,9 @@ def main():
         )
         
         print("\n" + "=" * 80)
-        print("✅ dim_province job completed successfully!")
-        print(f"   Records: {record_count}")
-        print(f"   Execution time: {execution_time:.2f}s")
+        print("dim_province job completed successfully!")
+        print(f"Records: {record_count}")
+        print(f"Execution time: {execution_time:.2f}s")
         print("=" * 80)
         
     except Exception as e:
@@ -301,7 +301,7 @@ def main():
             error_message=str(e)
         )
         
-        print(f"\n❌ Job failed with error: {e}")
+        print(f"\nJob failed with error: {e}")
         import traceback
         traceback.print_exc()
         raise

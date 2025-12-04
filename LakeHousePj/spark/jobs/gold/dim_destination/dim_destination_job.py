@@ -83,20 +83,20 @@ def create_dim_destination_table(spark):
 
 
 def load_source_data(spark) -> DataFrame:
-    print(f"\n📥 Loading source data from: {SOURCE_CSV_PATH}")
+    print(f"\nLoading source data from: {SOURCE_CSV_PATH}")
     df = (
         spark.read.option("header", True)
         .option("inferSchema", True)
         .csv(SOURCE_CSV_PATH)
     )
-    print(f"✅ Loaded {df.count()} raw rows")
+    print(f"Loaded {df.count()} raw rows")
     df.printSchema()
     df.show(5, truncate=False)
     return df
 
 
 def preprocess_source(df: DataFrame) -> DataFrame:
-    print("\n🔧 Cleaning and normalizing source data...")
+    print("\nCleaning and normalizing source data...")
     df = df.select(
         F.trim(F.col("destination_name")).alias("destination_name"),
         F.trim(F.col("province_name")).alias("province_name"),
@@ -126,12 +126,12 @@ def preprocess_source(df: DataFrame) -> DataFrame:
     before_dedup = df.count()
     df = df.dropDuplicates(BUSINESS_KEY)
     after_dedup = df.count()
-    print(f"   • Deduplicated {before_dedup - after_dedup} duplicate rows")
+    print(f"Deduplicated {before_dedup - after_dedup} duplicate rows")
     return df
 
 
 def join_with_dim_province(spark, df: DataFrame) -> DataFrame:
-    print("\n🔗 Joining with dim_province to fetch province_sk...")
+    print("\nJoining with dim_province to fetch province_sk...")
     province_df = spark.table(DIM_PROVINCE_TABLE).select(
         "province_name", "province_sk"
     )
@@ -141,7 +141,7 @@ def join_with_dim_province(spark, df: DataFrame) -> DataFrame:
 
     missing_count = missing_df.count()
     if missing_count > 0:
-        print("❌ Found destinations with unknown province:")
+        print("Found destinations with unknown province:")
         missing_df.select("destination_name", "province_name").show(
             missing_count, truncate=False
         )
@@ -153,7 +153,7 @@ def join_with_dim_province(spark, df: DataFrame) -> DataFrame:
 
 
 def transform_to_dimension(df: DataFrame) -> DataFrame:
-    print("\n🔄 Transforming dataset into dimension schema...")
+    print("\nTransforming dataset into dimension schema...")
     current_ts = F.current_timestamp()
 
     window_spec = Window.orderBy("province_sk", "destination_name")
@@ -184,26 +184,26 @@ def transform_to_dimension(df: DataFrame) -> DataFrame:
 
 def write_to_gold_table(df: DataFrame):
     record_count = df.count()
-    print(f"\n💾 Writing {record_count} records to {GOLD_TABLE_FULL} ...")
+    print(f"\nWriting {record_count} records to {GOLD_TABLE_FULL} ...")
     (
         df.writeTo(GOLD_TABLE_FULL)
         .using("iceberg")
         .overwritePartitions()
     )
-    print(f"✅ Successfully wrote {record_count} rows")
+    print(f"Successfully wrote {record_count} rows")
     return record_count
 
 
 def validate_results(spark):
-    print("\n✅ Validating dim_destination...")
+    print("\nValidating dim_destination...")
     df = spark.table(GOLD_TABLE_FULL)
     total = df.count()
     distinct_provinces = df.select("province_name").distinct().count()
 
-    print(f"   • Total destinations: {total}")
-    print(f"   • Provinces covered: {distinct_provinces}")
+    print(f"Total destinations: {total}")
+    print(f"Provinces covered: {distinct_provinces}")
 
-    print("\n🏷️  Top destination types:")
+    print("\nTop destination types:")
     (
         df.groupBy("destination_type")
         .agg(F.count("*").alias("count"))
@@ -211,7 +211,7 @@ def validate_results(spark):
         .show(10, truncate=False)
     )
 
-    print("\n📍 Sample destinations:")
+    print("\nSample destinations:")
     (
         df.orderBy("province_name", "destination_name")
         .select(
@@ -287,9 +287,9 @@ def main():
 
         print("\n" * 2)
         print("=" * 80)
-        print("✅ dim_destination job completed successfully!")
-        print(f"   Records: {record_count}")
-        print(f"   Execution time: {execution_time:.2f}s")
+        print("dim_destination job completed successfully!")
+        print(f"Records: {record_count}")
+        print(f"Execution time: {execution_time:.2f}s")
         print("=" * 80)
 
     except Exception as exc:
@@ -298,14 +298,13 @@ def main():
             table_name=GOLD_TABLE_FULL,
             error_message=str(exc),
         )
-        print(f"\n❌ Job failed: {exc}")
+        print(f"\nJob failed: {exc}")
         import traceback
 
         traceback.print_exc()
         raise
     finally:
         spark.stop()
-
 
 if __name__ == "__main__":
     main()
