@@ -33,6 +33,8 @@ from config import (  # type: ignore
     SOURCE_DESCRIPTION,
 )
 
+DIM_POST_TABLE = f"{GOLD_CATALOG}.{GOLD_DATABASE}.dim_post"
+
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
@@ -147,16 +149,25 @@ def load_dim_date(spark: SparkSession) -> DataFrame:
 
 
 def load_fact_comments(spark: SparkSession) -> Tuple[DataFrame, Dict[str, Any]]:
-    """Load fact_comment_nlp_engagement"""
+    """Load fact_comment_nlp_engagement and join with dim_post to get post_date_sk"""
     print(f"\n📥 Loading {FACT_COMMENT_NLP_TABLE}...")
     
-    df = spark.table(FACT_COMMENT_NLP_TABLE)
+    df_comments = spark.table(FACT_COMMENT_NLP_TABLE)
+    
+    print(f"\n🔗 Joining with {DIM_POST_TABLE} to get post_date_sk...")
+    df_posts = spark.table(DIM_POST_TABLE).select("post_sk", "post_date_sk")
+    
+    df = df_comments.join(
+        df_posts,
+        on="post_sk",
+        how="inner"
+    )
     
     total_count = df.count()
     provinces = df.select("province_sk").distinct().count()
     posts = df.select("post_sk").distinct().count()
     
-    print(f"   ✅ Loaded {total_count:,} comments")
+    print(f"   ✅ Loaded {total_count:,} comments (with post_date_sk)")
     print(f"      - Distinct provinces: {provinces}")
     print(f"      - Distinct posts: {posts}")
     
@@ -173,12 +184,13 @@ def join_with_date_dimension(
     df_comments: DataFrame, 
     df_dates: DataFrame
 ) -> DataFrame:
-    """Join comments with date dimension to get year_month"""
-    print("\n🔗 Joining with dim_date...")
+    """Join with date dimension to get POST year_month (not comment date)"""
+    print("\n🔗 Joining with dim_date (by POST date)...")
     
+    # Join by POST_DATE_SK to aggregate by month post was created
     df_joined = df_comments.join(
         df_dates,
-        df_comments.comment_date_sk == df_dates.date_sk,
+        df_comments.post_date_sk == df_dates.date_sk,
         how="inner"
     )
     
@@ -186,7 +198,7 @@ def join_with_date_dimension(
     df_joined = df_joined.drop(df_dates.date_sk)
     
     count_after = df_joined.count()
-    print(f"   ✅ Joined result: {count_after:,} rows")
+    print(f"   ✅ Joined result: {count_after:,} rows (grouped by POST date)")
     
     return df_joined
 
@@ -358,22 +370,21 @@ def reorder_columns(df: DataFrame) -> DataFrame:
 
 
 def write_to_iceberg(spark: SparkSession, df: DataFrame) -> int:
-    """Write aggregated data to Iceberg table (TRUNCATE + INSERT)"""
+    """Write aggregated data to Iceberg table with full overwrite"""
     print(f"\n💾 Writing to {GOLD_TABLE_FULL}...")
     
-    # Truncate existing data
-    print("   🗑️  Truncating existing data...")
-    spark.sql(f"TRUNCATE TABLE {GOLD_TABLE_FULL}")
+    row_count = df.count()
+    print(f"   📊 Total rows to write: {row_count:,}")
     
-    # Write new data
-    print("   📝 Writing new data...")
-    df.writeTo(GOLD_TABLE_FULL).append()
+    # Full overwrite entire table (vì thay đổi logic từ comment_date -> post_date)
+    df.write \
+        .format("iceberg") \
+        .mode("overwrite") \
+        .saveAsTable(GOLD_TABLE_FULL)
     
-    # Verify
-    result_count = spark.table(GOLD_TABLE_FULL).count()
-    print(f"   ✅ Written {result_count:,} rows")
+    print(f"   ✅ Successfully overwrote entire table with {row_count:,} rows")
     
-    return result_count
+    return row_count
 
 
 def export_to_parquet(df: DataFrame) -> None:
