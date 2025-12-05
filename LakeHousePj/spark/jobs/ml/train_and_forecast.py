@@ -14,9 +14,16 @@ Output:
 - Artifacts: MLflow (plots, metrics, model)
 """
 
+import sys
+sys.path.append('/opt/spark/jobs')
+
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
+from pyspark.sql.types import (
+    StructType, StructField, LongType, IntegerType, StringType, 
+    DoubleType, TimestampType
+)
 from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
@@ -28,6 +35,8 @@ import mlflow.xgboost
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
+
+from utils.iceberg_utils import create_iceberg_table_if_not_exists
 
 # MLflow configuration
 MLFLOW_TRACKING_URI = "postgresql://lakehouse_user:lakehouse_pass@postgres:5432/mlflow_db"
@@ -43,7 +52,7 @@ TRAIN_TEST_SPLIT = 0.7
 XGBOOST_PARAMS = {
     "n_estimators": 200,
     "max_depth": 4,
-    "learning_rate": 0.05,
+    "learning_rate": 0.01,
     "min_child_weight": 5,
     "subsample": 0.7,
     "colsample_bytree": 0.7,
@@ -55,7 +64,9 @@ XGBOOST_PARAMS = {
     "tree_method": "hist"
 }
 
-# Feature columns (11 features - removed total_post_shares due to high null rate)
+# Feature columns - EXPERIMENT: Chỉ dùng comment metrics (11 features total)
+# Added: total_emojis, total_negative_emojis (tận dụng hết 8 NLP features)
+# Removed: total_posts, total_post_likes, total_post_saves (3 post metrics)
 TEMPORAL_FEATURES = ["month", "month_sin", "month_cos"]
 LAG_FEATURES = ["hotness_lag_1", "hotness_lag_2", "hotness_lag_3", "hotness_lag_12", "hotness_rolling_avg_3m"]
 
@@ -73,10 +84,12 @@ CURRENT_FEATURES = [
     "positive_ratio",          # ✅ Có
     "avg_sentiment_score",     # ✅ Có
     
-    # === NLP Richness (3) ===
+    # === NLP Richness (5) === # EXPANDED: Thêm total_emojis, total_negative_emojis
     "avg_words_per_comment",   # ✅ Có
     "avg_unique_word_ratio",   # ✅ Có
     "total_positive_emojis",   # ✅ Có
+    "total_emojis",            # ✅ ADDED - Tổng số emoji
+    "total_negative_emojis",   # ✅ ADDED - Số emoji tiêu cực
 ]
 
 ALL_FEATURES = TEMPORAL_FEATURES + LAG_FEATURES + CURRENT_FEATURES
@@ -90,7 +103,7 @@ def create_spark_session():
         .config("spark.sql.catalog.gold", "org.apache.iceberg.spark.SparkCatalog") \
         .config("spark.sql.catalog.gold.type", "hive") \
         .config("spark.sql.catalog.gold.uri", "thrift://hive-metastore:9083") \
-        .config("spark.sql.catalog.gold.warehouse", "s3a://gold/") \
+        .config("spark.sql.catalog.gold.warehouse", "s3a://gold/lakehouse") \
         .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
         .config("spark.hadoop.fs.s3a.access.key", "minioadmin") \
         .config("spark.hadoop.fs.s3a.secret.key", "minioadmin123") \
@@ -103,14 +116,16 @@ def create_spark_session():
 
 def calculate_hotness_score(spark):
     """
-    Step 1: Calculate hotness_score từ 14 normalized metrics
+    Step 1: Calculate hotness_score from 14 normalized metrics using hierarchical approach
     
-    Weights:
-    - Volume: 20% (comments 15% + posts 5%)
-    - Post engagement: 25% (likes 10% + shares 10% + saves 5%)
-    - Comment engagement: 10%
-    - Sentiment: 30% (positive 12% + avg 10% + negative 5% + emoji 3%)
-    - NLP richness: 15% (words 6% + unique 6% + exclamation 3%)
+    Hierarchical Structure (5 dimensions):
+    1. Base volume: 25% (posts 60% + comments 40%)
+    2. Engagement: 35% (post_likes 45% + post_saves 35% + comment_likes 20%)
+    3. Sentiment: 20% (positive 50% + avg 30% + negative 20%)
+    4. Emoji vibe: 5% (total_emojis 50% + emoji_sentiment 50%)
+    5. NLP richness: 15% (words 45% + unique 45% + exclamation 10%)
+    
+    Total: 100% = 25% + 35% + 20% + 5% + 15%
     """
     print("\n" + "="*80)
     print("STEP 1: CALCULATING HOTNESS SCORE")
@@ -155,6 +170,9 @@ def calculate_hotness_score(spark):
     df = df.withColumn("sentiment_scaled", (F.col("avg_sentiment_score") + 1) / 2)
     df = df.withColumn("norm_avg_sentiment", F.percent_rank().over(window_month.orderBy("sentiment_scaled")))
     
+    # Emoji metrics: Normalize total_emojis and emoji sentiment
+    df = df.withColumn("norm_total_emojis", F.percent_rank().over(window_month.orderBy("total_emojis")))
+    
     # Emoji sentiment: (positive - negative) / total, handle division by zero
     df = df.withColumn("emoji_sentiment", 
         F.when(F.col("total_emojis") > 0,
@@ -163,27 +181,49 @@ def calculate_hotness_score(spark):
     )
     df = df.withColumn("norm_emoji_sentiment", F.percent_rank().over(window_month.orderBy("emoji_sentiment")))
     
-    # Calculate weighted hotness_score
-    # Note: total_post_shares removed (nhiều null), weight 10% được phân lại cho likes (+5%) và saves (+5%)
+    # Calculate weighted hotness_score - HIERARCHICAL APPROACH
+    # Step 1: Create intermediate scores for each dimension
+    
+    # 1) Base volume: 25% (posts > comments)
+    df = df.withColumn("base_volume",
+        (F.col("norm_total_posts") * 0.6) +
+        (F.col("norm_total_comments") * 0.4)
+    )
+    
+    # 2) Engagement: 35% (likes > saves > comment_likes)
+    df = df.withColumn("engagement_score",
+        (F.col("norm_total_post_likes") * 0.45) +
+        (F.col("norm_total_post_saves") * 0.35) +
+        (F.col("norm_total_comment_likes") * 0.20)
+    )
+    
+    # 3) Vibe & sentiment: 25% (positive > avg > negative)
+    df = df.withColumn("sentiment_score",
+        (F.col("norm_positive_ratio") * 0.5) +
+        (F.col("norm_avg_sentiment") * 0.3) +
+        ((1 - F.col("norm_negative_ratio")) * 0.2)
+    )
+    
+    # 4) Emoji score: 5% (intensity + sentiment)
+    df = df.withColumn("emoji_score",
+        (F.col("norm_total_emojis") * 0.5) +
+        (F.col("norm_emoji_sentiment") * 0.5)
+    )
+    
+    # 5) NLP richness: 15% (words = unique > exclamation)
+    df = df.withColumn("richness_score",
+        (F.col("norm_avg_words_per_comment") * 0.45) +
+        (F.col("norm_avg_unique_word_ratio") * 0.45) +
+        (F.col("norm_exclamation_ratio") * 0.10)
+    )
+    
+    # Final hotness: weighted combination of 5 dimensions
     df = df.withColumn("hotness_score",
-        # Volume: 20%
-        (F.col("norm_total_comments") * 0.15) +
-        (F.col("norm_total_posts") * 0.05) +
-        # Post engagement: 25% (shares removed, redistributed to likes and saves)
-        (F.col("norm_total_post_likes") * 0.15) +      # 10% -> 15%
-        # (F.col("norm_total_post_shares") * 0.10) +   # Removed - nhiều null
-        (F.col("norm_total_post_saves") * 0.10) +      # 5% -> 10%
-        # Comment engagement: 10%
-        (F.col("norm_total_comment_likes") * 0.10) +
-        # Sentiment: 30%
-        (F.col("norm_positive_ratio") * 0.12) +
-        (F.col("norm_avg_sentiment") * 0.10) +
-        ((1 - F.col("norm_negative_ratio")) * 0.05) +
-        (F.col("norm_emoji_sentiment") * 0.03) +
-        # NLP richness: 15%
-        (F.col("norm_avg_words_per_comment") * 0.06) +
-        (F.col("norm_avg_unique_word_ratio") * 0.06) +
-        (F.col("norm_exclamation_ratio") * 0.03)
+        (F.col("base_volume") * 0.25) +        # Base volume: 25%
+        (F.col("engagement_score") * 0.35) +   # Engagement: 35%
+        (F.col("sentiment_score") * 0.20) +    # Sentiment: 20%
+        (F.col("emoji_score") * 0.05) +        # Emoji vibe: 5%
+        (F.col("richness_score") * 0.15)       # NLP richness: 15%
     )
     
     # Clamp to [0, 1]
@@ -193,8 +233,11 @@ def calculate_hotness_score(spark):
         .otherwise(F.col("hotness_score"))
     )
     
-    # Drop intermediate columns
-    norm_cols = [c for c in df.columns if c.startswith("norm_")] + ["sentiment_scaled", "emoji_sentiment", "exclamation_ratio"]
+    # Drop intermediate columns (including new norm_total_emojis and score columns)
+    norm_cols = [c for c in df.columns if c.startswith("norm_")] + [
+        "sentiment_scaled", "emoji_sentiment", "exclamation_ratio",
+        "base_volume", "engagement_score", "sentiment_score", "emoji_score", "richness_score"
+    ]
     df = df.drop(*norm_cols)
     
     print(f"✓ Calculated hotness_score (min-max): {df.agg(F.min('hotness_score'), F.max('hotness_score')).first()}")
@@ -392,6 +435,36 @@ def train_xgboost_model(df):
         return model, test_df
 
 
+def create_forecast_table(spark):
+    """Create Iceberg table for forecast results if not exists"""
+    schema = StructType([
+        StructField("province_sk", LongType(), False),
+        StructField("province_name", StringType(), False),
+        StructField("region", StringType(), False),
+        StructField("year", IntegerType(), False),
+        StructField("month", IntegerType(), False),
+        StructField("year_month", IntegerType(), False),
+        StructField("horizon_month", IntegerType(), False),
+        StructField("predicted_hotness", DoubleType(), False),
+        StructField("forecast_date", StringType(), False),
+        StructField("model_version", StringType(), False),
+    ])
+    
+    create_iceberg_table_if_not_exists(
+        spark=spark,
+        database="gold",
+        table_name="province_month_forecast_next12",
+        schema=schema,
+        partition_by=["year", "month"],
+        table_properties={
+            "format-version": "2",
+            "write.format.default": "parquet",
+            "write.parquet.compression-codec": "snappy",
+        },
+        catalog="gold"
+    )
+
+
 def forecast_12_months(spark, model, df_with_lags):
     """
     Step 4: Forecast 12 months ahead using recursive autoregressive
@@ -405,6 +478,9 @@ def forecast_12_months(spark, model, df_with_lags):
     print("\n" + "="*80)
     print("STEP 4: FORECASTING 12 MONTHS AHEAD")
     print("="*80)
+    
+    # Create table if not exists
+    create_forecast_table(spark)
     
     # Get latest data for each province
     latest_df = df_with_lags.groupBy("province_sk").agg(F.max("year_month").alias("max_year_month"))
@@ -433,7 +509,7 @@ def forecast_12_months(spark, model, df_with_lags):
             last_hotness            # current (will become lag_1 for next prediction)
         ]
         
-        # Current metrics (last known values) - 9 features (removed total_post_shares)
+        # Current metrics (last known values) - EXPERIMENT: Chỉ comment metrics (8 features)
         current_metrics = {
             'total_comments': row['total_comments'],
             'total_posts': row['total_posts'],
@@ -444,7 +520,9 @@ def forecast_12_months(spark, model, df_with_lags):
             'avg_sentiment_score': row['avg_sentiment_score'],
             'avg_words_per_comment': row['avg_words_per_comment'],
             'avg_unique_word_ratio': row['avg_unique_word_ratio'],
-            'total_positive_emojis': row['total_positive_emojis']
+            'total_positive_emojis': row['total_positive_emojis'],
+            'total_emojis': row['total_emojis'],  # ADDED - Tận dụng hết NLP features
+            'total_negative_emojis': row['total_negative_emojis']  # ADDED - Tận dụng hết NLP features
         }
         
         # Forecast 12 months
@@ -497,14 +575,14 @@ def forecast_12_months(spark, model, df_with_lags):
     # Convert to Spark DataFrame
     forecast_df = spark.createDataFrame(forecast_results)
     
-    # Save to Iceberg table
-    forecast_df.writeTo("gold.gold.province_month_forecast_next12") \
-        .using("iceberg") \
-        .tableProperty("format-version", "2") \
-        .partitionedBy("year", "month") \
-        .createOrReplace()
+    # Save to Iceberg table using overwrite mode
+    print(f"\n💾 Writing to table: gold.gold.province_month_forecast_next12")
+    forecast_df.write \
+        .format("iceberg") \
+        .mode("overwrite") \
+        .save("gold.gold.province_month_forecast_next12")
     
-    print(f"✓ Saved forecast to table: gold.gold.province_month_forecast_next12")
+    print(f"✓ Saved {len(forecast_results)} predictions to gold.gold.province_month_forecast_next12")
     
     # Export to Parquet on MinIO
     parquet_path = f"s3a://gold/ml_forecast/province_hotness_forecast_{datetime.now().strftime('%Y%m%d_%H%M%S')}.parquet"

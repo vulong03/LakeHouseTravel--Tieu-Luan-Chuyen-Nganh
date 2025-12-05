@@ -36,8 +36,8 @@ MLFLOW_TRACKING_URI = "postgresql://lakehouse_user:lakehouse_pass@postgres:5432/
 MODEL_NAME = "province_hotness_forecaster"
 
 # Cache configuration
-CACHE_DURATION = 300  # 5 minutes
-_forecast_cache = {"data": None, "timestamp": 0}
+CACHE_DURATION = 30  # 30 seconds (was 5 minutes) - shorter cache to detect new runs faster
+_forecast_cache = {"data": None, "timestamp": 0, "run_folder": None}
 
 # Debug mode
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -60,52 +60,65 @@ REGIONS = {
 }
 
 
+def clear_cache():
+    """Clear forecast data cache"""
+    global _forecast_cache
+    _forecast_cache = {"data": None, "timestamp": 0, "run_folder": None}
+    print("🗑️ Cache cleared")
+
+
 def load_forecast_data():
     """Load forecast data from MinIO Parquet files (latest run folder) with caching"""
     # Check cache
     now = time.time()
     if _forecast_cache["data"] is not None and (now - _forecast_cache["timestamp"]) < CACHE_DURATION:
-        print("📦 Using cached data")
+        print(f"📦 Using cached data from run: {_forecast_cache['run_folder']} (age: {int(now - _forecast_cache['timestamp'])}s)")
         return _forecast_cache["data"], None
     
     try:
-        # List all objects in forecast directory
-        objects = MINIO_CLIENT.list_objects(BUCKET_NAME, prefix=FORECAST_PREFIX, recursive=True)
+        print("🔄 Loading fresh data from MinIO...")
         
-        # Get all parquet files with their folder paths
-        parquet_files = []
+        # List all objects in forecast directory
+        objects = list(MINIO_CLIENT.list_objects(BUCKET_NAME, prefix=FORECAST_PREFIX, recursive=True))
+        
+        # Get all folders with their last_modified timestamp
+        folder_timestamps = {}
+        parquet_files_by_folder = {}
+        
         for obj in objects:
             if obj.object_name.endswith('.parquet'):
-                parquet_files.append(obj.object_name)
+                # Extract folder name: ml_forecast/20241204_160932/part-xxx.parquet
+                parts = obj.object_name.split('/')
+                if len(parts) >= 3:
+                    run_folder = f"{parts[0]}/{parts[1]}/"  # ml_forecast/20241204_160932/
+                    
+                    # Track latest modified time for this folder
+                    if run_folder not in folder_timestamps or obj.last_modified > folder_timestamps[run_folder]:
+                        folder_timestamps[run_folder] = obj.last_modified
+                    
+                    # Track files in this folder
+                    if run_folder not in parquet_files_by_folder:
+                        parquet_files_by_folder[run_folder] = []
+                    parquet_files_by_folder[run_folder].append(obj.object_name)
         
-        if not parquet_files:
+        if not folder_timestamps:
             error_msg = "⚠️ Không tìm thấy file dự báo trong MinIO!"
             print(error_msg)
             return pd.DataFrame(), error_msg
         
-        print(f"📂 Found {len(parquet_files)} parquet files")
+        print(f"📂 Found {len(folder_timestamps)} run folders:")
+        for folder, timestamp in sorted(folder_timestamps.items(), key=lambda x: x[1], reverse=True):
+            print(f"   - {folder} (modified: {timestamp})")
         
-        # Extract unique run folders (format: ml_forecast/YYYYMMDD_HHMMSS/)
-        run_folders = set()
-        for file_path in parquet_files:
-            # Extract folder name: ml_forecast/20241204_160932/part-xxx.parquet
-            parts = file_path.split('/')
-            if len(parts) >= 3:
-                run_folder = f"{parts[0]}/{parts[1]}/"  # ml_forecast/20241204_160932/
-                run_folders.add(run_folder)
+        # Get latest run folder by last_modified time (not by name)
+        latest_run_folder = max(folder_timestamps.items(), key=lambda x: x[1])[0]
+        latest_timestamp = folder_timestamps[latest_run_folder]
         
-        if not run_folders:
-            error_msg = "⚠️ Không tìm thấy folder dự báo hợp lệ!"
-            print(error_msg)
-            return pd.DataFrame(), error_msg
-        
-        # Sort folders by timestamp (descending) and get latest
-        latest_run_folder = sorted(run_folders, reverse=True)[0]
-        print(f"📁 Loading from latest run: {latest_run_folder}")
+        print(f"🌟 LATEST RUN: {latest_run_folder} (modified: {latest_timestamp})")
         
         # Load ALL parquet files from latest run folder
         df_list = []
-        files_in_latest_run = [f for f in parquet_files if f.startswith(latest_run_folder)]
+        files_in_latest_run = parquet_files_by_folder[latest_run_folder]
         
         print(f"📦 Loading {len(files_in_latest_run)} parquet files from latest run...")
         
@@ -132,9 +145,12 @@ def load_forecast_data():
         print(f"   - Unique regions: {df['region'].nunique()}")
         print(f"   - Date range: {df['forecast_date'].min()} to {df['forecast_date'].max()}")
         
-        # Update cache
+        # Update cache with run folder info
         _forecast_cache["data"] = df
         _forecast_cache["timestamp"] = now
+        _forecast_cache["run_folder"] = latest_run_folder
+        
+        print(f"✅ Cache updated: {latest_run_folder} at {datetime.now().strftime('%H:%M:%S')}")
         
         return df, None
         
@@ -186,10 +202,11 @@ def recommend_provinces(start_month, end_month, region, top_n):
     
     # Convert MM/YYYY to year_month integer (YYYYMM)
     month_mapping = {
-        "10/2025": 202510, "11/2025": 202511, "12/2025": 202512,
+        "12/2025": 202512,
         "01/2026": 202601, "02/2026": 202602, "03/2026": 202603,
         "04/2026": 202604, "05/2026": 202605, "06/2026": 202606,
-        "07/2026": 202607, "08/2026": 202608, "09/2026": 202609
+        "07/2026": 202607, "08/2026": 202608, "09/2026": 202609,
+        "10/2026": 202610, "11/2026": 202611
     }
     
     start_year_month = month_mapping[start_month]
@@ -247,7 +264,20 @@ def recommend_provinces(start_month, end_month, region, top_n):
     
     # Validate requested months are available
     available_year_months = set(df['year_month'].unique())
-    requested_year_months = set(range(start_year_month, end_year_month + 1))
+    
+    # Generate valid YYYYMM sequence with proper month arithmetic
+    requested_year_months = []
+    current = start_year_month
+    while current <= end_year_month:
+        requested_year_months.append(current)
+        year = current // 100
+        month = current % 100
+        if month == 12:
+            current = (year + 1) * 100 + 1
+        else:
+            current = current + 1
+    requested_year_months = set(requested_year_months)
+    
     missing_year_months = requested_year_months - available_year_months
     
     if missing_year_months:
@@ -539,19 +569,21 @@ def create_interface():
                 
                 search_btn = gr.Button("🔍 Tìm kiếm", variant="primary", size="sm")
                 
-                month_choices = ["10/2025", "11/2025", "12/2025", "01/2026", "02/2026", "03/2026", 
-                                 "04/2026", "05/2026", "06/2026", "07/2026", "08/2026", "09/2026"]
+                # Dynamic month choices: Load from actual forecast data
+                month_choices = ["12/2025", "01/2026", "02/2026", "03/2026", 
+                                 "04/2026", "05/2026", "06/2026", "07/2026", 
+                                 "08/2026", "09/2026", "10/2026", "11/2026"]
                 
                 start_month = gr.Dropdown(
                     choices=month_choices,
-                    value="10/2025",
+                    value="12/2025",
                     label="📅 Tháng bắt đầu",
                     info="Chọn tháng bắt đầu dự báo"
                 )
                 
                 end_month = gr.Dropdown(
                     choices=month_choices,
-                    value="12/2025",
+                    value="03/2026",
                     label="📅 Tháng kết thúc",
                     info="Chọn tháng kết thúc dự báo"
                 )

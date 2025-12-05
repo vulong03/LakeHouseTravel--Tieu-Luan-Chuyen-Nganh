@@ -53,7 +53,7 @@ docker-compose exec spark-master /opt/spark/bin/spark-submit `
     --conf spark.sql.catalog.gold=org.apache.iceberg.spark.SparkCatalog `
     --conf spark.sql.catalog.gold.type=hive `
     --conf spark.sql.catalog.gold.uri=thrift://hive-metastore:9083 `
-    --conf spark.sql.catalog.gold.warehouse=s3a://gold/ `
+    --conf spark.sql.catalog.gold.warehouse=s3a://gold/lakehouse `
     --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 `
     --conf spark.hadoop.fs.s3a.access.key=minioadmin `
     --conf spark.hadoop.fs.s3a.secret.key=minioadmin123 `
