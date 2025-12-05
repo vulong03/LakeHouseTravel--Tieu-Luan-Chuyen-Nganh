@@ -15,7 +15,7 @@ postgres/data/
 minio/data/
 hive/data/
 dremio/data/
-ml/mlflow/data/
+mlflow/data/
 airflow/logs/
 spark/logs/
 spark/spark-events/

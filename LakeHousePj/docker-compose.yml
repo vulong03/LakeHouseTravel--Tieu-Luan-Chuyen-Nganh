@@ -445,7 +445,7 @@ services:
   # ============================================
   mlflow:
     build:
-      context: ./ml/mlflow
+      context: ./mlflow
       dockerfile: Dockerfile
     container_name: lakehouse_mlflow
     hostname: mlflow
@@ -460,7 +460,7 @@ services:
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
     volumes:
-      - ./ml/mlflow/data:/mlflow/data
+      - ./mlflow/data:/mlflow/data
     command: >
       mlflow server
       --host 0.0.0.0
