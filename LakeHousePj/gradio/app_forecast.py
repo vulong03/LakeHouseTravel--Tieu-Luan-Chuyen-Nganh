@@ -440,13 +440,13 @@ def recommend_provinces(start_month, end_month, region, top_n):
         
         info_msg = f"""
 <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 12px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
-    <h3 style="margin-top: 0; font-size: 18px;">✅ Thông tin Model</h3>
+    <h3 style="margin-top: 0; font-size: 18px;">Thông tin Model</h3>
     <p style="margin: 8px 0;"><strong>Model:</strong> {MODEL_NAME} <span style="background: rgba(255,255,255,0.3); padding: 3px 8px; border-radius: 5px;">v{model_info['version']}</span></p>
-    <p style="margin: 8px 0;"><strong>📊 Độ chính xác:</strong> RMSE={model_info['test_rmse']:.4f} | MAE={model_info['test_mae']:.4f} | R²={model_info['test_r2']:.4f}</p>
-    <p style="margin: 8px 0;"><strong>🕒 Trained:</strong> {model_info['trained_at']}</p>
-    <p style="margin: 8px 0;"><strong>📈 Dữ liệu gốc:</strong> {num_provinces_in_data}/62 tỉnh × 12 tháng = {len(df)} predictions</p>
-    <p style="margin: 8px 0;"><strong>🔍 Đã lọc:</strong> {num_provinces_filtered} tỉnh × {num_actual_months} tháng thực tế (chọn {num_months_selected}) = {len(df_filtered)} predictions | {date_range_str}</p>
-    <p style="margin: 8px 0;"><strong>🎯 Hiển thị:</strong> Top {len(province_avg)} tỉnh</p>
+    <p style="margin: 8px 0;"><strong>Độ chính xác:</strong> RMSE={model_info['test_rmse']:.4f} | MAE={model_info['test_mae']:.4f} | R²={model_info['test_r2']:.4f}</p>
+    <p style="margin: 8px 0;"><strong>Trained:</strong> {model_info['trained_at']}</p>
+    <p style="margin: 8px 0;"><strong>Dữ liệu gốc:</strong> {num_provinces_in_data}/62 tỉnh × 12 tháng = {len(df)} predictions</p>
+    <p style="margin: 8px 0;"><strong>Đã lọc:</strong> {num_provinces_filtered} tỉnh × {num_actual_months} tháng thực tế (chọn {num_months_selected}) = {len(df_filtered)} predictions | {date_range_str}</p>
+    <p style="margin: 8px 0;"><strong>Hiển thị:</strong> Top {len(province_avg)} tỉnh</p>
 </div>
 {month_warning}
 {missing_province_warning}

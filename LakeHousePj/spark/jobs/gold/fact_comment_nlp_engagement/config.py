@@ -7,7 +7,6 @@ ML Feature Engineering - Comment-level NLP + Engagement Metrics
 DIM_COMMENT_TABLE = "gold.gold.dim_comment"
 DIM_POST_TABLE = "gold.gold.dim_post"
 SILVER_COMMENTS_TABLE = "silver.silver.tiktok_post_comments"
-SILVER_METADATA_TABLE = "silver.silver.tiktok_post_metadata"
 
 # Target fact table
 GOLD_CATALOG = "gold"
@@ -32,15 +31,10 @@ BUSINESS_COLUMNS = [
     # Comment metrics
     "comment_likes",
     "comment_level",
-    # Post metrics (denormalized)
-    "post_likes",
-    "post_comments_count",
-    "post_saves",
-    "post_shares",
 ]
 
 # Description for logging
-SOURCE_DESCRIPTION = f"{DIM_COMMENT_TABLE} + {SILVER_COMMENTS_TABLE} + {SILVER_METADATA_TABLE}"
+SOURCE_DESCRIPTION = f"{DIM_COMMENT_TABLE} + {SILVER_COMMENTS_TABLE}"
 
 # NLP Configuration
 MAX_TEXT_LENGTH = 5000  # Truncate texts longer than this

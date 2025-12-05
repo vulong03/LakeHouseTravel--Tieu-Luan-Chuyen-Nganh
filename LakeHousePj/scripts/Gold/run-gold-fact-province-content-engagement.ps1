@@ -1,7 +1,8 @@
 # ============================================
 # Run Gold Layer - fact_province_content_engagement Job
 # ============================================
-# Purpose: Aggregate TikTok engagement metrics by province & post date
+# Purpose: Load post-level engagement metrics (1 row per post)
+# Grain: 1 row = 1 post (post_sk is unique key)
 # Source: gold.gold.dim_post + silver.silver.tiktok_post_metadata
 # Target: gold.fact_province_content_engagement (Iceberg table)
 # ============================================

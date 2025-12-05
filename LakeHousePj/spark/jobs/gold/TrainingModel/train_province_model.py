@@ -246,30 +246,45 @@ def aggregate_comment_metrics(df: DataFrame) -> DataFrame:
     return df_agg
 
 
-def aggregate_post_metrics(df: DataFrame) -> DataFrame:
+def aggregate_post_metrics(spark: SparkSession) -> DataFrame:
     """
-    Aggregate post-level metrics (deduplicated) to province-month grain.
+    Aggregate post-level metrics from fact_province_content_engagement.
     
-    Problem: Post metrics are denormalized (repeated for each comment).
-    Solution: Deduplicate by post_sk first, then aggregate.
+    This fact table has grain = 1 post, so no deduplication needed.
+    Join with dim_post and dim_date to get year_month, then aggregate.
     """
-    print("\n📱 Aggregating post metrics (deduplicated)...")
+    print("\n📱 Aggregating post metrics from fact_province_content_engagement...")
     
-    # Step 1: Get unique posts per province-month
-    df_post_unique = df.select(
-        "province_sk", 
-        "year_month", 
-        "post_sk",
-        "post_likes", 
-        "post_saves", 
-        "post_shares"
-    ).dropDuplicates(["province_sk", "year_month", "post_sk"])
+    # Load post-level fact table
+    fact_post_table = f"{GOLD_CATALOG}.{GOLD_DATABASE}.fact_province_content_engagement"
+    df_posts = spark.table(fact_post_table)
     
-    unique_posts = df_post_unique.count()
-    print(f"   ✅ Deduplicated to {unique_posts:,} unique posts")
+    # Load dim_post to get post_date_sk
+    df_post_dates = spark.table(DIM_POST_TABLE).select("post_sk", "post_date_sk")
     
-    # Step 2: Aggregate to province-month
-    df_post_agg = df_post_unique.groupBy("province_sk", "year_month").agg(
+    # Load dim_date to get year_month
+    df_dates = spark.table(f"{GOLD_CATALOG}.{GOLD_DATABASE}.dim_date").select(
+        "date_sk", "year_month"
+    )
+    
+    # Join to get year_month for each post
+    df_posts_with_month = df_posts \
+        .join(df_post_dates, "post_sk", "inner") \
+        .join(df_dates, df_post_dates.post_date_sk == df_dates.date_sk, "inner") \
+        .select(
+            "post_sk",
+            "province_sk", 
+            df_dates.year_month,
+            df_posts.likes.alias("post_likes"),
+            df_posts.saves.alias("post_saves"),
+            df_posts.shares.alias("post_shares")
+        )
+    
+    unique_posts = df_posts_with_month.count()
+    print(f"   ✅ Loaded {unique_posts:,} posts from fact table")
+    
+    # Aggregate to province-month (each post counted once - no deduplication needed)
+    df_post_agg = df_posts_with_month.groupBy("province_sk", "year_month").agg(
         F.sum("post_likes").alias("total_post_likes"),
         F.sum("post_saves").alias("total_post_saves"),
         F.sum("post_shares").alias("total_post_shares"),
@@ -277,6 +292,9 @@ def aggregate_post_metrics(df: DataFrame) -> DataFrame:
         F.avg("post_saves").alias("avg_post_saves"),
         F.avg("post_shares").alias("avg_post_shares"),
     )
+    
+    row_count = df_post_agg.count()
+    print(f"   ✅ Aggregated to {row_count:,} province-months")
     
     return df_post_agg
 
@@ -467,7 +485,7 @@ def main():
         # Transform
         df_with_dates = join_with_date_dimension(df_comments, df_dates)
         df_comment_agg = aggregate_comment_metrics(df_with_dates)
-        df_post_agg = aggregate_post_metrics(df_with_dates)
+        df_post_agg = aggregate_post_metrics(spark)  # Now takes spark instead of df
         df_joined = join_comment_and_post_aggregations(df_comment_agg, df_post_agg)
         df_final = calculate_derived_features(df_joined)
         df_filtered, filtered_count = apply_filters(df_final)

@@ -32,7 +32,6 @@ from config import (  # type: ignore
     DIM_COMMENT_TABLE,
     DIM_POST_TABLE,
     SILVER_COMMENTS_TABLE,
-    SILVER_METADATA_TABLE,
     GOLD_CATALOG,
     GOLD_DATABASE,
     GOLD_TABLE,
@@ -99,12 +98,6 @@ def create_fact_table(spark: SparkSession) -> None:
         StructField("comment_likes", LongType(), True),
         StructField("comment_level", LongType(), True),
         
-        # Post Metrics - Denormalized (4 columns)
-        StructField("post_likes", LongType(), True),
-        StructField("post_comments_count", LongType(), True),
-        StructField("post_saves", LongType(), True),
-        StructField("post_shares", LongType(), True),
-        
         # Checksum & Metadata
         StructField("row_checksum", StringType(), False),
         StructField("created_at", TimestampType(), False),
@@ -135,7 +128,6 @@ def load_source_data(spark: SparkSession) -> Tuple[DataFrame, Dict[str, Any]]:
     print(f"   - {DIM_COMMENT_TABLE}")
     print(f"   - {DIM_POST_TABLE}")
     print(f"   - {SILVER_COMMENTS_TABLE}")
-    print(f"   - {SILVER_METADATA_TABLE}")
     
     # Load and join all required data
     df = spark.sql(f"""
@@ -150,21 +142,13 @@ def load_source_data(spark: SparkSession) -> Tuple[DataFrame, Dict[str, Any]]:
             c.stt,
             
             -- Comment metrics (from Silver)
-            sc.likes as comment_likes,
-            
-            -- Post metrics (from Silver metadata)
-            sm.likes as post_likes,
-            sm.comments_count as post_comments_count,
-            sm.saves as post_saves,
-            sm.shares as post_shares
+            sc.likes as comment_likes
             
         FROM {DIM_COMMENT_TABLE} c
         INNER JOIN {DIM_POST_TABLE} p 
             ON c.post_sk = p.post_sk
         LEFT JOIN {SILVER_COMMENTS_TABLE} sc 
             ON c.post_url_nk = sc.post_url AND c.stt = sc.stt
-        LEFT JOIN {SILVER_METADATA_TABLE} sm
-            ON p.post_url = sm.post_url
         WHERE c.comment_text IS NOT NULL 
             AND LENGTH(TRIM(c.comment_text)) > 0
             AND c.is_active = TRUE
@@ -390,12 +374,6 @@ def transform_to_fact(df: DataFrame) -> Tuple[DataFrame, int]:
         # Comment metrics
         col("comment_likes"),
         col("comment_level"),
-        
-        # Post metrics
-        col("post_likes"),
-        col("post_comments_count"),
-        col("post_saves"),
-        col("post_shares"),
     )
     
     # Add metadata
@@ -424,10 +402,6 @@ def transform_to_fact(df: DataFrame) -> Tuple[DataFrame, int]:
         "negative_emoji_count",
         "comment_likes",
         "comment_level",
-        "post_likes",
-        "post_comments_count",
-        "post_saves",
-        "post_shares",
         "row_checksum",
         "created_at",
         "updated_at",
@@ -473,13 +447,13 @@ def validate_results(spark: SparkSession) -> None:
     sample_df = spark.sql(f"""
         SELECT 
             comment_sk,
+            post_sk,
             province_sk,
             word_count,
             sentiment_label,
             sentiment_score,
             emoji_count,
-            comment_likes,
-            post_likes
+            comment_likes
         FROM {GOLD_TABLE_FULL}
         ORDER BY comment_sk DESC
         LIMIT 10

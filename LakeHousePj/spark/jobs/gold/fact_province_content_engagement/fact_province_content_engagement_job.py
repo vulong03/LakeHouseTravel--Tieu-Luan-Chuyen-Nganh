@@ -48,17 +48,17 @@ def create_fact_table(spark: SparkSession) -> None:
 
     schema = StructType(
         [
+            StructField("post_sk", LongType(), False),
             StructField("province_sk", IntegerType(), False),
             StructField("date_sk", IntegerType(), False),
-            StructField("posts_cnt", LongType(), False),
-            StructField("likes_cnt", LongType(), False),
-            StructField("comments_cnt", LongType(), False),
-            StructField("comments_crawled_cnt", LongType(), False),
-            StructField("saves_cnt", LongType(), False),
-            StructField("shares_cnt", LongType(), False),
-            StructField("level1_comments_cnt", LongType(), False),
-            StructField("level2_comments_cnt", LongType(), False),
-            StructField("unique_authors_cnt", LongType(), False),
+            StructField("author_sk", LongType(), True),
+            StructField("likes", LongType(), False),
+            StructField("comments", LongType(), False),
+            StructField("comments_crawled", LongType(), False),
+            StructField("saves", LongType(), False),
+            StructField("shares", LongType(), False),
+            StructField("level1_comments", LongType(), False),
+            StructField("level2_comments", LongType(), False),
             StructField("engagement_score", LongType(), False),
             StructField("created_at", TimestampType(), False),
             StructField("updated_at", TimestampType(), False),
@@ -155,14 +155,14 @@ def load_post_metrics_data(spark: SparkSession) -> Tuple[DataFrame, Dict[str, An
     return df, stats
 
 
-def prepare_aggregated_fact(
+def prepare_post_fact(
     dim_post_df: DataFrame,
     metrics_df: DataFrame,
     dim_stats: Dict[str, Any],
     metric_stats: Dict[str, Any],
 ) -> Tuple[DataFrame, int]:
-    """Join inputs, aggregate by province & date, and return fact DataFrame."""
-    print("\nJoining and aggregating data...")
+    """Join inputs to produce post-level fact DataFrame (1 row per post)."""
+    print("\nJoining post and metrics data...")
 
     joined = (
         dim_post_df.alias("dp")
@@ -174,11 +174,12 @@ def prepare_aggregated_fact(
     print(f"Joined posts with metrics: {matched_posts:,}")
     print(f"Posts without metrics: {unmatched_posts:,}")
 
-    prepared = (
+    current_ts = F.current_timestamp()
+    fact_df = (
         joined.select(
+            F.col("dp.post_sk").alias("post_sk"),
             F.col("dp.province_sk").alias("province_sk"),
             F.col("dp.post_date_sk").alias("date_sk"),
-            F.col("dp.post_sk").alias("post_sk"),
             F.col("dp.author_sk").alias("author_sk"),
             F.coalesce(F.col("pm.likes").cast("long"), F.lit(0)).alias("likes"),
             F.coalesce(
@@ -188,59 +189,39 @@ def prepare_aggregated_fact(
             F.coalesce(F.col("pm.comments_loaded").cast("long"), F.lit(0)).alias("comments_crawled"),
             F.coalesce(F.col("pm.saves").cast("long"), F.lit(0)).alias("saves"),
             F.coalesce(F.col("pm.shares").cast("long"), F.lit(0)).alias("shares"),
-            F.coalesce(F.col("pm.comments_level1").cast("long"), F.lit(0)).alias("level1"),
-            F.coalesce(F.col("pm.comments_level2").cast("long"), F.lit(0)).alias("level2"),
+            F.coalesce(F.col("pm.comments_level1").cast("long"), F.lit(0)).alias("level1_comments"),
+            F.coalesce(F.col("pm.comments_level2").cast("long"), F.lit(0)).alias("level2_comments"),
         )
         .where(F.col("province_sk").isNotNull() & F.col("date_sk").isNotNull())
-    )
-
-    aggregated = (
-        prepared.groupBy("province_sk", "date_sk")
-        .agg(
-            F.countDistinct("post_sk").alias("posts_cnt"),
-            F.sum("likes").alias("likes_cnt"),
-            F.sum("comments").alias("comments_cnt"),
-            F.sum("comments_crawled").alias("comments_crawled_cnt"),
-            F.sum("saves").alias("saves_cnt"),
-            F.sum("shares").alias("shares_cnt"),
-            F.sum("level1").alias("level1_comments_cnt"),
-            F.sum("level2").alias("level2_comments_cnt"),
-            F.countDistinct("author_sk").alias("unique_authors_cnt"),
-        )
-    )
-
-    current_ts = F.current_timestamp()
-    fact_df = (
-        aggregated.withColumn(
+        .withColumn(
             "engagement_score",
-            F.col("likes_cnt")
-            + F.col("comments_cnt")
-            + F.col("saves_cnt")
-            + F.col("shares_cnt"),
+            F.col("likes")
+            + F.col("comments")
+            + F.col("saves")
+            + F.col("shares"),
         )
         .withColumn("created_at", current_ts)
         .withColumn("updated_at", current_ts)
         .select(
+            "post_sk",
             "province_sk",
             "date_sk",
-            "posts_cnt",
-            "likes_cnt",
-            "comments_cnt",
-            "comments_crawled_cnt",
-            "saves_cnt",
-            "shares_cnt",
-            "level1_comments_cnt",
-            "level2_comments_cnt",
-            "unique_authors_cnt",
+            "author_sk",
+            "likes",
+            "comments",
+            "comments_crawled",
+            "saves",
+            "shares",
+            "level1_comments",
+            "level2_comments",
             "engagement_score",
             "created_at",
             "updated_at",
         )
     )
 
-    fact_df = fact_df.cache()
     record_count = fact_df.count()
-    print(f"Aggregated {record_count:,} fact rows")
+    print(f"Prepared {record_count:,} post-level fact rows")
     return fact_df, record_count
 
 
@@ -258,18 +239,18 @@ def write_to_gold_table(fact_df: DataFrame) -> None:
 
 def validate_results(fact_df: DataFrame) -> None:
     """Display basic statistics for sanity checking."""
-    print("\nValidation sample (top provinces by engagement):")
+    print("\nValidation sample (top posts by engagement):")
     (
         fact_df.orderBy(F.desc("engagement_score"))
         .select(
+            "post_sk",
             "province_sk",
             "date_sk",
-            "posts_cnt",
-            "likes_cnt",
-            "comments_cnt",
-            "saves_cnt",
-            "shares_cnt",
-            "unique_authors_cnt",
+            "author_sk",
+            "likes",
+            "comments",
+            "saves",
+            "shares",
             "engagement_score",
         )
         .show(10, truncate=False)
@@ -288,7 +269,7 @@ def main():
         dim_post_df, dim_stats = load_dim_post_data(spark)
         metrics_df, metric_stats = load_post_metrics_data(spark)
 
-        fact_df, record_count = prepare_aggregated_fact(
+        fact_df, record_count = prepare_post_fact(
             dim_post_df, metrics_df, dim_stats, metric_stats
         )
 
@@ -300,13 +281,10 @@ def main():
             table_name=GOLD_TABLE_FULL,
             records_processed=record_count,
             job_details={
-                "job_type": "fact",
-                "distinct_provinces": fact_df.select("province_sk").distinct().count(),
-                "distinct_dates": fact_df.select("date_sk").distinct().count(),
+                "job_type": "fact_post_level",
+                "grain": "1_row_per_post",
             },
         )
-
-        fact_df.unpersist()
 
         print("\n============================================")
         print("fact_province_content_engagement completed!")
@@ -322,8 +300,6 @@ def main():
         print("\nFact job failed!")
         raise
     finally:
-        if fact_df is not None:
-            fact_df.unpersist(blocking=False)
         spark.stop()
 
 
