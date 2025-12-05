@@ -449,13 +449,13 @@ def forecast_12_months(spark, model, df_with_lags):
         
         # Forecast 12 months
         for horizon in range(1, FORECAST_MONTHS + 1):
-            # Calculate target month (convert int YYYYMM to datetime)
+            # Calculate target month (proper month arithmetic with overflow handling)
             year_month_str = str(row['year_month'])  # Convert 202511 -> "202511"
             last_date = datetime.strptime(year_month_str, '%Y%m')
-            target_date = last_date + timedelta(days=30 * horizon)
-            target_year = target_date.year
-            target_month = target_date.month
-            target_year_month = int(target_date.strftime('%Y%m'))  # Store as int like source data
+            total_months = last_date.year * 12 + last_date.month + horizon
+            target_year = (total_months - 1) // 12
+            target_month = (total_months - 1) % 12 + 1
+            target_year_month = int(f"{target_year:04d}{target_month:02d}")  # Store as int like source data
             
             # Prepare features
             features = {

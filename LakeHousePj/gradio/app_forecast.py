@@ -178,6 +178,33 @@ def recommend_provinces(start_month, end_month, region, top_n):
     """
     Recommend top provinces based on forecasted hotness
     """
+    # Convert top_n to integer (handle "All" case)
+    if top_n == "All":
+        top_n_int = None  # Will use all provinces
+    else:
+        top_n_int = int(top_n)
+    
+    # Convert MM/YYYY to year_month integer (YYYYMM)
+    month_mapping = {
+        "10/2025": 202510, "11/2025": 202511, "12/2025": 202512,
+        "01/2026": 202601, "02/2026": 202602, "03/2026": 202603,
+        "04/2026": 202604, "05/2026": 202605, "06/2026": 202606,
+        "07/2026": 202607, "08/2026": 202608, "09/2026": 202609
+    }
+    
+    start_year_month = month_mapping[start_month]
+    end_year_month = month_mapping[end_month]
+    
+    # Validate range
+    if start_year_month > end_year_month:
+        error_html = """
+<div style="background: #ff4444; padding: 20px; border-radius: 8px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
+    <h3 style="margin-top: 0;">❌ Lỗi chọn tháng</h3>
+    <p>Tháng bắt đầu phải nhỏ hơn hoặc bằng tháng kết thúc!</p>
+</div>
+        """
+        return pd.DataFrame(), None, error_html
+    
     # Load forecast data
     df, load_error = load_forecast_data()
     
@@ -219,13 +246,13 @@ def recommend_provinces(start_month, end_month, region, top_n):
             print(f"   {ym} is mapped from horizons: {horizons}")
     
     # Validate requested months are available
-    available_horizons = set(df['horizon_month'].unique())
-    requested_horizons = set(range(start_month, end_month + 1))
-    missing_horizons = requested_horizons - available_horizons
+    available_year_months = set(df['year_month'].unique())
+    requested_year_months = set(range(start_year_month, end_year_month + 1))
+    missing_year_months = requested_year_months - available_year_months
     
-    if missing_horizons:
-        missing_str = ", ".join(map(str, sorted(missing_horizons)))
-        available_str = ", ".join(map(str, sorted(available_horizons)))
+    if missing_year_months:
+        missing_str = ", ".join([f"{ym//100}-{ym%100:02d}" for ym in sorted(missing_year_months)])
+        available_str = ", ".join([f"{ym//100}-{ym%100:02d}" for ym in sorted(available_year_months)])
         warning_html = f"""
 <div style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%); padding: 20px; border-radius: 12px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
     <h3 style="margin-top: 0; font-size: 20px;">⚠️ Thiếu dữ liệu cho một số tháng</h3>
@@ -236,8 +263,8 @@ def recommend_provinces(start_month, end_month, region, top_n):
         """
         return pd.DataFrame(), None, warning_html
     
-    # Filter by horizon months
-    df_filtered = df[(df['horizon_month'] >= start_month) & (df['horizon_month'] <= end_month)]
+    # Filter by year_month range
+    df_filtered = df[(df['year_month'] >= start_year_month) & (df['year_month'] <= end_year_month)]
     
     debug_print(f"🔍 After horizon filter: {len(df_filtered)} rows")
     debug_print(f"🔍 Filtered year_months: {sorted(df_filtered['year_month'].unique())}")
@@ -252,7 +279,7 @@ def recommend_provinces(start_month, end_month, region, top_n):
 <div style="background: linear-gradient(135deg, #ffd43b 0%, #ffa733 100%); padding: 20px; border-radius: 12px; color: #333; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
     <h3 style="margin-top: 0; font-size: 20px;">⚠️ Không có dữ liệu phù hợp</h3>
     <p style="margin: 10px 0;"><strong>Vùng:</strong> {region}</p>
-    <p style="margin: 10px 0;"><strong>Khoảng thời gian:</strong> Tháng {start_month}-{end_month}</p>
+    <p style="margin: 10px 0;"><strong>Khoảng thời gian:</strong> {start_month} đến {end_month}</p>
     <p style="margin-top: 15px; font-size: 14px;">💡 Vui lòng thử lại với bộ lọc khác!</p>
 </div>
         """
@@ -263,7 +290,12 @@ def recommend_provinces(start_month, end_month, region, top_n):
         'predicted_hotness': 'mean'
     }).reset_index()
     
-    province_avg = province_avg.sort_values('predicted_hotness', ascending=False).head(top_n)
+    province_avg = province_avg.sort_values('predicted_hotness', ascending=False)
+    
+    # Apply top_n filter if specified
+    if top_n_int is not None:
+        province_avg = province_avg.head(top_n_int)
+    
     province_avg['rank'] = range(1, len(province_avg) + 1)
     province_avg['predicted_hotness'] = province_avg['predicted_hotness'].round(4)
     
@@ -325,7 +357,7 @@ def recommend_provinces(start_month, end_month, region, top_n):
     
     fig.update_layout(
         title={
-            'text': f'📈 Xu hướng Hotness Score (Tháng {start_month}-{end_month} sau)',
+            'text': f'📈 Xu hướng Hotness Score ({start_month} - {end_month})',
             'x': 0.5,
             'xanchor': 'center',
             'font': {'size': 20, 'family': 'Arial, sans-serif'}
@@ -360,7 +392,20 @@ def recommend_provinces(start_month, end_month, region, top_n):
     # Check for missing provinces
     num_provinces_in_data = df['province_sk'].nunique()
     num_provinces_filtered = df_filtered['province_sk'].nunique()
-    num_months_selected = end_month - start_month + 1
+    
+    # Calculate number of months in range
+    year_months_in_range = list(range(start_year_month, end_year_month + 1))
+    # Handle year overflow (e.g., 202512 -> 202601)
+    adjusted_range = []
+    for ym in year_months_in_range:
+        year = ym // 100
+        month = ym % 100
+        if month > 12:
+            month = month - 12
+            year += 1
+        adjusted_range.append(year * 100 + month)
+    
+    num_months_selected = len(set(adjusted_range))
     num_actual_months = df_filtered['year_month'].nunique()  # Số tháng THỰC TẾ sau khi filter
     
     missing_province_warning = ""
@@ -494,22 +539,21 @@ def create_interface():
                 
                 search_btn = gr.Button("🔍 Tìm kiếm", variant="primary", size="sm")
                 
-                start_month = gr.Slider(
-                    minimum=1, 
-                    maximum=12, 
-                    value=1, 
-                    step=1,
-                    label="📅 Tháng bắt đầu (horizon)",
-                    info="Từ tháng thứ mấy tính từ hiện tại?"
+                month_choices = ["10/2025", "11/2025", "12/2025", "01/2026", "02/2026", "03/2026", 
+                                 "04/2026", "05/2026", "06/2026", "07/2026", "08/2026", "09/2026"]
+                
+                start_month = gr.Dropdown(
+                    choices=month_choices,
+                    value="10/2025",
+                    label="📅 Tháng bắt đầu",
+                    info="Chọn tháng bắt đầu dự báo"
                 )
                 
-                end_month = gr.Slider(
-                    minimum=1, 
-                    maximum=12, 
-                    value=3, 
-                    step=1,
-                    label="📅 Tháng kết thúc (horizon)",
-                    info="Đến tháng thứ mấy tính từ hiện tại?"
+                end_month = gr.Dropdown(
+                    choices=month_choices,
+                    value="12/2025",
+                    label="📅 Tháng kết thúc",
+                    info="Chọn tháng kết thúc dự báo"
                 )
                 
                 region = gr.Dropdown(
@@ -519,11 +563,9 @@ def create_interface():
                     info="Chọn khu vực du lịch yêu thích"
                 )
                 
-                top_n = gr.Slider(
-                    minimum=5,
-                    maximum=20,
-                    value=10,
-                    step=1,
+                top_n = gr.Dropdown(
+                    choices=["5", "10", "15", "20", "All"],
+                    value="10",
                     label="🏆 Số lượng Top N",
                     info="Hiển thị bao nhiêu điểm đến?"
                 )
@@ -562,7 +604,19 @@ def create_interface():
                 
                 gr.HTML('</div>')
         
-        # Event handler
+        # Helper function to update end_month choices based on start_month
+        def update_end_month_choices(selected_start):
+            start_idx = month_choices.index(selected_start)
+            available_end_months = month_choices[start_idx:]
+            return gr.Dropdown(choices=available_end_months, value=available_end_months[0])
+        
+        # Event handlers
+        start_month.change(
+            fn=update_end_month_choices,
+            inputs=[start_month],
+            outputs=[end_month]
+        )
+        
         search_btn.click(
             fn=recommend_provinces,
             inputs=[start_month, end_month, region, top_n],
