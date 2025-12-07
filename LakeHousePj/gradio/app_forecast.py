@@ -202,11 +202,10 @@ def recommend_provinces(start_month, end_month, region, top_n):
     
     # Convert MM/YYYY to year_month integer (YYYYMM)
     month_mapping = {
-        "12/2025": 202512,
+        "10/2025": 202510, "11/2025": 202511, "12/2025": 202512,
         "01/2026": 202601, "02/2026": 202602, "03/2026": 202603,
         "04/2026": 202604, "05/2026": 202605, "06/2026": 202606,
-        "07/2026": 202607, "08/2026": 202608, "09/2026": 202609,
-        "10/2026": 202610, "11/2026": 202611
+        "07/2026": 202607, "08/2026": 202608, "09/2026": 202609
     }
     
     start_year_month = month_mapping[start_month]
@@ -570,13 +569,14 @@ def create_interface():
                 search_btn = gr.Button("🔍 Tìm kiếm", variant="primary", size="sm")
                 
                 # Dynamic month choices: Load from actual forecast data
-                month_choices = ["12/2025", "01/2026", "02/2026", "03/2026", 
-                                 "04/2026", "05/2026", "06/2026", "07/2026", 
-                                 "08/2026", "09/2026", "10/2026", "11/2026"]
+                month_choices = ["10/2025", "11/2025", "12/2025", 
+                                 "01/2026", "02/2026", "03/2026", 
+                                 "04/2026", "05/2026", "06/2026", 
+                                 "07/2026", "08/2026", "09/2026"]
                 
                 start_month = gr.Dropdown(
                     choices=month_choices,
-                    value="12/2025",
+                    value="10/2025",
                     label="📅 Tháng bắt đầu",
                     info="Chọn tháng bắt đầu dự báo"
                 )
