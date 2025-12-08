@@ -33,63 +33,6 @@ class GoldJobLogger:
         self.jdbc_properties["port"] = int(host_port[1]) if len(host_port) > 1 else 5432
         self.jdbc_properties["database"] = url_parts[1] if len(url_parts) > 1 else "lakehouse"
     
-    def log_job_start(self, 
-                      source_path: str,
-                      table_name: str,
-                      job_type: str = "dimension") -> int:
-        """
-        Log job start
-        
-        Args:
-            source_path: Source data path (CSV, table, etc.)
-            table_name: Target Gold table name (e.g., "gold.dim_province")
-            job_type: Type of job (dimension, fact, aggregate)
-            
-        Returns:
-            Log ID for tracking
-        """
-        try:
-            # Create log entry
-            insert_query = f"""
-                INSERT INTO file_ingestion_log (
-                    file_path,
-                    file_name,
-                    file_checksum,
-                    layer,
-                    table_name,
-                    status,
-                    ingestion_details
-                ) VALUES (
-                    '{source_path}',
-                    '{source_path.split("/")[-1]}',
-                    '{self._calculate_run_checksum(table_name)}',
-                    'gold',
-                    '{table_name}',
-                    'in_progress',
-                    '{json.dumps({"job_type": job_type, "started_at": datetime.now().isoformat()})}'
-                )
-                RETURNING id
-            """
-            
-            # Execute via Spark SQL (create temp view)
-            result = self.spark.read \
-                .format("jdbc") \
-                .option("url", self.jdbc_url) \
-                .option("query", f"SELECT nextval('file_ingestion_log_id_seq') as id") \
-                .option("user", self.jdbc_properties["user"]) \
-                .option("password", self.jdbc_properties["password"]) \
-                .option("driver", self.jdbc_properties["driver"]) \
-                .load()
-            
-            log_id = result.first()['id']
-            
-            print(f"📝 Gold job started - Log ID: {log_id}")
-            return log_id
-            
-        except Exception as e:
-            print(f"⚠️  Warning: Could not log job start: {str(e)}")
-            return -1
-    
     def log_job_success(self,
                        source_path: str,
                        table_name: str,
@@ -238,52 +181,6 @@ class GoldJobLogger:
             
         except Exception as e:
             print(f"⚠️  Warning: Could not log job failure: {str(e)}")
-    
-    def get_last_run_info(self, table_name: str) -> Optional[Dict]:
-        """
-        Get info about last successful run
-        
-        Args:
-            table_name: Gold table name
-            
-        Returns:
-            Dict with last run info or None
-        """
-        try:
-            query = f"""
-                SELECT 
-                    ingestion_timestamp,
-                    records_ingested,
-                    ingestion_details
-                FROM file_ingestion_log
-                WHERE table_name = '{table_name}'
-                  AND layer = 'gold'
-                  AND status = 'success'
-                ORDER BY ingestion_timestamp DESC
-                LIMIT 1
-            """
-            
-            result = self.spark.read \
-                .format("jdbc") \
-                .option("url", self.jdbc_url) \
-                .option("query", query) \
-                .option("user", self.jdbc_properties["user"]) \
-                .option("password", self.jdbc_properties["password"]) \
-                .option("driver", self.jdbc_properties["driver"]) \
-                .load()
-            
-            if result.count() > 0:
-                row = result.first()
-                return {
-                    'timestamp': row['ingestion_timestamp'],
-                    'records': row['records_ingested'],
-                    'details': row['ingestion_details']
-                }
-            return None
-            
-        except Exception as e:
-            print(f"⚠️  Warning: Could not get last run info: {str(e)}")
-            return None
     
     def _calculate_run_checksum(self, table_name: str) -> str:
         """

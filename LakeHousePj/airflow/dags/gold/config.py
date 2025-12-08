@@ -22,7 +22,7 @@ TAGS = ['gold', 'dimension', 'fact', 'analytics', 'ml', '4-phase']
 # SCHEDULE
 # ============================================
 
-SCHEDULE_INTERVAL = '@weekly'  # Run weekly for analytics
+SCHEDULE_INTERVAL = None  # Run weekly for analytics
 START_DATE = datetime(2025, 1, 1)
 CATCHUP = False
 
@@ -170,8 +170,8 @@ GOLD_JOBS = {
         'description': 'TikTok engagement metrics by province and date'
     },
     
-    'fact_hotel_review_daily': {
-        'job_path': 'fact_hotel_review_daily/fact_hotel_review_daily_job.py',
+    'fact_hotel_review': {
+        'job_path': 'fact_hotel_review/fact_hotel_review_job.py',
         'phase': 3,
         'resource_level': 'heavy',
         'depends_on': ['dim_hotel', 'dim_travel_type', 'dim_room_type', 'dim_country', 'dim_date', 'fact_province_content_engagement'],  # Sequential: wait for first fact
@@ -182,7 +182,7 @@ GOLD_JOBS = {
         'job_path': 'fact_comment_nlp_engagement/fact_comment_nlp_engagement_job.py',
         'phase': 3,
         'resource_level': 'heavy',  # NLP extraction is CPU intensive
-        'depends_on': ['dim_comment', 'dim_post', 'fact_hotel_review_daily'],  # Sequential: run last to avoid resource conflict
+        'depends_on': ['dim_comment', 'dim_post', 'fact_hotel_review'],  # Sequential: run last to avoid resource conflict
         'description': 'ML feature engineering: comment NLP + engagement metrics'
     },
     

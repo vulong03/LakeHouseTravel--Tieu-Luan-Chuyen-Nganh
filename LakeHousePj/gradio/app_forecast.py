@@ -663,34 +663,55 @@ def create_interface():
                         box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
                 <h3 style="margin-top: 0; color: #333;">📖 Giải thích Hotness Score</h3>
                 <p style="color: #555; line-height: 1.8; margin: 10px 0;">
-                    <strong>Hotness Score (0-1)</strong> được tính từ 14 metrics quan trọng:
+                    <strong>Hotness Score (0-1)</strong> được tính từ <strong>5 nhóm chỉ số chính</strong> theo cấu trúc phân cấp:
                 </p>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 20px 0;">
-                    <div style="background: white; padding: 15px; border-radius: 8px;">
-                        📝 <strong>Volume (20%)</strong><br>
-                        <span style="color: #666; font-size: 0.9em;">Số lượng comments, posts</span>
+                    <div style="background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #4CAF50;">
+                        📊 <strong>Base Volume (25%)</strong><br>
+                        <span style="color: #666; font-size: 0.9em;">
+                            • Posts: 60%<br>
+                            • Comments: 40%
+                        </span>
                     </div>
-                    <div style="background: white; padding: 15px; border-radius: 8px;">
-                        👍 <strong>Post Engagement (25%)</strong><br>
-                        <span style="color: #666; font-size: 0.9em;">Likes, shares, saves</span>
+                    <div style="background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #2196F3;">
+                        👍 <strong>Engagement (35%)</strong><br>
+                        <span style="color: #666; font-size: 0.9em;">
+                            • Post Likes: 45%<br>
+                            • Post Saves: 35%<br>
+                            • Comment Likes: 20%
+                        </span>
                     </div>
-                    <div style="background: white; padding: 15px; border-radius: 8px;">
-                        💬 <strong>Comment Engagement (10%)</strong><br>
-                        <span style="color: #666; font-size: 0.9em;">Comment likes</span>
+                    <div style="background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #FF9800;">
+                        😊 <strong>Sentiment (20%)</strong><br>
+                        <span style="color: #666; font-size: 0.9em;">
+                            • Positive Ratio: 50%<br>
+                            • Avg Sentiment: 30%<br>
+                            • Negative Ratio: 20%
+                        </span>
                     </div>
-                    <div style="background: white; padding: 15px; border-radius: 8px;">
-                        😊 <strong>Sentiment (30%)</strong><br>
-                        <span style="color: #666; font-size: 0.9em;">Tích cực, tiêu cực, trung bình, emoji</span>
+                    <div style="background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #E91E63;">
+                        🎭 <strong>Emoji Vibe (5%)</strong><br>
+                        <span style="color: #666; font-size: 0.9em;">
+                            • Total Emojis: 50%<br>
+                            • Emoji Sentiment: 50%
+                        </span>
                     </div>
-                    <div style="background: white; padding: 15px; border-radius: 8px; grid-column: 1 / -1;">
+                    <div style="background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #9C27B0; grid-column: 1 / -1;">
                         📚 <strong>NLP Richness (15%)</strong><br>
-                        <span style="color: #666; font-size: 0.9em;">Độ dài, từ vựng, cảm xúc</span>
+                        <span style="color: #666; font-size: 0.9em;">
+                            • Avg Words per Comment: 45%<br>
+                            • Unique Word Ratio: 45%<br>
+                            • Exclamation Ratio: 10%
+                        </span>
                     </div>
                 </div>
-                <p style="color: #555; line-height: 1.8; margin: 15px 0;">
-                    <strong>🤖 Mô hình:</strong> XGBoost Regressor với 12 features (temporal + lag + current metrics)<br>
-                    <strong>🔮 Forecast Strategy:</strong> Recursive autoregressive (12 tháng ahead)
-                </p>
+                <div style="background: rgba(103, 126, 234, 0.1); padding: 15px; border-radius: 8px; margin-top: 20px;">
+                    <p style="color: #555; line-height: 1.8; margin: 0;">
+                        <strong>🤖 Mô hình ML:</strong> XGBoost Regressor với 11 features (3 temporal + 5 lag + 3 current metrics)<br>
+                        <strong>🔮 Dự báo:</strong> Recursive autoregressive strategy (12 tháng ahead)<br>
+                        <strong>⚡ Tối ưu:</strong> Không sử dụng total_post_shares (nhiều null, ảnh hưởng độ chính xác)
+                    </p>
+                </div>
             </div>
             """
         )

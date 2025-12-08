@@ -57,35 +57,5 @@ def get_spark_session(app_name="LakehouseTourism"):
         raise
 
 
-def stop_spark_session(spark):
-    """
-    Stop the Spark session
-    
-    Args:
-        spark (SparkSession): Spark session to stop
-    """
-    if spark:
-        spark.stop()
-        logger.info("✅ Spark session stopped")
-
-
 if __name__ == "__main__":
-    # Test the Spark session
-    spark = get_spark_session("TestSparkSession")
-    
-    # Show available databases
-    print("\n📊 Available databases:")
-    spark.sql("SHOW DATABASES").show()
-    
-    # Show Spark configuration
-    print("\n⚙️  Key Spark configurations:")
-    configs = [
-        "spark.sql.catalog.lakehouse.type",
-        "spark.sql.catalog.lakehouse.uri",
-        "spark.hadoop.fs.s3a.endpoint"
-    ]
-    for config in configs:
-        value = spark.conf.get(config, "Not set")
-        print(f"  {config}: {value}")
-    
-    stop_spark_session(spark)
+    print("Spark session utility module loaded successfully")

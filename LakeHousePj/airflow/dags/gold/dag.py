@@ -252,12 +252,12 @@ with DAG(
             )
         )
         
-        # fact_hotel_review_daily (Hotel metrics)
+        # fact_hotel_review (Hotel metrics)
         fact_hotel = BashOperator(
-            task_id='fact_hotel_review_daily',
+            task_id='fact_hotel_review',
             bash_command=build_spark_command(
-                GOLD_JOBS['fact_hotel_review_daily']['job_path'],
-                resource_level=GOLD_JOBS['fact_hotel_review_daily']['resource_level']
+                GOLD_JOBS['fact_hotel_review']['job_path'],
+                resource_level=GOLD_JOBS['fact_hotel_review']['resource_level']
             )
         )
         
