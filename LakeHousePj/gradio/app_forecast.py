@@ -386,7 +386,7 @@ def recommend_provinces(start_month, end_month, region, top_n):
     
     fig.update_layout(
         title={
-            'text': f'📈 Xu hướng Hotness Score ({start_month} - {end_month})',
+            'text': f' Xu hướng Hotness Score ({start_month} - {end_month})',
             'x': 0.5,
             'xanchor': 'center',
             'font': {'size': 20, 'family': 'Arial, sans-serif'}
@@ -548,14 +548,12 @@ def create_interface():
     }
     """
     
-    with gr.Blocks(title="🏖️ Tourism Hotness Forecast", theme=gr.themes.Soft(), css=custom_css) as app:
+    with gr.Blocks(title=" Tourism Hotness Forecast", theme=gr.themes.Soft(), css=custom_css) as app:
         # Header
         gr.HTML(
             """
             <div class="header-section">
-                <h1>🏖️ Hệ thống Dự báo Xu hướng Du lịch Việt Nam</h1>
-                <p>🤖 Powered by <strong>XGBoost Time-Series Forecasting</strong> | 📊 Data from TikTok & Booking.com</p>
-                <p style="font-size: 0.95em; margin-top: 10px;">💡 Dự đoán điểm đến hot nhất từ 1-12 tháng trong tương lai dựa trên AI và Big Data</p>
+                <h1>HỆ THỐNG DỰ ĐOÁN XU HƯỚNG DU LỊCH VIỆT NAM</h1>
             </div>
             """
         )
@@ -564,9 +562,9 @@ def create_interface():
             # Left panel - Filters
             with gr.Column(scale=1):
                 gr.HTML('<div class="filter-card">')
-                gr.Markdown("### ⚙️ Bộ lọc tìm kiếm")
+                gr.Markdown("##  Bộ lọc tìm kiếm")
                 
-                search_btn = gr.Button("🔍 Tìm kiếm", variant="primary", size="sm")
+                search_btn = gr.Button(" Tìm kiếm", variant="primary", size="sm")
                 
                 # Dynamic month choices: Load from actual forecast data
                 month_choices = ["10/2025", "11/2025", "12/2025", 
@@ -620,10 +618,9 @@ def create_interface():
             # Right panel - Results
             with gr.Column(scale=2):
                 gr.HTML('<div class="result-card">')
-                gr.Markdown("### 📊 Kết quả Dự báo")
+                gr.Markdown("## Kết quả Dự báo")
                 
                 result_table = gr.Dataframe(
-                    label="🏆 Top Tỉnh/Thành có Hotness Score cao nhất",
                     headers=["Hạng", "Tỉnh/Thành", "Vùng", "Hotness Score"],
                     datatype=["number", "str", "str", "number"],
                     wrap=True,
@@ -661,20 +658,20 @@ def create_interface():
             <div style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%); 
                         padding: 30px; border-radius: 16px; margin-top: 30px; 
                         box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
-                <h3 style="margin-top: 0; color: #333;">📖 Giải thích Hotness Score</h3>
+                <h3 style="margin-top: 0; color: #333;">Giải thích Hotness Score</h3>
                 <p style="color: #555; line-height: 1.8; margin: 10px 0;">
                     <strong>Hotness Score (0-1)</strong> được tính từ <strong>5 nhóm chỉ số chính</strong> theo cấu trúc phân cấp:
                 </p>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 20px 0;">
                     <div style="background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #4CAF50;">
-                        📊 <strong>Base Volume (25%)</strong><br>
+                         <strong>Base Volume (25%)</strong><br>
                         <span style="color: #666; font-size: 0.9em;">
                             • Posts: 60%<br>
                             • Comments: 40%
                         </span>
                     </div>
                     <div style="background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #2196F3;">
-                        👍 <strong>Engagement (35%)</strong><br>
+                         <strong>Engagement (35%)</strong><br>
                         <span style="color: #666; font-size: 0.9em;">
                             • Post Likes: 45%<br>
                             • Post Saves: 35%<br>
@@ -682,7 +679,7 @@ def create_interface():
                         </span>
                     </div>
                     <div style="background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #FF9800;">
-                        😊 <strong>Sentiment (20%)</strong><br>
+                         <strong>Sentiment (20%)</strong><br>
                         <span style="color: #666; font-size: 0.9em;">
                             • Positive Ratio: 50%<br>
                             • Avg Sentiment: 30%<br>
@@ -690,14 +687,14 @@ def create_interface():
                         </span>
                     </div>
                     <div style="background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #E91E63;">
-                        🎭 <strong>Emoji Vibe (5%)</strong><br>
+                         <strong>Emoji Vibe (5%)</strong><br>
                         <span style="color: #666; font-size: 0.9em;">
                             • Total Emojis: 50%<br>
                             • Emoji Sentiment: 50%
                         </span>
                     </div>
                     <div style="background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #9C27B0; grid-column: 1 / -1;">
-                        📚 <strong>NLP Richness (15%)</strong><br>
+                         <strong>NLP Richness (15%)</strong><br>
                         <span style="color: #666; font-size: 0.9em;">
                             • Avg Words per Comment: 45%<br>
                             • Unique Word Ratio: 45%<br>
@@ -707,9 +704,9 @@ def create_interface():
                 </div>
                 <div style="background: rgba(103, 126, 234, 0.1); padding: 15px; border-radius: 8px; margin-top: 20px;">
                     <p style="color: #555; line-height: 1.8; margin: 0;">
-                        <strong>🤖 Mô hình ML:</strong> XGBoost Regressor với 11 features (3 temporal + 5 lag + 3 current metrics)<br>
-                        <strong>🔮 Dự báo:</strong> Recursive autoregressive strategy (12 tháng ahead)<br>
-                        <strong>⚡ Tối ưu:</strong> Không sử dụng total_post_shares (nhiều null, ảnh hưởng độ chính xác)
+                        <strong>Mô hình:</strong> XGBoost Regressor với 11 features (3 temporal + 5 lag + 3 current metrics)<br>
+                        <strong>Dự đoán:</strong> Recursive autoregressive strategy (12 tháng ahead)<br>
+                        <strong>Tối ưu:</strong> Không sử dụng total_post_shares (nhiều null, ảnh hưởng độ chính xác)
                     </p>
                 </div>
             </div>
