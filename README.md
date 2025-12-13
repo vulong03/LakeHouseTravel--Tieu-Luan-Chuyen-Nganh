@@ -4,7 +4,8 @@ Tourism Data Analytics Platform là một nền tảng phân tích dữ liệu d
 ## Architecture
 
 
-<img width="1386" height="692" alt="image" src="https://github.com/user-attachments/assets/188de12f-5e62-4d43-bd48-3da7216fb721" />
+<img width="1036" height="520" alt="image" src="https://github.com/user-attachments/assets/73783848-ea9e-40a2-bf10-1572c31ddfb0" />
+
 
 
 ### Medallion Architecture
