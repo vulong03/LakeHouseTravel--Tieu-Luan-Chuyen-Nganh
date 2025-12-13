@@ -704,7 +704,7 @@ def create_interface():
                 </div>
                 <div style="background: rgba(103, 126, 234, 0.1); padding: 15px; border-radius: 8px; margin-top: 20px;">
                     <p style="color: #555; line-height: 1.8; margin: 0;">
-                        <strong>Mô hình:</strong> XGBoost Regressor với 11 features (3 temporal + 5 lag + 3 current metrics)<br>
+                        <strong>Mô hình:</strong> XGBoost Regressor với 19 features (3 temporal + 5 lag + 11 current: 2 volume + 2 engagement + 2 sentiment + 5 NLP)<br>
                         <strong>Dự đoán:</strong> Recursive autoregressive strategy (12 tháng ahead)<br>
                         <strong>Tối ưu:</strong> Không sử dụng total_post_shares (nhiều null, ảnh hưởng độ chính xác)
                     </p>

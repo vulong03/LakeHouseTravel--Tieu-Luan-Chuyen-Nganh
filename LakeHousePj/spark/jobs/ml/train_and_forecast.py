@@ -197,7 +197,7 @@ def calculate_hotness_score(spark):
         (F.col("norm_total_comment_likes") * 0.20)
     )
     
-    # 3) Vibe & sentiment: 25% (positive > avg > negative)
+    # 3) Vibe & sentiment: 20% (positive > avg > negative)
     df = df.withColumn("sentiment_score",
         (F.col("norm_positive_ratio") * 0.5) +
         (F.col("norm_avg_sentiment") * 0.3) +
