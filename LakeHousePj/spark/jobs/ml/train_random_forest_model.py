@@ -1,21 +1,21 @@
 """
-ML Pipeline: Train XGBoost Time-Series Model & Forecast Province Hotness
-========================================================================
+ML Pipeline: Train Random Forest Time-Series Model & Forecast Province Hotness
+==============================================================================
 
-EXPERIMENT: XGBoost Reduced (Time-Only Features)
-- Chỉ dùng temporal + lag features (8 features)
-- BỎ current metrics (engagement, sentiment, NLP)
-- Mục đích: So sánh với Full model để đánh giá tầm quan trọng của current metrics
+EXPERIMENT: Random Forest vs XGBoost Comparison
+- Cùng 8 features (temporal + lag)
+- Bagging (Random Forest) vs Boosting (XGBoost)
+- So sánh performance và overfitting
 
 Workflow:
 1. Calculate hotness_score từ 14 metrics (5 weight groups)
 2. Tạo lag features (lag_1/2/3/12, rolling_avg_3m)
-3. Train XGBoost model với MLflow tracking (CHỈ 8 FEATURES)
+3. Train Random Forest model với MLflow tracking (8 FEATURES)
 4. Forecast 12 tháng tiếp theo (recursive autoregressive)
 
 Output:
-- Model: province_hotness_forecaster_reduced (MLflow registry)
-- Table: gold.gold.province_month_forecast_reduced_next12
+- Model: province_hotness_forecaster_rf (MLflow registry)
+- Table: gold.gold.province_month_forecast_rf_next12
 - Artifacts: MLflow (plots, metrics, model)
 """
 
@@ -34,9 +34,9 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-import xgboost as xgb
+from sklearn.ensemble import RandomForestRegressor
 import mlflow
-import mlflow.xgboost
+import mlflow.sklearn
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
@@ -46,36 +46,28 @@ from utils.iceberg_utils import create_iceberg_table_if_not_exists
 # MLflow configuration
 MLFLOW_TRACKING_URI = "postgresql://lakehouse_user:lakehouse_pass@postgres:5432/mlflow_db"
 MLFLOW_ARTIFACT_URI = "s3://gold/mlflow/"
-EXPERIMENT_NAME = "province_hotness_forecasting_reduced"
+EXPERIMENT_NAME = "province_hotness_forecasting_rf"
 
 # Model configuration
-MODEL_NAME = "province_hotness_forecaster_reduced"
+MODEL_NAME = "province_hotness_forecaster_rf"
 FORECAST_MONTHS = 12
 TRAIN_TEST_SPLIT = 0.7
 
-# XGBoost hyperparameters (conservative)
-XGBOOST_PARAMS = {
+# Random Forest hyperparameters
+RANDOM_FOREST_PARAMS = {
     "n_estimators": 200,
-    "max_depth": 4,
-    "learning_rate": 0.01,
-    "min_child_weight": 5,
-    "subsample": 0.7,
-    "colsample_bytree": 0.7,
-    "gamma": 0.1,
-    "reg_alpha": 0.1,
-    "reg_lambda": 1.0,
+    "max_depth": 10,
+    "min_samples_split": 10,
+    "min_samples_leaf": 5,
+    "max_features": "sqrt",
     "random_state": 42,
-    "objective": "reg:squarederror",
-    "tree_method": "hist"
+    "n_jobs": -1,
+    "verbose": 0
 }
 
-# Feature columns - EXPERIMENT: XGBoost Reduced (Time-Only)
-# Chỉ dùng temporal + lag features (8 features total)
-# BỎ HẾT current metrics (engagement, sentiment, NLP)
+# Feature columns (same as XGBoost Reduced)
 TEMPORAL_FEATURES = ["month", "month_sin", "month_cos"]
 LAG_FEATURES = ["hotness_lag_1", "hotness_lag_2", "hotness_lag_3", "hotness_lag_12", "hotness_rolling_avg_3m"]
-
-# ❌ BỎ HẾT CURRENT_FEATURES - Chỉ học từ lịch sử thời gian
 CURRENT_FEATURES = []
 
 ALL_FEATURES = TEMPORAL_FEATURES + LAG_FEATURES  # 3 + 5 = 8 features
@@ -84,7 +76,7 @@ ALL_FEATURES = TEMPORAL_FEATURES + LAG_FEATURES  # 3 + 5 = 8 features
 def create_spark_session():
     """Initialize Spark session với Iceberg catalog"""
     return SparkSession.builder \
-        .appName("ML_Province_Hotness_Pipeline") \
+        .appName("ML_Province_Hotness_RandomForest") \
         .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
         .config("spark.sql.catalog.gold", "org.apache.iceberg.spark.SparkCatalog") \
         .config("spark.sql.catalog.gold.type", "hive") \
@@ -136,7 +128,6 @@ def calculate_hotness_score(spark):
     df = df.withColumn("norm_total_comments", F.percent_rank().over(window_month.orderBy("total_comments")))
     df = df.withColumn("norm_total_posts", F.percent_rank().over(window_month.orderBy("total_posts")))
     df = df.withColumn("norm_total_post_likes", F.percent_rank().over(window_month.orderBy("total_post_likes")))
-    # df = df.withColumn("norm_total_post_shares", F.percent_rank().over(window_month.orderBy("total_post_shares")))  # Bỏ - nhiều null
     df = df.withColumn("norm_total_post_saves", F.percent_rank().over(window_month.orderBy("total_post_saves")))
     df = df.withColumn("norm_total_comment_likes", F.percent_rank().over(window_month.orderBy("total_comment_likes")))
     df = df.withColumn("norm_positive_ratio", F.percent_rank().over(window_month.orderBy("positive_ratio")))
@@ -219,7 +210,7 @@ def calculate_hotness_score(spark):
         .otherwise(F.col("hotness_score"))
     )
     
-    # Drop intermediate columns (including new norm_total_emojis and score columns)
+    # Drop intermediate columns
     norm_cols = [c for c in df.columns if c.startswith("norm_")] + [
         "sentiment_scaled", "emoji_sentiment", "exclamation_ratio",
         "base_volume", "engagement_score", "sentiment_score", "emoji_score", "richness_score"
@@ -271,7 +262,7 @@ def create_lag_features(df):
 def prepare_features(df):
     """Add temporal features (month_sin, month_cos)"""
     print("\n" + "="*80)
-    print("PREPARING FEATURES FOR TRAINING (REDUCED MODEL)")
+    print("PREPARING FEATURES FOR TRAINING (RANDOM FOREST)")
     print("="*80)
     
     df = df.withColumn("month_sin", F.sin(2 * np.pi * F.col("month") / 12))
@@ -281,21 +272,22 @@ def prepare_features(df):
     print(f"✓ Total features: {len(ALL_FEATURES)} (TIME-ONLY)")
     print(f"  - Temporal: {TEMPORAL_FEATURES}")
     print(f"  - Lag: {LAG_FEATURES}")
-    print(f"  - Current: NONE (Reduced model)")
+    print(f"  - Current: NONE (Time-only model)")
     
     return df
 
 
-def train_xgboost_model(df):
+def train_random_forest_model(df):
     """
-    Step 3: Train XGBoost model with MLflow tracking
+    Step 3: Train Random Forest model with MLflow tracking
     
-    REDUCED MODEL:
+    RANDOM FOREST MODEL:
     Split: 70/30 time-based
     Features: 8 total (3 temporal + 5 lag + 0 current)
+    Algorithm: Bagging (parallel trees with voting)
     """
     print("\n" + "="*80)
-    print("STEP 3: TRAINING XGBOOST MODEL (REDUCED - TIME-ONLY)")
+    print("STEP 3: TRAINING RANDOM FOREST MODEL")
     print("="*80)
     
     # Convert to Pandas
@@ -320,17 +312,18 @@ def train_xgboost_model(df):
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment(EXPERIMENT_NAME)
     
-    with mlflow.start_run(run_name=f"xgboost_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
+    with mlflow.start_run(run_name=f"random_forest_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
         # Log parameters
-        mlflow.log_params(XGBOOST_PARAMS)
+        mlflow.log_params(RANDOM_FOREST_PARAMS)
         mlflow.log_param("train_test_split", TRAIN_TEST_SPLIT)
         mlflow.log_param("num_features", len(ALL_FEATURES))
         mlflow.log_param("train_size", len(train_df))
         mlflow.log_param("test_size", len(test_df))
+        mlflow.log_param("algorithm", "RandomForest")
         
         # Train model
-        print("\n Training XGBoost...")
-        model = xgb.XGBRegressor(**XGBOOST_PARAMS)
+        print("\n🌲 Training Random Forest...")
+        model = RandomForestRegressor(**RANDOM_FOREST_PARAMS)
         model.fit(X_train, y_train)
         
         # Predictions
@@ -367,7 +360,7 @@ def train_xgboost_model(df):
             'importance': model.feature_importances_
         }).sort_values('importance', ascending=False)
         sns.barplot(data=importance_df, x='importance', y='feature', ax=ax)
-        ax.set_title('Feature Importance')
+        ax.set_title('Random Forest Feature Importance')
         mlflow.log_figure(fig, "feature_importance.png")
         plt.close()
         
@@ -377,7 +370,7 @@ def train_xgboost_model(df):
         ax.plot([0, 1], [0, 1], 'r--')
         ax.set_xlabel('Actual Hotness')
         ax.set_ylabel('Predicted Hotness')
-        ax.set_title('Test Set: Actual vs Predicted')
+        ax.set_title('Test Set: Actual vs Predicted (Random Forest)')
         mlflow.log_figure(fig, "actual_vs_predicted.png")
         plt.close()
         
@@ -388,7 +381,7 @@ def train_xgboost_model(df):
         ax.axhline(y=0, color='r', linestyle='--')
         ax.set_xlabel('Predicted Hotness')
         ax.set_ylabel('Residuals')
-        ax.set_title('Residual Plot')
+        ax.set_title('Residual Plot (Random Forest)')
         mlflow.log_figure(fig, "residuals.png")
         plt.close()
         
@@ -401,7 +394,7 @@ def train_xgboost_model(df):
         sample_data = test_df_plot[test_df_plot['province_sk'] == province_sample].sort_values('year_month')
         ax.plot(sample_data['year_month'], sample_data['hotness_score'], label='Actual', marker='o')
         ax.plot(sample_data['year_month'], sample_data['predicted'], label='Predicted', marker='x')
-        ax.set_title(f'Time Series: {sample_data["province_name"].iloc[0]}')
+        ax.set_title(f'Time Series: {sample_data["province_name"].iloc[0]} (Random Forest)')
         ax.set_xlabel('Year-Month')
         ax.set_ylabel('Hotness Score')
         ax.legend()
@@ -410,7 +403,7 @@ def train_xgboost_model(df):
         plt.close()
         
         # Log model
-        mlflow.xgboost.log_model(model, "model")
+        mlflow.sklearn.log_model(model, "model")
         
         # Register model
         model_uri = f"runs:/{mlflow.active_run().info.run_id}/model"
@@ -440,7 +433,7 @@ def create_forecast_table(spark):
     create_iceberg_table_if_not_exists(
         spark=spark,
         database="gold",
-        table_name="province_month_forecast_reduced_next12",
+        table_name="province_month_forecast_rf_next12",
         schema=schema,
         partition_by=["year", "month"],
         table_properties={
@@ -456,14 +449,14 @@ def forecast_12_months(spark, model, df_with_lags):
     """
     Step 4: Forecast 12 months ahead using recursive autoregressive
     
-    REDUCED MODEL Strategy:
+    RANDOM FOREST Strategy:
     - Month 1: Use actual lags
     - Month 2+: Use previous predictions as lags
     - Current metrics: KHÔNG DÙNG (time-only model)
     - Rolling avg: Recalculate each step
     """
     print("\n" + "="*80)
-    print("STEP 4: FORECASTING 12 MONTHS AHEAD (REDUCED MODEL)")
+    print("STEP 4: FORECASTING 12 MONTHS AHEAD (RANDOM FOREST)")
     print("="*80)
     
     # Create table if not exists
@@ -496,19 +489,19 @@ def forecast_12_months(spark, model, df_with_lags):
             last_hotness            # current (will become lag_1 for next prediction)
         ]
         
-        # ❌ KHÔNG DÙNG current_metrics - Reduced model chỉ học từ lags + temporal
+        # ❌ KHÔNG DÙNG current_metrics - Time-only model
         
         # Forecast 12 months
         for horizon in range(1, FORECAST_MONTHS + 1):
             # Calculate target month (proper month arithmetic with overflow handling)
-            year_month_str = str(row['year_month'])  # Convert 202511 -> "202511"
+            year_month_str = str(row['year_month'])
             last_date = datetime.strptime(year_month_str, '%Y%m')
             total_months = last_date.year * 12 + last_date.month + horizon
             target_year = (total_months - 1) // 12
             target_month = (total_months - 1) % 12 + 1
-            target_year_month = int(f"{target_year:04d}{target_month:02d}")  # Store as int like source data
+            target_year_month = int(f"{target_year:04d}{target_month:02d}")
             
-            # Prepare features (REDUCED: chỉ temporal + lag, không có current_metrics)
+            # Prepare features (TIME-ONLY: chỉ temporal + lag)
             features = {
                 'month': target_month,
                 'month_sin': np.sin(2 * np.pi * target_month / 12),
@@ -537,7 +530,7 @@ def forecast_12_months(spark, model, df_with_lags):
                 'horizon_month': horizon,
                 'predicted_hotness': float(predicted_hotness),
                 'forecast_date': datetime.now().strftime('%Y-%m-%d'),
-                'model_version': 'reduced_1.0'
+                'model_version': 'rf_1.0'
             })
             
             # Update lag history for next iteration
@@ -549,16 +542,16 @@ def forecast_12_months(spark, model, df_with_lags):
     forecast_df = spark.createDataFrame(forecast_results)
     
     # Save to Iceberg table using overwrite mode
-    print(f"\n💾 Writing to table: gold.gold.province_month_forecast_reduced_next12")
+    print(f"\n💾 Writing to table: gold.gold.province_month_forecast_rf_next12")
     forecast_df.write \
         .format("iceberg") \
         .mode("overwrite") \
-        .save("gold.gold.province_month_forecast_reduced_next12")
+        .save("gold.gold.province_month_forecast_rf_next12")
     
-    print(f"✓ Saved {len(forecast_results)} predictions to gold.gold.province_month_forecast_reduced_next12")
+    print(f"✓ Saved {len(forecast_results)} predictions to gold.gold.province_month_forecast_rf_next12")
     
     # Export to Parquet on MinIO
-    parquet_path = f"s3a://gold/ml_forecast/province_hotness_forecast_reduced_{datetime.now().strftime('%Y%m%d_%H%M%S')}.parquet"
+    parquet_path = f"s3a://gold/ml_forecast/province_hotness_forecast_rf_{datetime.now().strftime('%Y%m%d_%H%M%S')}.parquet"
     print(f"\n📦 Exporting forecast to: {parquet_path}")
     
     forecast_df.write \
@@ -577,9 +570,9 @@ def forecast_12_months(spark, model, df_with_lags):
 def main():
     """Main pipeline execution"""
     print("\n" + "="*80)
-    print("ML PIPELINE: PROVINCE HOTNESS FORECASTING (REDUCED MODEL)")
+    print("ML PIPELINE: PROVINCE HOTNESS FORECASTING (RANDOM FOREST)")
     print("="*80)
-    print(f"Model: XGBoost Time-Only (8 features: temporal + lag)")
+    print(f"Model: Random Forest (8 features: temporal + lag)")
     print(f"Start time: {datetime.now()}")
     
     # Initialize Spark
@@ -596,7 +589,7 @@ def main():
         df = prepare_features(df)
         
         # Step 3: Train model
-        model, test_df = train_xgboost_model(df)
+        model, test_df = train_random_forest_model(df)
         
         # Step 4: Forecast 12 months
         forecast_df = forecast_12_months(spark, model, df)
@@ -607,11 +600,11 @@ def main():
         print(f"End time: {datetime.now()}")
         print(f"\nOutputs:")
         print(f"  - Model: {MODEL_NAME} (MLflow Registry)")
-        print(f"  - Forecast Table: gold.gold.province_month_forecast_reduced_next12")
+        print(f"  - Forecast Table: gold.gold.province_month_forecast_rf_next12")
         print(f"  - MLflow URI: {MLFLOW_TRACKING_URI}")
         print(f"  - Experiment: {EXPERIMENT_NAME}")
-        print(f"\n⚠️  NOTE: This is REDUCED model (time-only, 8 features)")
-        print(f"  Compare with Full model to evaluate current_metrics importance")
+        print(f"\n⚠️  NOTE: This is Random Forest model (bagging, 8 features)")
+        print(f"  Compare with XGBoost to evaluate boosting vs bagging")
         
     except Exception as e:
         print(f"\n✗ ERROR: {str(e)}")
@@ -622,3 +615,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

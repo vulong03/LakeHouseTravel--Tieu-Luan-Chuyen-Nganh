@@ -33,11 +33,24 @@ FORECAST_PREFIX = "ml_forecast/"
 
 # MLflow configuration
 MLFLOW_TRACKING_URI = "postgresql://lakehouse_user:lakehouse_pass@postgres:5432/mlflow_db"
-MODEL_NAME = "province_hotness_forecaster"
 
-# Cache configuration
-CACHE_DURATION = 30  # 30 seconds (was 5 minutes) - shorter cache to detect new runs faster
-_forecast_cache = {"data": None, "timestamp": 0, "run_folder": None}
+# Model configurations
+MODELS = {
+    "XGBoost (Reduced)": {
+        "name": "province_hotness_forecaster_reduced",
+        "file_pattern": "province_hotness_forecast_reduced_",
+        "description": "XGBoost với 8 features (temporal + lag)"
+    },
+    "Random Forest": {
+        "name": "province_hotness_forecaster_rf",
+        "file_pattern": "province_hotness_forecast_rf_",
+        "description": "Random Forest với 8 features (temporal + lag)"
+    }
+}
+
+# Cache configuration - separate cache per model
+CACHE_DURATION = 30  # 30 seconds
+_forecast_cache = {}
 
 # Debug mode
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -60,37 +73,51 @@ REGIONS = {
 }
 
 
-def clear_cache():
-    """Clear forecast data cache"""
+def clear_cache(model_key=None):
+    """Clear forecast data cache for specific model or all models"""
     global _forecast_cache
-    _forecast_cache = {"data": None, "timestamp": 0, "run_folder": None}
-    print("🗑️ Cache cleared")
+    if model_key:
+        if model_key in _forecast_cache:
+            del _forecast_cache[model_key]
+            print(f"🗑️ Cache cleared for {model_key}")
+    else:
+        _forecast_cache = {}
+        print("🗑️ All caches cleared")
 
 
-def load_forecast_data():
-    """Load forecast data from MinIO Parquet files (latest run folder) with caching"""
-    # Check cache
+def load_forecast_data(model_key="XGBoost (Reduced)"):
+    """Load forecast data from MinIO Parquet files (latest run folder) with caching per model"""
+    # Check cache for this model
     now = time.time()
-    if _forecast_cache["data"] is not None and (now - _forecast_cache["timestamp"]) < CACHE_DURATION:
-        print(f"📦 Using cached data from run: {_forecast_cache['run_folder']} (age: {int(now - _forecast_cache['timestamp'])}s)")
-        return _forecast_cache["data"], None
+    if model_key in _forecast_cache:
+        cache_entry = _forecast_cache[model_key]
+        if cache_entry["data"] is not None and (now - cache_entry["timestamp"]) < CACHE_DURATION:
+            print(f"📦 Using cached data for {model_key} from run: {cache_entry['run_folder']} (age: {int(now - cache_entry['timestamp'])}s)")
+            return cache_entry["data"], None
+    
+    # Get model config
+    model_config = MODELS.get(model_key)
+    if not model_config:
+        return pd.DataFrame(), f"❌ Model không tồn tại: {model_key}"
+    
+    file_pattern = model_config["file_pattern"]
     
     try:
-        print("🔄 Loading fresh data from MinIO...")
+        print(f"🔄 Loading fresh data for {model_key} from MinIO...")
         
         # List all objects in forecast directory
         objects = list(MINIO_CLIENT.list_objects(BUCKET_NAME, prefix=FORECAST_PREFIX, recursive=True))
         
-        # Get all folders with their last_modified timestamp
+        # Get all folders with their last_modified timestamp (filter by model pattern)
         folder_timestamps = {}
         parquet_files_by_folder = {}
         
         for obj in objects:
-            if obj.object_name.endswith('.parquet'):
-                # Extract folder name: ml_forecast/20241204_160932/part-xxx.parquet
+            if obj.object_name.endswith('.parquet') and file_pattern in obj.object_name:
+                # Extract folder name: ml_forecast/province_hotness_forecast_reduced_20241215_073023/part-xxx.parquet
                 parts = obj.object_name.split('/')
                 if len(parts) >= 3:
-                    run_folder = f"{parts[0]}/{parts[1]}/"  # ml_forecast/20241204_160932/
+                    run_folder = f"{parts[0]}/{parts[1]}/"  # ml_forecast/province_hotness_forecast_reduced_20241215_073023/
                     
                     # Track latest modified time for this folder
                     if run_folder not in folder_timestamps or obj.last_modified > folder_timestamps[run_folder]:
@@ -102,7 +129,7 @@ def load_forecast_data():
                     parquet_files_by_folder[run_folder].append(obj.object_name)
         
         if not folder_timestamps:
-            error_msg = "⚠️ Không tìm thấy file dự báo trong MinIO!"
+            error_msg = f"⚠️ Không tìm thấy file dự báo cho {model_key} trong MinIO!"
             print(error_msg)
             return pd.DataFrame(), error_msg
         
@@ -145,12 +172,14 @@ def load_forecast_data():
         print(f"   - Unique regions: {df['region'].nunique()}")
         print(f"   - Date range: {df['forecast_date'].min()} to {df['forecast_date'].max()}")
         
-        # Update cache with run folder info
-        _forecast_cache["data"] = df
-        _forecast_cache["timestamp"] = now
-        _forecast_cache["run_folder"] = latest_run_folder
+        # Update cache for this model
+        _forecast_cache[model_key] = {
+            "data": df,
+            "timestamp": now,
+            "run_folder": latest_run_folder
+        }
         
-        print(f"✅ Cache updated: {latest_run_folder} at {datetime.now().strftime('%H:%M:%S')}")
+        print(f"✅ Cache updated for {model_key}: {latest_run_folder} at {datetime.now().strftime('%H:%M:%S')}")
         
         return df, None
         
@@ -165,19 +194,27 @@ def load_forecast_data():
         traceback.print_exc()
         return pd.DataFrame(), error_msg
     
-def get_model_info():
+def get_model_info(model_key="XGBoost (Reduced)"):
     """Get latest model information from MLflow"""
     try:
+        model_config = MODELS.get(model_key)
+        if not model_config:
+            return None
+        
+        model_name = model_config["name"]
+        
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
         client = mlflow.MlflowClient()
         
         # Get latest version
-        model_versions = client.search_model_versions(f"name='{MODEL_NAME}'")
+        model_versions = client.search_model_versions(f"name='{model_name}'")
         if model_versions:
             latest_version = max(model_versions, key=lambda x: int(x.version))
             run = client.get_run(latest_version.run_id)
             
             return {
+                "model_key": model_key,
+                "model_name": model_name,
                 "version": latest_version.version,
                 "run_id": latest_version.run_id,
                 "test_rmse": run.data.metrics.get("test_rmse", "N/A"),
@@ -186,11 +223,11 @@ def get_model_info():
                 "trained_at": datetime.fromtimestamp(run.info.start_time / 1000).strftime("%Y-%m-%d %H:%M:%S")
             }
     except Exception as e:
-        print(f"Error getting model info: {e}")
+        print(f"Error getting model info for {model_key}: {e}")
         return None
 
 
-def recommend_provinces(start_month, end_month, region, top_n):
+def recommend_provinces(model_key, start_month, end_month, region, top_n):
     """
     Recommend top provinces based on forecasted hotness
     """
@@ -221,8 +258,8 @@ def recommend_provinces(start_month, end_month, region, top_n):
         """
         return pd.DataFrame(), None, error_html
     
-    # Load forecast data
-    df, load_error = load_forecast_data()
+    # Load forecast data for selected model
+    df, load_error = load_forecast_data(model_key)
     
     if load_error:
         error_html = f"""
@@ -447,7 +484,7 @@ def recommend_provinces(start_month, end_month, region, top_n):
         """
     
     # Model info message
-    model_info = get_model_info()
+    model_info = get_model_info(model_key)
     if model_info:
         # Calculate actual date range from filtered data
         unique_months = sorted(df_filtered['year_month'].unique())
@@ -469,8 +506,8 @@ def recommend_provinces(start_month, end_month, region, top_n):
         
         info_msg = f"""
 <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 12px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
-    <h3 style="margin-top: 0; font-size: 18px;">Thông tin Model</h3>
-    <p style="margin: 8px 0;"><strong>Model:</strong> {MODEL_NAME} <span style="background: rgba(255,255,255,0.3); padding: 3px 8px; border-radius: 5px;">v{model_info['version']}</span></p>
+    <h3 style="margin-top: 0; font-size: 18px;">🤖 Thông tin Model: {model_key}</h3>
+    <p style="margin: 8px 0;"><strong>Model Registry:</strong> {model_info['model_name']} <span style="background: rgba(255,255,255,0.3); padding: 3px 8px; border-radius: 5px;">v{model_info['version']}</span></p>
     <p style="margin: 8px 0;"><strong>Độ chính xác:</strong> RMSE={model_info['test_rmse']:.4f} | MAE={model_info['test_mae']:.4f} | R²={model_info['test_r2']:.4f}</p>
     <p style="margin: 8px 0;"><strong>Trained:</strong> {model_info['trained_at']}</p>
     <p style="margin: 8px 0;"><strong>Dữ liệu gốc:</strong> {num_provinces_in_data}/62 tỉnh × 12 tháng = {len(df)} predictions</p>
@@ -564,6 +601,14 @@ def create_interface():
                 gr.HTML('<div class="filter-card">')
                 gr.Markdown("##  Bộ lọc tìm kiếm")
                 
+                # Model selection
+                model_selector = gr.Dropdown(
+                    choices=list(MODELS.keys()),
+                    value="XGBoost (Reduced)",
+                    label="🤖 Chọn Model",
+                    info="So sánh giữa các thuật toán ML"
+                )
+                
                 search_btn = gr.Button(" Tìm kiếm", variant="primary", size="sm")
                 
                 # Dynamic month choices: Load from actual forecast data
@@ -648,7 +693,7 @@ def create_interface():
         
         search_btn.click(
             fn=recommend_provinces,
-            inputs=[start_month, end_month, region, top_n],
+            inputs=[model_selector, start_month, end_month, region, top_n],
             outputs=[result_table, result_chart, info_msg]
         )
         
@@ -704,9 +749,11 @@ def create_interface():
                 </div>
                 <div style="background: rgba(103, 126, 234, 0.1); padding: 15px; border-radius: 8px; margin-top: 20px;">
                     <p style="color: #555; line-height: 1.8; margin: 0;">
-                        <strong>Mô hình:</strong> XGBoost Regressor với 19 features (3 temporal + 5 lag + 11 current: 2 volume + 2 engagement + 2 sentiment + 5 NLP)<br>
+                        <strong>🤖 Models có sẵn:</strong><br>
+                        • <strong>XGBoost (Reduced):</strong> Gradient Boosting với 8 features (temporal + lag)<br>
+                        • <strong>Random Forest:</strong> Bagging ensemble với 8 features (temporal + lag)<br>
                         <strong>Dự đoán:</strong> Recursive autoregressive strategy (12 tháng ahead)<br>
-                        <strong>Tối ưu:</strong> Không sử dụng total_post_shares (nhiều null, ảnh hưởng độ chính xác)
+                        <strong>So sánh:</strong> Chọn model khác nhau để so sánh độ chính xác và kết quả dự báo
                     </p>
                 </div>
             </div>
