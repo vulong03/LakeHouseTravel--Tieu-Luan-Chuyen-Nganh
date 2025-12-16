@@ -1,12 +1,15 @@
 """
-Gradio App: Province Tourism Hotness Forecasting
-=================================================
+Tourism Analytics Dashboard - Vietnam
+======================================
 
 Features:
-- Input: Chọn tháng bắt đầu và kết thúc (1-12 tháng sau)
-- Filter: Chọn vùng miền (Bắc/Trung/Nam)
-- Output: Top N tỉnh thành có hotness cao nhất
-- Visualization: Line chart hotness trend theo thời gian
+Tab 1: Province Hotness Forecasting
+  - Dự báo tỉnh thành sẽ "hot" trong tương lai
+  - So sánh 2 models: XGBoost vs Random Forest
+  
+Tab 2: Hotel Clustering by Customer Segment  
+  - Phân khúc khách sạn theo loại khách (K-Means K=3)
+  - Filter theo điểm, tỉnh, phân khúc
 """
 
 import gradio as gr
@@ -30,6 +33,8 @@ MINIO_CLIENT = Minio(
 )
 BUCKET_NAME = "gold"
 FORECAST_PREFIX = "ml_forecast/"
+CLUSTERING_PREFIX = "ml-outputs/hotel-clustering-v2/results/"  # Updated to V2
+CLUSTERING_MODEL_NAME = "hotel_clustering_v2_model"  # Updated to V2
 
 # MLflow configuration
 MLFLOW_TRACKING_URI = "postgresql://lakehouse_user:lakehouse_pass@postgres:5432/mlflow_db"
@@ -51,6 +56,7 @@ MODELS = {
 # Cache configuration - separate cache per model
 CACHE_DURATION = 30  # 30 seconds
 _forecast_cache = {}
+_clustering_cache = {"data": None, "timestamp": 0}
 
 # Debug mode
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -252,7 +258,7 @@ def recommend_provinces(model_key, start_month, end_month, region, top_n):
     if start_year_month > end_year_month:
         error_html = """
 <div style="background: #ff4444; padding: 20px; border-radius: 8px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
-    <h3 style="margin-top: 0;">❌ Lỗi chọn tháng</h3>
+    <h3 style="margin-top: 0;">Lỗi chọn tháng</h3>
     <p>Tháng bắt đầu phải nhỏ hơn hoặc bằng tháng kết thúc!</p>
 </div>
         """
@@ -264,7 +270,7 @@ def recommend_provinces(model_key, start_month, end_month, region, top_n):
     if load_error:
         error_html = f"""
 <div style="background: #ff4444; padding: 20px; border-radius: 8px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
-    <h3 style="margin-top: 0;">❌ Lỗi hệ thống</h3>
+    <h3 style="margin-top: 0;">Lỗi hệ thống</h3>
     <p>{load_error}</p>
     <p style="margin-top: 15px; font-size: 14px;">Vui lòng kiểm tra kết nối MinIO hoặc chạy lại forecast job!</p>
 </div>
@@ -321,10 +327,10 @@ def recommend_provinces(model_key, start_month, end_month, region, top_n):
         available_str = ", ".join([f"{ym//100}-{ym%100:02d}" for ym in sorted(available_year_months)])
         warning_html = f"""
 <div style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%); padding: 20px; border-radius: 12px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
-    <h3 style="margin-top: 0; font-size: 20px;">⚠️ Thiếu dữ liệu cho một số tháng</h3>
+    <h3 style="margin-top: 0; font-size: 20px;">Thiếu dữ liệu cho một số tháng</h3>
     <p style="margin: 10px 0; font-size: 16px;"><strong>Tháng bị thiếu:</strong> {missing_str}</p>
     <p style="margin: 10px 0; font-size: 16px;"><strong>Tháng có sẵn:</strong> {available_str}</p>
-    <p style="margin-top: 15px; font-size: 14px; opacity: 0.9;">💡 Vui lòng chọn khoảng thời gian khác hoặc chạy lại forecast job để cập nhật dữ liệu!</p>
+    <p style="margin-top: 15px; font-size: 14px; opacity: 0.9;">Vui lòng chọn khoảng thời gian khác hoặc chạy lại forecast job để cập nhật dữ liệu!</p>
 </div>
         """
         return pd.DataFrame(), None, warning_html
@@ -343,10 +349,10 @@ def recommend_provinces(model_key, start_month, end_month, region, top_n):
     if df_filtered.empty:
         empty_html = f"""
 <div style="background: linear-gradient(135deg, #ffd43b 0%, #ffa733 100%); padding: 20px; border-radius: 12px; color: #333; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
-    <h3 style="margin-top: 0; font-size: 20px;">⚠️ Không có dữ liệu phù hợp</h3>
+    <h3 style="margin-top: 0; font-size: 20px;">Không có dữ liệu phù hợp</h3>
     <p style="margin: 10px 0;"><strong>Vùng:</strong> {region}</p>
     <p style="margin: 10px 0;"><strong>Khoảng thời gian:</strong> {start_month} đến {end_month}</p>
-    <p style="margin-top: 15px; font-size: 14px;">💡 Vui lòng thử lại với bộ lọc khác!</p>
+    <p style="margin-top: 15px; font-size: 14px;">Vui lòng thử lại với bộ lọc khác!</p>
 </div>
         """
         return pd.DataFrame(), None, empty_html
@@ -479,7 +485,7 @@ def recommend_provinces(model_key, start_month, end_month, region, top_n):
         missing_count = 62 - num_provinces_in_data
         missing_province_warning = f"""
 <div style="background: #ffd43b; padding: 15px; margin-top: 10px; border-radius: 8px; color: #333; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
-    ⚠️ <strong>Lưu ý:</strong> Thiếu dữ liệu cho {missing_count} tỉnh (do không đủ dữ liệu lịch sử để dự báo)
+    <strong>Lưu ý:</strong> Thiếu dữ liệu cho {missing_count} tỉnh (do không đủ dữ liệu lịch sử để dự báo)
 </div>
         """
     
@@ -500,13 +506,13 @@ def recommend_provinces(model_key, start_month, end_month, region, top_n):
         if num_actual_months != num_months_selected:
             month_warning = f"""
 <div style="background: #ff9800; padding: 12px; margin-top: 10px; border-radius: 8px; color: white; font-size: 14px;">
-    ⚠️ <strong>Cảnh báo:</strong> Chọn {num_months_selected} tháng nhưng chỉ có {num_actual_months} tháng dữ liệu thực tế (do lỗi horizon mapping trong forecast job)
+    <strong>Cảnh báo:</strong> Chọn {num_months_selected} tháng nhưng chỉ có {num_actual_months} tháng dữ liệu thực tế (do lỗi horizon mapping trong forecast job)
 </div>
             """
         
         info_msg = f"""
 <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 12px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
-    <h3 style="margin-top: 0; font-size: 18px;">🤖 Thông tin Model: {model_key}</h3>
+    <h3 style="margin-top: 0; font-size: 18px;">Thông tin Model: {model_key}</h3>
     <p style="margin: 8px 0;"><strong>Model Registry:</strong> {model_info['model_name']} <span style="background: rgba(255,255,255,0.3); padding: 3px 8px; border-radius: 5px;">v{model_info['version']}</span></p>
     <p style="margin: 8px 0;"><strong>Độ chính xác:</strong> RMSE={model_info['test_rmse']:.4f} | MAE={model_info['test_mae']:.4f} | R²={model_info['test_r2']:.4f}</p>
     <p style="margin: 8px 0;"><strong>Trained:</strong> {model_info['trained_at']}</p>
@@ -532,13 +538,13 @@ def recommend_provinces(model_key, start_month, end_month, region, top_n):
         if num_actual_months != num_months_selected:
             month_warning = f"""
 <div style="background: #ff9800; padding: 12px; margin-top: 10px; border-radius: 8px; color: white; font-size: 14px;">
-    ⚠️ <strong>Cảnh báo:</strong> Chọn {num_months_selected} tháng nhưng chỉ có {num_actual_months} tháng dữ liệu thực tế (do lỗi horizon mapping trong forecast job)
+    <strong>Cảnh báo:</strong> Chọn {num_months_selected} tháng nhưng chỉ có {num_actual_months} tháng dữ liệu thực tế (do lỗi horizon mapping trong forecast job)
 </div>
             """
         
         info_msg = f"""
 <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 20px; border-radius: 12px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
-    <p style="margin: 0;">✅ Đã tạo {len(province_avg)} recommendations | {num_provinces_filtered} tỉnh × {num_actual_months} tháng thực tế (chọn {num_months_selected}) = {len(df_filtered)} predictions | {date_range_str}</p>
+    <p style="margin: 0;">Đã tạo {len(province_avg)} recommendations | {num_provinces_filtered} tỉnh × {num_actual_months} tháng thực tế (chọn {num_months_selected}) = {len(df_filtered)} predictions | {date_range_str}</p>
 </div>
 {month_warning}
 {missing_province_warning}
@@ -546,156 +552,411 @@ def recommend_provinces(model_key, start_month, end_month, region, top_n):
     
     return result_df, fig, info_msg
 
-def create_interface():
-    """Create Gradio interface"""
+
+# ============================================================================
+# TAB 2: HOTEL CLUSTERING FUNCTIONS
+# ============================================================================
+
+def load_clustering_data():
+    """Load hotel clustering results from MinIO with caching"""
+    now = time.time()
+    if _clustering_cache["data"] is not None and (now - _clustering_cache["timestamp"]) < CACHE_DURATION:
+        print(f"📦 Using cached clustering data (age: {int(now - _clustering_cache['timestamp'])}s)")
+        return _clustering_cache["data"], None
     
-    # Custom CSS for better styling
+    try:
+        print(f"🔄 Loading fresh clustering data from MinIO...")
+        
+        # List parquet files in clustering results folder
+        parquet_objects = list(MINIO_CLIENT.list_objects(
+            BUCKET_NAME,
+            prefix=CLUSTERING_PREFIX,
+            recursive=True
+        ))
+        
+        parquet_files = [obj for obj in parquet_objects if obj.object_name.endswith('.parquet')]
+        
+        if not parquet_files:
+            return pd.DataFrame(), "⚠️ Không tìm thấy kết quả clustering trong MinIO!"
+        
+        # Read all parquet files
+        dfs = []
+        for obj in parquet_files:
+            response = MINIO_CLIENT.get_object(BUCKET_NAME, obj.object_name)
+            df = pd.read_parquet(BytesIO(response.read()))
+            dfs.append(df)
+        
+        df = pd.concat(dfs, ignore_index=True)
+        
+        print(f"✅ Loaded {len(df)} hotels from clustering results")
+        
+        # Cache the data
+        _clustering_cache["data"] = df
+        _clustering_cache["timestamp"] = now
+        
+        return df, None
+        
+    except S3Error as e:
+        error_msg = f"❌ Lỗi kết nối MinIO: {str(e)}"
+        print(error_msg)
+        return pd.DataFrame(), error_msg
+    except Exception as e:
+        error_msg = f"❌ Lỗi load dữ liệu clustering: {str(e)}"
+        print(error_msg)
+        import traceback
+        traceback.print_exc()
+        return pd.DataFrame(), error_msg
+
+
+def filter_hotels_by_cluster(cluster_name, province_filter, min_score, top_n):
+    """Filter hotels by cluster and other criteria"""
+    df, error = load_clustering_data()
+    
+    if error:
+        error_html = f"""
+<div style="background: #ff4444; padding: 20px; border-radius: 8px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
+    <h3 style="margin-top: 0;">Lỗi hệ thống</h3>
+    <p>{error}</p>
+    <p style="margin-top: 15px; font-size: 14px;">Vui lòng kiểm tra kết nối MinIO hoặc chạy lại clustering job!</p>
+</div>
+        """
+        return pd.DataFrame(), None, error_html
+    
+    if df.empty:
+        return pd.DataFrame(), None, "⚠️ Không có dữ liệu clustering!"
+    
+    # Filter by cluster
+    if cluster_name != "Tất cả":
+        df_filtered = df[df['cluster_name'] == cluster_name]
+    else:
+        df_filtered = df.copy()
+    
+    # Filter by province
+    if province_filter != "Tất cả":
+        df_filtered = df_filtered[df_filtered['province_name'] == province_filter]
+    
+    # Filter by minimum score
+    df_filtered = df_filtered[df_filtered['review_quality'] >= min_score]
+    
+    if df_filtered.empty:
+        empty_html = """
+<div style="background: linear-gradient(135deg, #ffd43b 0%, #ffa733 100%); padding: 20px; border-radius: 12px; color: #333; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
+    <h3 style="margin-top: 0; font-size: 20px;">Không có khách sạn phù hợp</h3>
+    <p style="margin: 10px 0;">Vui lòng thử lại với bộ lọc khác!</p>
+</div>
+        """
+        return pd.DataFrame(), None, empty_html
+    
+    # Sort by review score and get top N
+    df_result = df_filtered.sort_values('review_quality', ascending=False).head(int(top_n))
+    
+    # Create result table (V2 columns)
+    result_df = df_result[[
+        'hotel_name',
+        'province_name',
+        'cluster_name',
+        'review_quality',
+        'total_reviews',
+        'western_dominance',
+        'vietnamese_dominance',
+        'family_preference',
+        'guest_diversity'
+    ]].copy()
+    
+    result_df.columns = [
+        'Tên khách sạn',
+        'Tỉnh',
+        'Phân khúc',
+        'Điểm TB',
+        'Số review',
+        'Western Dominance',
+        '% Khách Việt',
+        'Family Preference',
+        'Guest Diversity'
+    ]
+    
+    # Round values (V2 features)
+    result_df['Western Dominance'] = result_df['Western Dominance'].round(2)
+    result_df['% Khách Việt'] = result_df['% Khách Việt'].round(1)
+    result_df['Family Preference'] = result_df['Family Preference'].round(2)
+    result_df['Guest Diversity'] = result_df['Guest Diversity'].round(2)
+    result_df['Điểm TB'] = result_df['Điểm TB'].round(2)
+    
+    # Create cluster distribution chart
+    cluster_counts = df.groupby('cluster_name').size().reset_index(name='count')
+    
+    fig = px.bar(
+        cluster_counts,
+        x='cluster_name',
+        y='count',
+        title='Phân bố Khách sạn theo Phân khúc Khách hàng',
+        labels={'cluster_name': 'Phân khúc khách hàng', 'count': 'Số lượng khách sạn'},
+        color='cluster_name',
+        color_discrete_sequence=px.colors.qualitative.Set2
+    )
+    
+    fig.update_layout(
+        showlegend=False,
+        height=400,
+        template='plotly_white'
+    )
+    
+    # Info message
+    info_html = f"""
+<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 12px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
+    <h3 style="margin-top: 0; font-size: 18px;">🏨 Kết quả Clustering</h3>
+    <p style="margin: 8px 0;"><strong>Tổng số khách sạn:</strong> {len(df):,}</p>
+    <p style="margin: 8px 0;"><strong>Đã lọc:</strong> {len(df_filtered):,} khách sạn</p>
+    <p style="margin: 8px 0;"><strong>Hiển thị:</strong> Top {len(df_result)} khách sạn</p>
+    <p style="margin: 8px 0;"><strong>Số phân khúc:</strong> {df['cluster_name'].nunique()}</p>
+</div>
+    """
+    
+    return result_df, fig, info_html
+
+
+def create_interface():
+    """Create Gradio interface with 2 tabs"""
+    
+    # Custom CSS for modern UI
     custom_css = """
     .gradio-container {
-        max-width: 1400px !important;
+        max-width: 1600px !important;
+        font-family: 'Inter', 'Segoe UI', sans-serif;
     }
     .header-section {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 40px;
-        border-radius: 16px;
+        padding: 50px;
+        border-radius: 20px;
         color: white;
         margin-bottom: 30px;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+        text-align: center;
     }
     .header-section h1 {
         margin: 0 0 15px 0;
-        font-size: 2.5em;
-        font-weight: 700;
+        font-size: 3em;
+        font-weight: 800;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
     }
     .header-section p {
-        font-size: 1.1em;
+        font-size: 1.2em;
         opacity: 0.95;
-        margin: 5px 0;
+        margin: 10px 0;
     }
-    .info-box {
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        padding: 20px;
-        border-radius: 12px;
-        color: white;
-        margin-top: 20px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+    .tab-nav button {
+        font-size: 16px !important;
+        font-weight: 600 !important;
+        padding: 12px 24px !important;
     }
     .dataframe {
         font-size: 14px !important;
+        border-radius: 8px !important;
+    }
+    button {
+        border-radius: 8px !important;
+        font-weight: 600 !important;
     }
     """
     
-    with gr.Blocks(title=" Tourism Hotness Forecast", theme=gr.themes.Soft(), css=custom_css) as app:
+    with gr.Blocks(title="🏖️ Tourism Analytics Dashboard", theme=gr.themes.Soft(), css=custom_css) as app:
         # Header
         gr.HTML(
             """
             <div class="header-section">
-                <h1>HỆ THỐNG DỰ ĐOÁN XU HƯỚNG DU LỊCH VIỆT NAM</h1>
+                <h1>TOURISM ANALYTICS DASHBOARD</h1>
+                <p>Hệ thống Phân tích Du lịch Việt Nam</p>
+                <p style="font-size: 1em; opacity: 0.9; margin-top: 10px;">
+                    Dự báo Tỉnh Hot | Phân khúc Khách sạn | Powered by Machine Learning
+                </p>
             </div>
             """
         )
         
-        with gr.Row(equal_height=True):
-            # Left panel - Filters
-            with gr.Column(scale=1):
-                gr.HTML('<div class="filter-card">')
-                gr.Markdown("##  Bộ lọc tìm kiếm")
+        with gr.Tabs():
+            # ========== TAB 1: PROVINCE FORECASTING ==========
+            with gr.Tab("Dự báo Tỉnh Hot"):
+                gr.Markdown("""
+                ### Dự báo các tỉnh thành sẽ "hot" trong tương lai
+                Dựa trên dữ liệu **TikTok engagement, sentiment, NLP features** từ 15k+ posts
                 
-                # Model selection
-                model_selector = gr.Dropdown(
-                    choices=list(MODELS.keys()),
-                    value="XGBoost (Reduced)",
-                    label="🤖 Chọn Model",
-                    info="So sánh giữa các thuật toán ML"
+                **Mục đích**: Giúp công ty tour biết nên focus vào tỉnh nào trong tương lai
+                """, elem_classes="section-header")
+                
+                with gr.Row(equal_height=True):
+                    # Left panel - Filters
+                    with gr.Column(scale=1):
+                        gr.Markdown("## Bộ lọc tìm kiếm")
+                        
+                        # Model selection
+                        model_selector = gr.Dropdown(
+                            choices=list(MODELS.keys()),
+                            value="XGBoost (Reduced)",
+                            label="Chọn Model",
+                            info="So sánh giữa các thuật toán ML"
+                        )
+                        
+                        search_btn = gr.Button("Tìm kiếm", variant="primary", size="lg")
+                        
+                        # Dynamic month choices
+                        month_choices = ["10/2025", "11/2025", "12/2025", 
+                                         "01/2026", "02/2026", "03/2026", 
+                                         "04/2026", "05/2026", "06/2026", 
+                                         "07/2026", "08/2026", "09/2026"]
+                        
+                        start_month = gr.Dropdown(
+                            choices=month_choices,
+                            value="10/2025",
+                            label="Tháng bắt đầu",
+                            info="Chọn tháng bắt đầu dự báo"
+                        )
+                        
+                        end_month = gr.Dropdown(
+                            choices=month_choices,
+                            value="03/2026",
+                            label="Tháng kết thúc",
+                            info="Chọn tháng kết thúc dự báo"
+                        )
+                        
+                        region = gr.Dropdown(
+                            choices=list(REGIONS.keys()),
+                            value="Tất cả",
+                            label="Vùng miền",
+                            info="Chọn khu vực du lịch"
+                        )
+                        
+                        top_n = gr.Dropdown(
+                            choices=["5", "10", "15", "20", "All"],
+                            value="10",
+                            label="Số lượng Top N",
+                            info="Hiển thị bao nhiêu điểm đến?"
+                        )
+                        
+                        # Info box
+                        info_msg = gr.HTML(
+                            """
+                            <div style="background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%); 
+                                        padding: 20px; border-radius: 12px; margin-top: 20px; 
+                                        box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+                                <p style="margin: 0; color: #333; font-weight: 500;">
+                                    Nhấn <strong>'Tìm kiếm'</strong> để xem kết quả dự báo
+                                </p>
+                            </div>
+                            """
+                        )
+                    
+                    # Right panel - Results
+                    with gr.Column(scale=2):
+                        gr.Markdown("## Kết quả Dự báo")
+                        
+                        result_table = gr.Dataframe(
+                            headers=["Hạng", "Tỉnh/Thành", "Vùng", "Hotness Score"],
+                            datatype=["number", "str", "str", "number"],
+                            wrap=True,
+                            interactive=False,
+                            row_count=10,
+                            column_widths=["10%", "35%", "35%", "20%"]
+                        )
+                        
+                        result_chart = gr.Plot(label="Biểu đồ xu hướng theo thời gian")
+                
+                # Helper function to update end_month choices based on start_month
+                def update_end_month_choices(selected_start):
+                    start_idx = month_choices.index(selected_start)
+                    available_end_months = month_choices[start_idx:]
+                    return gr.Dropdown(choices=available_end_months, value=available_end_months[0])
+                
+                # Event handlers
+                start_month.change(
+                    fn=update_end_month_choices,
+                    inputs=[start_month],
+                    outputs=[end_month]
                 )
                 
-                search_btn = gr.Button(" Tìm kiếm", variant="primary", size="sm")
-                
-                # Dynamic month choices: Load from actual forecast data
-                month_choices = ["10/2025", "11/2025", "12/2025", 
-                                 "01/2026", "02/2026", "03/2026", 
-                                 "04/2026", "05/2026", "06/2026", 
-                                 "07/2026", "08/2026", "09/2026"]
-                
-                start_month = gr.Dropdown(
-                    choices=month_choices,
-                    value="10/2025",
-                    label="📅 Tháng bắt đầu",
-                    info="Chọn tháng bắt đầu dự báo"
-                )
-                
-                end_month = gr.Dropdown(
-                    choices=month_choices,
-                    value="03/2026",
-                    label="📅 Tháng kết thúc",
-                    info="Chọn tháng kết thúc dự báo"
-                )
-                
-                region = gr.Dropdown(
-                    choices=list(REGIONS.keys()),
-                    value="Tất cả",
-                    label="🗺️ Vùng miền",
-                    info="Chọn khu vực du lịch yêu thích"
-                )
-                
-                top_n = gr.Dropdown(
-                    choices=["5", "10", "15", "20", "All"],
-                    value="10",
-                    label="🏆 Số lượng Top N",
-                    info="Hiển thị bao nhiêu điểm đến?"
-                )
-                
-                gr.HTML('</div>')
-                
-                # Info box
-                info_msg = gr.HTML(
-                    """
-                    <div style="background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%); 
-                                padding: 20px; border-radius: 12px; margin-top: 20px; 
-                                box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
-                        <p style="margin: 0; color: #333; font-weight: 500;">
-                            ℹ️ Nhấn <strong>'Tìm kiếm'</strong> để xem kết quả dự báo
-                        </p>
-                    </div>
-                    """
+                search_btn.click(
+                    fn=recommend_provinces,
+                    inputs=[model_selector, start_month, end_month, region, top_n],
+                    outputs=[result_table, result_chart, info_msg]
                 )
             
-            # Right panel - Results
-            with gr.Column(scale=2):
-                gr.HTML('<div class="result-card">')
-                gr.Markdown("## Kết quả Dự báo")
+            # ========== TAB 2: HOTEL CLUSTERING ==========
+            with gr.Tab("Phân khúc Khách sạn"):
+                gr.Markdown("""
+                ### Tìm khách sạn phù hợp với từng phân khúc khách hàng
+                Dựa trên phân tích **K-Means clustering (K=3)** với 9 features từ 8,978 hotels
                 
-                result_table = gr.Dataframe(
-                    headers=["Hạng", "Tỉnh/Thành", "Vùng", "Hotness Score"],
-                    datatype=["number", "str", "str", "number"],
-                    wrap=True,
-                    interactive=False,
-                    row_count=10,
-                    column_widths=["10%", "35%", "35%", "20%"]
+                **Mục đích**: Recommend hotels phù hợp với từng loại khách (Tây/Việt, Couple/Family)
+                """, elem_classes="section-header")
+                
+                with gr.Row(equal_height=True):
+                    # Left panel - Filters
+                    with gr.Column(scale=1):
+                        gr.Markdown("## Bộ lọc")
+                        
+                        cluster_selector = gr.Dropdown(
+                            choices=["Tất cả", "Balanced Mixed Segment", "International Mixed Hotels", 
+                                     "Vietnamese Domestic Hotels", "Couple & Solo Hotels"],
+                            value="Tất cả",
+                            label="Chọn phân khúc khách hàng (V2)",
+                            info="Lọc theo loại khách - K-Means V2 với improved features"
+                        )
+                        
+                        province_selector = gr.Dropdown(
+                            choices=["Tất cả"],
+                            value="Tất cả",
+                            label="Chọn tỉnh thành",
+                            info="Lọc theo địa điểm"
+                        )
+                        
+                        min_score_slider = gr.Slider(
+                            minimum=0,
+                            maximum=10,
+                            value=6.0,
+                            step=0.5,
+                            label="Điểm tối thiểu",
+                            info="Chỉ hiển thị khách sạn có điểm >= ngưỡng này"
+                        )
+                        
+                        top_n_hotels = gr.Dropdown(
+                            choices=["10", "20", "30", "50"],
+                            value="20",
+                            label="Số lượng khách sạn",
+                            info="Hiển thị bao nhiêu khách sạn?"
+                        )
+                        
+                        search_hotels_btn = gr.Button("Tìm kiếm", variant="primary", size="lg")
+                        
+                        # Info box
+                        hotels_info_msg = gr.HTML(
+                            """
+                            <div style="background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%); 
+                                        padding: 20px; border-radius: 12px; margin-top: 20px; 
+                                        box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+                                <p style="margin: 0; color: #333; font-weight: 500;">
+                                    Nhấn <strong>'Tìm kiếm'</strong> để xem danh sách khách sạn
+                                </p>
+                            </div>
+                            """
+                        )
+                    
+                    # Right panel - Results
+                    with gr.Column(scale=2):
+                        gr.Markdown("## Kết quả")
+                        
+                        hotels_table = gr.Dataframe(
+                            label="Danh sách Khách sạn Phù hợp",
+                            wrap=True,
+                            interactive=False
+                        )
+                        
+                        cluster_chart = gr.Plot(label="Phân bố Phân khúc")
+                
+                # Event handler
+                search_hotels_btn.click(
+                    fn=filter_hotels_by_cluster,
+                    inputs=[cluster_selector, province_selector, min_score_slider, top_n_hotels],
+                    outputs=[hotels_table, cluster_chart, hotels_info_msg]
                 )
-                
-                result_chart = gr.Plot(label="📈 Biểu đồ xu hướng theo thời gian")
-                
-                gr.HTML('</div>')
-        
-        # Helper function to update end_month choices based on start_month
-        def update_end_month_choices(selected_start):
-            start_idx = month_choices.index(selected_start)
-            available_end_months = month_choices[start_idx:]
-            return gr.Dropdown(choices=available_end_months, value=available_end_months[0])
-        
-        # Event handlers
-        start_month.change(
-            fn=update_end_month_choices,
-            inputs=[start_month],
-            outputs=[end_month]
-        )
-        
-        search_btn.click(
-            fn=recommend_provinces,
-            inputs=[model_selector, start_month, end_month, region, top_n],
-            outputs=[result_table, result_chart, info_msg]
-        )
         
         # Footer explanation
         gr.HTML(
@@ -703,7 +964,7 @@ def create_interface():
             <div style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%); 
                         padding: 30px; border-radius: 16px; margin-top: 30px; 
                         box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
-                <h3 style="margin-top: 0; color: #333;">Giải thích Hotness Score</h3>
+                <h3 style="margin-top: 0; color: #333;">Giải thích Hotness Score & Clustering</h3>
                 <p style="color: #555; line-height: 1.8; margin: 10px 0;">
                     <strong>Hotness Score (0-1)</strong> được tính từ <strong>5 nhóm chỉ số chính</strong> theo cấu trúc phân cấp:
                 </p>
@@ -749,11 +1010,16 @@ def create_interface():
                 </div>
                 <div style="background: rgba(103, 126, 234, 0.1); padding: 15px; border-radius: 8px; margin-top: 20px;">
                     <p style="color: #555; line-height: 1.8; margin: 0;">
-                        <strong>🤖 Models có sẵn:</strong><br>
+                        <strong>Forecasting Models:</strong><br>
                         • <strong>XGBoost (Reduced):</strong> Gradient Boosting với 8 features (temporal + lag)<br>
                         • <strong>Random Forest:</strong> Bagging ensemble với 8 features (temporal + lag)<br>
-                        <strong>Dự đoán:</strong> Recursive autoregressive strategy (12 tháng ahead)<br>
-                        <strong>So sánh:</strong> Chọn model khác nhau để so sánh độ chính xác và kết quả dự báo
+                        <strong>Dự đoán:</strong> Recursive autoregressive strategy (12 tháng ahead)<br><br>
+                        <strong>Hotel Clustering V2 (Improved):</strong><br>
+                        • <strong>Algorithm:</strong> K-Means (K=3) với improved features<br>
+                        • <strong>Features:</strong> 7 features (giảm từ 9, loại bỏ multicollinearity)<br>
+                        • <strong>Improvements:</strong> Ratios thay vì %, log transform, guest diversity (entropy)<br>
+                        • <strong>Silhouette:</strong> 0.2185 (improved from 0.20)<br>
+                        • <strong>Hotels:</strong> 6,447 hotels (sau outlier removal)
                     </p>
                 </div>
             </div>
