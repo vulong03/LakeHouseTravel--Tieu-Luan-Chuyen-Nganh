@@ -41,7 +41,7 @@ MLFLOW_TRACKING_URI = "postgresql://lakehouse_user:lakehouse_pass@postgres:5432/
 
 # Model configurations
 MODELS = {
-    "XGBoost (Reduced)": {
+    "XGBoost": {
         "name": "province_hotness_forecaster_reduced",
         "file_pattern": "province_hotness_forecast_reduced_",
         "description": "XGBoost với 8 features (temporal + lag)"
@@ -91,7 +91,7 @@ def clear_cache(model_key=None):
         print("🗑️ All caches cleared")
 
 
-def load_forecast_data(model_key="XGBoost (Reduced)"):
+def load_forecast_data(model_key="XGBoost"):
     """Load forecast data from MinIO Parquet files (latest run folder) with caching per model"""
     # Check cache for this model
     now = time.time()
@@ -200,7 +200,7 @@ def load_forecast_data(model_key="XGBoost (Reduced)"):
         traceback.print_exc()
         return pd.DataFrame(), error_msg
     
-def get_model_info(model_key="XGBoost (Reduced)"):
+def get_model_info(model_key="XGBoost"):
     """Get latest model information from MLflow"""
     try:
         model_config = MODELS.get(model_key)
@@ -776,12 +776,7 @@ def create_interface():
         with gr.Tabs():
             # ========== TAB 1: PROVINCE FORECASTING ==========
             with gr.Tab("Dự báo Tỉnh Hot"):
-                gr.Markdown("""
-                ### Dự báo các tỉnh thành sẽ "hot" trong tương lai
-                Dựa trên dữ liệu **TikTok engagement, sentiment, NLP features** từ 15k+ posts
                 
-                **Mục đích**: Giúp công ty tour biết nên focus vào tỉnh nào trong tương lai
-                """, elem_classes="section-header")
                 
                 with gr.Row(equal_height=True):
                     # Left panel - Filters
@@ -791,7 +786,7 @@ def create_interface():
                         # Model selection
                         model_selector = gr.Dropdown(
                             choices=list(MODELS.keys()),
-                            value="XGBoost (Reduced)",
+                            value="XGBoost",
                             label="Chọn Model",
                             info="So sánh giữa các thuật toán ML"
                         )
@@ -1011,7 +1006,7 @@ def create_interface():
                 <div style="background: rgba(103, 126, 234, 0.1); padding: 15px; border-radius: 8px; margin-top: 20px;">
                     <p style="color: #555; line-height: 1.8; margin: 0;">
                         <strong>Forecasting Models:</strong><br>
-                        • <strong>XGBoost (Reduced):</strong> Gradient Boosting với 8 features (temporal + lag)<br>
+                        • <strong>XGBoost:</strong> Gradient Boosting với 8 features (temporal + lag)<br>
                         • <strong>Random Forest:</strong> Bagging ensemble với 8 features (temporal + lag)<br>
                         <strong>Dự đoán:</strong> Recursive autoregressive strategy (12 tháng ahead)<br><br>
                         <strong>Hotel Clustering V2 (Improved):</strong><br>
