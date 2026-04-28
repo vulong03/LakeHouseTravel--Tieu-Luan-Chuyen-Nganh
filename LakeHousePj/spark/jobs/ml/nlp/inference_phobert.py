@@ -1,0 +1,361 @@
+"""
+NLP Pipeline Step 3: Inference — Re-score all comments with fine-tuned PhoBERT
+===============================================================================
+Reads 465K comments from dim_comment, runs PhoBERT inference in batches,
+writes results to gold.gold.fact_comment_nlp_v2
+
+Output columns per comment:
+  - sentiment_score (0.0-1.0 continuous)
+  - sentiment_label (negative/neutral/positive)
+  - aspect_scenery, aspect_food, aspect_price, aspect_service,
+    aspect_transport, aspect_accommodation (0.0-1.0 each)
+  - intent_label (recommend/complain/question/share)
+  - intent_confidence (0.0-1.0)
+  - word_count, emoji_count (kept from v1)
+"""
+
+import sys
+sys.path.append('/opt/spark/jobs')
+
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
+from pyspark.sql.types import (
+    StructType, StructField, LongType, IntegerType,
+    DoubleType, StringType, TimestampType,
+)
+from datetime import datetime
+import numpy as np
+import pandas as pd
+from pyspark.sql.functions import pandas_udf
+
+import torch
+import mlflow.pytorch
+
+from config import (
+    DIM_COMMENT_TABLE, SILVER_COMMENTS_TABLE,
+    FINE_TUNED_MODEL_NAME,
+    MLFLOW_TRACKING_URI,
+    MAX_SEQ_LENGTH,
+    SENTIMENT_LABELS, ASPECT_LABELS, INTENT_LABELS,
+    PHOBERT_MODEL_NAME,
+)
+
+from utils.iceberg_utils import create_iceberg_table_if_not_exists
+from utils.gold_job_logger import get_gold_logger
+
+GOLD_CATALOG = "gold"
+GOLD_DATABASE = "gold"
+GOLD_TABLE = "fact_comment_nlp_v2"
+GOLD_TABLE_FULL = f"{GOLD_CATALOG}.{GOLD_DATABASE}.{GOLD_TABLE}"
+
+
+def create_spark_session():
+    return SparkSession.builder \
+        .appName("NLP_PhoBERT_Inference") \
+        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
+        .config("spark.sql.catalog.gold", "org.apache.iceberg.spark.SparkCatalog") \
+        .config("spark.sql.catalog.gold.type", "hive") \
+        .config("spark.sql.catalog.gold.uri", "thrift://hive-metastore:9083") \
+        .config("spark.sql.catalog.gold.warehouse", "s3a://gold/lakehouse") \
+        .config("spark.sql.catalog.silver", "org.apache.iceberg.spark.SparkCatalog") \
+        .config("spark.sql.catalog.silver.type", "hive") \
+        .config("spark.sql.catalog.silver.uri", "thrift://hive-metastore:9083") \
+        .config("spark.sql.catalog.silver.warehouse", "s3a://silver/lakehouse") \
+        .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
+        .config("spark.hadoop.fs.s3a.access.key", "minioadmin") \
+        .config("spark.hadoop.fs.s3a.secret.key", "minioadmin123") \
+        .config("spark.hadoop.fs.s3a.path.style.access", "true") \
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+        .config("spark.executor.memory", "2g") \
+        .getOrCreate()
+
+
+def create_nlp_v2_table(spark):
+    schema = StructType([
+        StructField("comment_sk", LongType(), False),
+        StructField("post_sk", LongType(), True),
+        StructField("province_sk", IntegerType(), True),
+        StructField("comment_date_sk", IntegerType(), True),
+
+        # Sentiment (continuous)
+        StructField("sentiment_score", DoubleType(), True),
+        StructField("sentiment_label", StringType(), True),
+
+        # Aspects (multi-label probabilities)
+        StructField("aspect_scenery", DoubleType(), True),
+        StructField("aspect_food", DoubleType(), True),
+        StructField("aspect_price", DoubleType(), True),
+        StructField("aspect_service", DoubleType(), True),
+        StructField("aspect_transport", DoubleType(), True),
+        StructField("aspect_accommodation", DoubleType(), True),
+
+        # Intent
+        StructField("intent_label", StringType(), True),
+        StructField("intent_confidence", DoubleType(), True),
+
+        # Basic text stats (kept from v1)
+        StructField("word_count", IntegerType(), True),
+        StructField("emoji_count", IntegerType(), True),
+        StructField("comment_likes", LongType(), True),
+        StructField("comment_level", IntegerType(), True),
+
+        # Metadata
+        StructField("created_at", TimestampType(), False),
+        StructField("updated_at", TimestampType(), False),
+    ])
+
+    create_iceberg_table_if_not_exists(
+        spark=spark, database=GOLD_DATABASE, table_name=GOLD_TABLE,
+        schema=schema, partition_by=["province_sk"],
+        table_properties={
+            "write.format.default": "parquet",
+            "write.parquet.compression-codec": "snappy",
+        },
+        catalog=GOLD_CATALOG,
+    )
+
+
+def load_comments(spark):
+    """Load comments with keys from dim_comment + dim_post."""
+    print("\n[1/3] Loading comments...")
+
+    df = spark.sql(f"""
+        SELECT
+            c.comment_sk,
+            c.post_sk,
+            p.province_sk,
+            c.comment_date_sk,
+            c.comment_text,
+            c.comment_level,
+            sc.likes as comment_likes
+        FROM {DIM_COMMENT_TABLE} c
+        INNER JOIN gold.gold.dim_post p ON c.post_sk = p.post_sk
+        LEFT JOIN {SILVER_COMMENTS_TABLE} sc
+            ON c.post_url_nk = sc.post_url AND c.stt = sc.stt
+        WHERE c.comment_text IS NOT NULL
+            AND LENGTH(TRIM(c.comment_text)) > 0
+            AND c.is_active = TRUE
+            AND p.province_sk IS NOT NULL
+    """)
+
+    total = df.count()
+    print(f"  Loaded {total:,} comments")
+    return df
+
+
+def create_inference_udf():
+    """
+    Pandas UDF that runs PhoBERT inference on batches of text.
+    Loads model once per executor via closure.
+    """
+
+    output_schema = StructType([
+        StructField("sentiment_score", DoubleType(), True),
+        StructField("sentiment_label", StringType(), True),
+        StructField("aspect_scenery", DoubleType(), True),
+        StructField("aspect_food", DoubleType(), True),
+        StructField("aspect_price", DoubleType(), True),
+        StructField("aspect_service", DoubleType(), True),
+        StructField("aspect_transport", DoubleType(), True),
+        StructField("aspect_accommodation", DoubleType(), True),
+        StructField("intent_label", StringType(), True),
+        StructField("intent_confidence", DoubleType(), True),
+        StructField("word_count", IntegerType(), True),
+        StructField("emoji_count", IntegerType(), True),
+    ])
+
+    @pandas_udf(output_schema)
+    def phobert_inference(texts: pd.Series) -> pd.DataFrame:
+        import torch as _torch
+        import re as _re
+        import emoji as _emoji_lib
+        from transformers import AutoTokenizer
+
+        # Load model once per executor
+        if not hasattr(phobert_inference, '_model'):
+            _mlflow_uri = MLFLOW_TRACKING_URI
+            import mlflow as _mlflow
+            _mlflow.set_tracking_uri(_mlflow_uri)
+
+            try:
+                model_uri = f"models:/{FINE_TUNED_MODEL_NAME}/latest"
+                phobert_inference._model = _mlflow.pytorch.load_model(model_uri)
+                phobert_inference._model.eval()
+            except Exception:
+                phobert_inference._model = None
+
+            phobert_inference._tokenizer = AutoTokenizer.from_pretrained(PHOBERT_MODEL_NAME)
+            phobert_inference._device = _torch.device("cpu")
+
+        model = phobert_inference._model
+        tokenizer = phobert_inference._tokenizer
+        device = phobert_inference._device
+
+        results = []
+
+        for text in texts:
+            text_str = str(text) if text else ""
+
+            # Basic stats
+            words = text_str.split()
+            word_count = len(words)
+            emoji_count = sum(1 for c in text_str if c in _emoji_lib.EMOJI_DATA)
+
+            if model is None or len(text_str.strip()) < 3:
+                results.append({
+                    "sentiment_score": 0.5,
+                    "sentiment_label": "neutral",
+                    "aspect_scenery": 0.0, "aspect_food": 0.0,
+                    "aspect_price": 0.0, "aspect_service": 0.0,
+                    "aspect_transport": 0.0, "aspect_accommodation": 0.0,
+                    "intent_label": "share",
+                    "intent_confidence": 0.5,
+                    "word_count": word_count,
+                    "emoji_count": emoji_count,
+                })
+                continue
+
+            # Preprocess
+            text_clean = _re.sub(r'http\S+|www\S+|@\w+', '', text_str)
+            text_clean = ' '.join(text_clean.split()).strip()
+
+            # Tokenize
+            encoding = tokenizer(
+                text_clean, max_length=MAX_SEQ_LENGTH,
+                padding='max_length', truncation=True,
+                return_tensors='pt',
+            )
+            input_ids = encoding['input_ids'].to(device)
+            attention_mask = encoding['attention_mask'].to(device)
+
+            with _torch.no_grad():
+                sent_logits, aspect_logits, intent_logits = model(input_ids, attention_mask)
+
+            # Sentiment: softmax → continuous score
+            sent_probs = _torch.softmax(sent_logits, dim=1).cpu().numpy()[0]
+            sent_score = float(sent_probs[0] * 0.0 + sent_probs[1] * 0.5 + sent_probs[2] * 1.0)
+            sent_label = SENTIMENT_LABELS[int(sent_probs.argmax())]
+
+            # Aspects: sigmoid probabilities
+            aspect_probs = _torch.sigmoid(aspect_logits).cpu().numpy()[0]
+
+            # Intent: argmax + confidence
+            intent_probs = _torch.softmax(intent_logits, dim=1).cpu().numpy()[0]
+            intent_idx = int(intent_probs.argmax())
+            intent_label = INTENT_LABELS[intent_idx]
+            intent_conf = float(intent_probs[intent_idx])
+
+            results.append({
+                "sentiment_score": round(sent_score, 4),
+                "sentiment_label": sent_label,
+                "aspect_scenery": round(float(aspect_probs[0]), 4),
+                "aspect_food": round(float(aspect_probs[1]), 4),
+                "aspect_price": round(float(aspect_probs[2]), 4),
+                "aspect_service": round(float(aspect_probs[3]), 4),
+                "aspect_transport": round(float(aspect_probs[4]), 4),
+                "aspect_accommodation": round(float(aspect_probs[5]), 4),
+                "intent_label": intent_label,
+                "intent_confidence": round(intent_conf, 4),
+                "word_count": word_count,
+                "emoji_count": emoji_count,
+            })
+
+        return pd.DataFrame(results)
+
+    return phobert_inference
+
+
+def run_inference(spark, df):
+    """Apply PhoBERT inference UDF to all comments."""
+    print("\n[2/3] Running PhoBERT inference...")
+
+    udf = create_inference_udf()
+
+    df_result = df.withColumn("nlp", udf(F.col("comment_text")))
+
+    df_final = df_result.select(
+        "comment_sk", "post_sk", "province_sk", "comment_date_sk",
+        F.col("nlp.sentiment_score"),
+        F.col("nlp.sentiment_label"),
+        F.col("nlp.aspect_scenery"),
+        F.col("nlp.aspect_food"),
+        F.col("nlp.aspect_price"),
+        F.col("nlp.aspect_service"),
+        F.col("nlp.aspect_transport"),
+        F.col("nlp.aspect_accommodation"),
+        F.col("nlp.intent_label"),
+        F.col("nlp.intent_confidence"),
+        F.col("nlp.word_count"),
+        F.col("nlp.emoji_count"),
+        F.coalesce(F.col("comment_likes"), F.lit(0)).alias("comment_likes"),
+        F.col("comment_level"),
+        F.current_timestamp().alias("created_at"),
+        F.current_timestamp().alias("updated_at"),
+    )
+
+    return df_final
+
+
+def write_results(spark, df):
+    """Write NLP v2 results to Iceberg table."""
+    print("\n[3/3] Writing results...")
+
+    create_nlp_v2_table(spark)
+
+    df.write.format("iceberg").mode("overwrite").saveAsTable(GOLD_TABLE_FULL)
+
+    count = spark.table(GOLD_TABLE_FULL).count()
+    print(f"  Wrote {count:,} rows to {GOLD_TABLE_FULL}")
+    return count
+
+
+def main():
+    print("=" * 70)
+    print("NLP Pipeline Step 3: PhoBERT Inference")
+    print("=" * 70)
+    print(f"Start: {datetime.now()}")
+
+    spark = create_spark_session()
+    logger = get_gold_logger(spark)
+
+    try:
+        df = load_comments(spark)
+        df_scored = run_inference(spark, df)
+        count = write_results(spark, df_scored)
+
+        logger.log_job_success(
+            source_path=DIM_COMMENT_TABLE,
+            table_name=GOLD_TABLE_FULL,
+            records_processed=count,
+            job_details={
+                "job_type": "nlp_inference_v2",
+                "model": FINE_TUNED_MODEL_NAME,
+                "tasks": "sentiment+aspect+intent",
+            },
+        )
+
+        print(f"\nCompleted: {count:,} comments scored")
+        print(f"  Table: {GOLD_TABLE_FULL}")
+
+        # Sample
+        spark.table(GOLD_TABLE_FULL).select(
+            "comment_sk", "sentiment_score", "sentiment_label",
+            "aspect_scenery", "aspect_food", "intent_label",
+        ).show(10, truncate=False)
+
+    except Exception as e:
+        logger.log_job_failure(
+            source_path=DIM_COMMENT_TABLE,
+            table_name=GOLD_TABLE_FULL,
+            error_message=str(e),
+        )
+        print(f"\nERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+    finally:
+        spark.stop()
+
+
+if __name__ == "__main__":
+    main()

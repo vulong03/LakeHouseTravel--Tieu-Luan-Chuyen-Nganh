@@ -390,17 +390,21 @@ def clean_and_load_to_silver(spark):
         }
     }
 
-    log_ingestion_to_postgres(
-        file_path=f"s3a://bronze/lakehouse/booking_hotels_reviews/raw/{source_file}",
-        file_checksum=source_checksum,
-        records_ingested=new_count,
-        table_name="silver.hotels_reviews",
-        status="success",
-        postgres_conn_params=POSTGRES_CONN,
-        layer='silver',
-        ingestion_details=ingestion_details,
-        file_size_bytes=source_size_bytes
-    )
+    # Log là audit trail — Append đã thành công thì task không nên crash chỉ vì log lỗi
+    try:
+        log_ingestion_to_postgres(
+            file_path=f"s3a://bronze/lakehouse/booking_hotels_reviews/raw/{source_file}",
+            file_checksum=source_checksum,
+            records_ingested=new_count,
+            table_name="silver.hotels_reviews",
+            status="success",
+            postgres_conn_params=POSTGRES_CONN,
+            layer='silver',
+            ingestion_details=ingestion_details,
+            file_size_bytes=source_size_bytes
+        )
+    except Exception as log_err:
+        print(f"⚠️ WARNING: Ghi log PostgreSQL thất bại (data đã vào Silver thành công): {log_err}")
 
     return new_count
 

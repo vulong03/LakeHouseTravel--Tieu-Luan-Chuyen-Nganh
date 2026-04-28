@@ -319,19 +319,23 @@ def clean_and_load_to_silver(spark):
             "removed": removed_count
         }
     }
-    
-    log_ingestion_to_postgres(
-        file_path=bronze_file_path,
-        file_checksum=file_checksum,
-        records_ingested=stats['inserted'] + stats['updated'],
-        table_name=SILVER_TABLE,
-        status="success",
-        postgres_conn_params=POSTGRES_CONN,
-        layer='silver',
-        ingestion_details=ingestion_details,
-        file_size_bytes=source_size_bytes
-    )
-    print(f"Logged to PostgreSQL tracking")
+
+    # Log là audit trail — MERGE đã thành công thì task không nên crash chỉ vì log lỗi
+    try:
+        log_ingestion_to_postgres(
+            file_path=bronze_file_path,
+            file_checksum=file_checksum,
+            records_ingested=stats['inserted'] + stats['updated'],
+            table_name=SILVER_TABLE,
+            status="success",
+            postgres_conn_params=POSTGRES_CONN,
+            layer='silver',
+            ingestion_details=ingestion_details,
+            file_size_bytes=source_size_bytes
+        )
+        print(f"Logged to PostgreSQL tracking")
+    except Exception as log_err:
+        print(f"⚠️ WARNING: Ghi log PostgreSQL thất bại (data đã vào Silver thành công): {log_err}")
     
     return stats
 

@@ -290,7 +290,7 @@ def clean_and_load(spark):
     
     # 7. Ghi log vào PostgreSQL tracking
     print("\nĐang ghi log vào PostgreSQL tracking...")
-    
+
     ingestion_details = {
         "merge_stats": {
             "inserted": stats["inserted"],
@@ -308,20 +308,23 @@ def clean_and_load(spark):
         "run_timestamp": RUN_TIMESTAMP,
         "pipeline_version": "v2_two_task"
     }
-    
-    log_ingestion_to_postgres(
-        file_path=f"{BRONZE_BASE_PATH}/{source_file}",
-        file_checksum=source_checksum,
-        records_ingested=stats["inserted"] + stats["updated"],
-        table_name=SILVER_TABLE,
-        status="success",
-        postgres_conn_params=POSTGRES_CONN,
-        layer="silver",
-        ingestion_details=ingestion_details,
-        file_size_bytes=source_size_bytes
-    )
-    
-    print("Đã ghi log vào tracking database")
+
+    # Log là audit trail — MERGE đã thành công thì task không nên crash chỉ vì log lỗi
+    try:
+        log_ingestion_to_postgres(
+            file_path=f"{BRONZE_BASE_PATH}/{source_file}",
+            file_checksum=source_checksum,
+            records_ingested=stats["inserted"] + stats["updated"],
+            table_name=SILVER_TABLE,
+            status="success",
+            postgres_conn_params=POSTGRES_CONN,
+            layer="silver",
+            ingestion_details=ingestion_details,
+            file_size_bytes=source_size_bytes
+        )
+        print("Đã ghi log vào tracking database")
+    except Exception as log_err:
+        print(f"⚠️ WARNING: Ghi log PostgreSQL thất bại (data đã vào Silver thành công): {log_err}")
     
     # (Tuỳ chọn) Bước 6: Dọn dẹp thư mục tạm nếu cần – hiện tại chưa triển khai để tránh thay đổi logic pipeline
     

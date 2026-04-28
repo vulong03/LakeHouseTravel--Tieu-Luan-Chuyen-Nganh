@@ -279,6 +279,22 @@ with DAG(
     )
     
     # ============================================
+    # PHASE 3b: DL Feature Aggregation
+    # ============================================
+    
+    fact_dl_features = BashOperator(
+        task_id='fact_dl_features',
+        bash_command=build_spark_command(
+            GOLD_JOBS['fact_dl_features']['job_path'],
+            resource_level=GOLD_JOBS['fact_dl_features']['resource_level']
+        )
+    )
+    
+    wait_dl_features = EmptyOperator(
+        task_id='wait_dl_features_complete'
+    )
+    
+    # ============================================
     # PHASE 4: ML Training
     # ============================================
     
@@ -320,8 +336,11 @@ with DAG(
     # Phase 3: Fact tables (sequential, after both pipelines)
     wait_phase2 >> phase3_tg >> wait_phase3
     
-    # Phase 4: ML Training (after all facts complete)
-    wait_phase3 >> phase4_tg
+    # Phase 3b: DL Feature aggregation (after all 3 fact tables)
+    wait_phase3 >> fact_dl_features >> wait_dl_features
+    
+    # Phase 4: ML Training (after DL features + province_month_features)
+    wait_dl_features >> phase4_tg
     
     # Complete
     phase4_tg >> complete

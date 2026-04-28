@@ -50,6 +50,11 @@ MODELS = {
         "name": "province_hotness_forecaster_rf",
         "file_pattern": "province_hotness_forecast_rf_",
         "description": "Random Forest với 8 features (temporal + lag)"
+    },
+    "LSTM (Deep Learning)": {
+        "name": "province_hotness_forecaster_lstm",
+        "file_pattern": "province_hotness_forecast_lstm_",
+        "description": "GRU + Attention với 15 features (temporal + lag + lagged current + hotel)"
     }
 }
 
@@ -1008,6 +1013,7 @@ def create_interface():
                         <strong>Forecasting Models:</strong><br>
                         • <strong>XGBoost:</strong> Gradient Boosting với 8 features (temporal + lag)<br>
                         • <strong>Random Forest:</strong> Bagging ensemble với 8 features (temporal + lag)<br>
+                        • <strong>LSTM (Deep Learning):</strong> GRU + Attention với 15 features (temporal + lag + lagged current + hotel)<br>
                         <strong>Dự đoán:</strong> Recursive autoregressive strategy (12 tháng ahead)<br><br>
                         <strong>Hotel Clustering V2 (Improved):</strong><br>
                         • <strong>Algorithm:</strong> K-Means (K=3) với improved features<br>

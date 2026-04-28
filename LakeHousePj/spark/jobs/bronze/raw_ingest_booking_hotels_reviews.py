@@ -117,6 +117,21 @@ def ingest_raw_csv_to_bronze(source_path: str, bronze_bucket: str, source_type: 
         
     except Exception as e:
         print(f"ERROR: {str(e)}")
+        # Log failure to PostgreSQL (audit trail)
+        try:
+            log_ingestion_to_postgres(
+                file_path=source_path,
+                file_checksum=file_checksum if 'file_checksum' in locals() else 'unknown',
+                records_ingested=0,
+                table_name=f"{source_type}_raw",
+                status='failed',
+                layer='bronze',
+                error_message=str(e),
+                postgres_conn_params=POSTGRES_CONN,
+                file_size_bytes=file_size if 'file_size' in locals() else 0
+            )
+        except:
+            pass
         raise
     finally:
         spark.stop()
