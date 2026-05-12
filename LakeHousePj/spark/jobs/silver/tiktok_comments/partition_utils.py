@@ -8,28 +8,40 @@ Purpose: Helper functions to work with partitioned data in Scratch bucket
 """
 
 from typing import List, Dict, Tuple
-from urllib.parse import quote, unquote
+# from urllib.parse import quote, unquote  # DEAD CODE: only used by dead decode_partition_value below
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.window import Window
 
 def list_scratch_partitions(spark: SparkSession, scratch_path: str) -> List[Tuple[str, str]]:
     """
-    List unique post_urls with their LATEST source file (by checksum/timestamp).
-    
-    STRATEGY (Option A): When same post_url is crawled multiple times:
-    - Keep ONLY the LATEST crawl (highest source_file_checksum = most recent timestamp)
-    - Skip older crawls to avoid duplicate comments
-    - Assumes newer crawl has most up-to-date data
-    
+    Deduplicate post_urls WITHIN the current Scratch run.
+
+    DESIGN DECISION (no cross-run re-crawl):
+    We DO NOT re-crawl post_urls that already exist in Silver. This is enforced
+    LATER by `filter_unprocessed_partitions`, which skips any post_url already
+    present in the Silver table. Reasons:
+      - Re-crawl produces hard-to-merge edge cases (spam comments, repeated
+        comments from same user across crawls, changing engagement metrics).
+      - Current project scale has no link crawled twice in practice.
+      - Keeping logic simple > handling rare edge cases.
+
+    WHAT THIS FUNCTION ACTUALLY DOES (intra-run dedup only):
+    If the SAME Scratch run somehow contains the same post_url twice
+    (e.g., two Bronze files for the same post uploaded in the same run),
+    we keep ONLY ONE record — the one with the highest `source_file_checksum`
+    (lexicographically latest, treated as "newest"). This is a defensive
+    safeguard, NOT a cross-run re-crawl strategy.
+
     Args:
         spark: SparkSession instance
         scratch_path: Path to Scratch run folder (e.g., s3a://scratch/.../run_20251103_052216)
-    
+
     Returns:
         List of (post_url, source_file_checksum) tuples - ONE per unique post_url
+        within this Scratch run.
         Example: [
-            ("https://www.tiktok.com/@user/video/123", "20251031092145"),  # Latest crawl only
-            ("https://www.tiktok.com/@user/video/456", "20251030081316"),  # No duplicates
+            ("https://www.tiktok.com/@user/video/123", "20251031092145"),
+            ("https://www.tiktok.com/@user/video/456", "20251030081316"),
             ...
         ]
     """
@@ -41,8 +53,8 @@ def list_scratch_partitions(spark: SparkSession, scratch_path: str) -> List[Tupl
         df_all_combinations = df.select("post_url", "source_file_checksum").distinct()
         total_combinations = df_all_combinations.count()
         
-        # OPTION A: Keep only LATEST file for each post_url
-        # Use Window function to rank by checksum (descending = newest first)
+        # Intra-run dedup: if the same Scratch run has the same post_url twice,
+        # keep the row with the highest checksum. (Defensive — should be rare.)
         window_spec = Window.partitionBy("post_url").orderBy(F.desc("source_file_checksum"))
         
         df_latest = df_all_combinations \
@@ -60,11 +72,12 @@ def list_scratch_partitions(spark: SparkSession, scratch_path: str) -> List[Tupl
         unique_urls = len(combinations)
         skipped_files = total_combinations - unique_urls
         
-        print(f"Found {total_combinations} total file combinations in Scratch data")
-        print(f"Keeping {unique_urls} LATEST files (one per unique post_url)")
+        print(f"Found {total_combinations} total (post_url, checksum) combinations in Scratch run")
+        print(f"After intra-run dedup: {unique_urls} unique post_urls")
         if skipped_files > 0:
-            print(f"Skipping {skipped_files} older duplicate files")
-            print(f"Strategy: For duplicate URLs, only process the NEWEST crawl")
+            print(f"Dropped {skipped_files} intra-run duplicate rows (same post_url in same run)")
+            print(f"NOTE: Cross-run dedup (skip post_urls already in Silver) happens later")
+            print(f"      in filter_unprocessed_partitions() - we DO NOT re-crawl by design.")
         
         return combinations
         
@@ -72,44 +85,50 @@ def list_scratch_partitions(spark: SparkSession, scratch_path: str) -> List[Tupl
         print(f"Error listing partitions: {e}")
         raise
 
-def decode_partition_value(partition_dir: str) -> str:
-    """
-    Decode partition directory name to get original post_url.
-    
-    Args:
-        partition_dir: URL-encoded partition directory name
-                      Example: "post_url=https%3A%2F%2Fwww.tiktok.com%2F@user%2Fvideo%2F123"
-    
-    Returns:
-        Decoded post_url
-        Example: "https://www.tiktok.com/@user/video/123"
-    """
-    if not partition_dir.startswith("post_url="):
-        raise ValueError(f"Invalid partition directory format: {partition_dir}")
-    
-    encoded_url = partition_dir[len("post_url="):]  # Remove "post_url=" prefix
-    decoded_url = unquote(encoded_url)  # URL decode
-    return decoded_url
+# ============================================================
+# DEAD CODE: decode_partition_value - never called from any module
+# ============================================================
+# def decode_partition_value(partition_dir: str) -> str:
+#     """
+#     Decode partition directory name to get original post_url.
+#
+#     Args:
+#         partition_dir: URL-encoded partition directory name
+#                       Example: "post_url=https%3A%2F%2Fwww.tiktok.com%2F@user%2Fvideo%2F123"
+#
+#     Returns:
+#         Decoded post_url
+#         Example: "https://www.tiktok.com/@user/video/123"
+#     """
+#     if not partition_dir.startswith("post_url="):
+#         raise ValueError(f"Invalid partition directory format: {partition_dir}")
+#
+#     encoded_url = partition_dir[len("post_url="):]  # Remove "post_url=" prefix
+#     decoded_url = unquote(encoded_url)  # URL decode
+#     return decoded_url
 
 
-def encode_partition_value(post_url: str) -> str:
-    """
-    Build partition filter for reading data (NOT for directory paths).
-    
-    CRITICAL: We don't need to match filesystem encoding anymore.
-    We use post_url directly in Spark filters: .filter(F.col("post_url") == post_url)
-    
-    This function kept for backward compatibility but returns the filter format.
-    
-    Args:
-        post_url: Original post URL
-                 Example: "https://www.tiktok.com/@user/video/123"
-    
-    Returns:
-        Partition filter string
-        Example: "post_url=https://www.tiktok.com/@user/video/123"
-    """
-    return f"post_url={post_url}"
+# ============================================================
+# DEAD CODE: encode_partition_value - never called from any module
+# ============================================================
+# def encode_partition_value(post_url: str) -> str:
+#     """
+#     Build partition filter for reading data (NOT for directory paths).
+#
+#     CRITICAL: We don't need to match filesystem encoding anymore.
+#     We use post_url directly in Spark filters: .filter(F.col("post_url") == post_url)
+#
+#     This function kept for backward compatibility but returns the filter format.
+#
+#     Args:
+#         post_url: Original post URL
+#                  Example: "https://www.tiktok.com/@user/video/123"
+#
+#     Returns:
+#         Partition filter string
+#         Example: "post_url=https://www.tiktok.com/@user/video/123"
+#     """
+#     return f"post_url={post_url}"
 
 
 def build_partition_to_file_mapping(
@@ -206,9 +225,16 @@ def filter_unprocessed_partitions(
 ) -> List[Dict[str, any]]:
     """
     Filter out already-processed partitions based on:
-    1. PostgreSQL tracking (file_checksum level)
-    2. Silver table (post_url level) - if post_url already exists, skip to avoid deduplication
-    
+    1. PostgreSQL tracking (file_checksum level) — prevents reprocessing
+       files whose Step 2 already succeeded.
+    2. Silver table (post_url level) — by DESIGN, we DO NOT re-crawl/re-process
+       post_urls that already exist in Silver. Re-crawl edge cases (spam,
+       comment changes, engagement updates) are intentionally not handled.
+
+    NOTE: This is the layer that enforces the "no re-crawl" policy.
+    `list_scratch_partitions` only does intra-run dedup; cross-run skip
+    happens here.
+
     Args:
         spark: SparkSession instance
         mapping: Partition → source file mapping (composite keys: "post_url||checksum")

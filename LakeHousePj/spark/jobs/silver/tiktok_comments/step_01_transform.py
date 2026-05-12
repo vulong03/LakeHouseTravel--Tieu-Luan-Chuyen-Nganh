@@ -12,8 +12,9 @@ Strategy:
   - Write to 2 Scratch buckets as Parquet:
     * s3a://scratch/.../tiktok_post_metadata/run_YYYYMMDD_HHMMSS/
     * s3a://scratch/.../tiktok_post_comments/run_YYYYMMDD_HHMMSS/
-  - NO deduplication, NO data cleaning (preserve Bronze as-is)
-
+    - NO deduplication, NO type conversion
+    - Drop rows with NULL primary key (post_url) and NULL comment text
+    - (Comments without text are not useful for downstream DL/NLP model)
 Input: Bronze CSV files (s3a://bronze/lakehouse/tiktok_comments/raw/*.csv)
 Output: Scratch Parquet files (2 separate folders for posts + comments)
 """

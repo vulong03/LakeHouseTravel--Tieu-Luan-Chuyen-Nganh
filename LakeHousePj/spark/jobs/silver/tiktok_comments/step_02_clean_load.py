@@ -68,13 +68,13 @@ from silver.tiktok_comments.config import (
 )
 from silver.tiktok_comments.partition_utils import (
     list_scratch_partitions,
-    decode_partition_value,
+    # decode_partition_value,  # DEAD CODE: imported but never called
     build_partition_to_file_mapping,
     filter_unprocessed_partitions
 )
 from silver.tiktok_comments.file_processor import (
     create_batches,
-    process_single_post_url
+    # process_single_post_url  # DEAD CODE: imported but never called
 )
 
 
@@ -170,83 +170,77 @@ def parse_tiktok_number(value_col):
 
 def parse_post_date(df):
     """
-    Parse post_date from DD-MM-YYYY string format to DateType
+    Parse post_date from mixed format to DateType
     
-    IMPROVED: Debug unparseable dates to improve parser
+    Handles:
+    1. Absolute formats: DD-MM-YYYY, YYYY-MM-DD
+    2. Relative formats: "X ngày trước", "X tuần trước", "X tháng trước"
     
     Args:
-        df: DataFrame with 'post_date' column (StringType)
+        df: DataFrame with 'post_date' (String) and 'scrape_timestamp' (String)
     
     Returns:
         DataFrame with 'post_date' as DateType
     """
-    print("Parsing post_date (DD-MM-YYYY → DateType)...")
+    print("Parsing post_date (Mixed format → DateType)...")
     
-    total_records = df.count()
-    null_before = df.filter(F.col("post_date").isNull()).count()
+    # 1. Prepare reference date (scrape_date) from scrape_timestamp
+    df = df.withColumn("_scrape_date",
+        F.to_date(
+            F.regexp_replace(F.col("scrape_timestamp"), "T", " ").substr(1, 10),
+            "yyyy-MM-dd"
+        )
+    )
     
-    print(f"Total records: {total_records:,}")
-    print(f"NULL before parsing: {null_before}")
+    # 2. Try Absolute format: DD-MM-YYYY or YYYY-MM-DD
+    # We use coalesce with multiple to_date patterns
+    df = df.withColumn("_absolute_date",
+        F.coalesce(
+            F.to_date(F.col("post_date"), "dd-MM-yyyy"),
+            F.to_date(F.col("post_date"), "yyyy-MM-dd")
+        )
+    )
     
-    # DEBUG: Sample raw post_date values before parsing (commented to speed up)
-    # print("\nDEBUG: Sample raw post_date values:")
-    # df.select("post_url", "post_date") \
-    #     .filter(F.col("post_date").isNotNull()) \
-    #     .show(10, truncate=False)
+    # 3. Parse Relative format: "X ngày trước", "X tuần trước", "X tháng trước"
+    df = df \
+        .withColumn("_relative_num",
+            F.regexp_extract(F.col("post_date"), r"^(\d+)\s+(ngày|tuần|tháng)", 1).cast("int")
+        ) \
+        .withColumn("_relative_unit",
+            F.regexp_extract(F.col("post_date"), r"^(\d+)\s+(ngày|tuần|tháng)", 2)
+        )
     
-    # Split DD-MM-YYYY into components
-    df_split = df.withColumn("_day", F.split(F.col("post_date"), "-").getItem(0).cast(IntegerType())) \
-                 .withColumn("_month", F.split(F.col("post_date"), "-").getItem(1).cast(IntegerType())) \
-                 .withColumn("_year", F.split(F.col("post_date"), "-").getItem(2).cast(IntegerType()))
-    
-    # Create date from components
-    df_parsed = df_split.withColumn(
-        "post_date_parsed",
-        F.when(
-            (F.col("_day").isNotNull()) & 
-            (F.col("_month").isNotNull()) & 
-            (F.col("_year").isNotNull()),
-            F.make_date(F.col("_year"), F.col("_month"), F.col("_day"))
+    df = df.withColumn("_relative_date",
+        F.when(F.col("_relative_unit") == "ngày",
+            F.date_sub(F.col("_scrape_date"), F.col("_relative_num"))
+        ).when(F.col("_relative_unit") == "tuần",
+            F.date_sub(F.col("_scrape_date"), F.col("_relative_num") * 7)
+        ).when(F.col("_relative_unit") == "tháng",
+            F.add_months(F.col("_scrape_date"), -F.col("_relative_num"))
         ).otherwise(F.lit(None).cast(DateType()))
     )
     
-    # DEBUG: Analyze unparseable dates (commented to speed up)
-    # print("\nDEBUG: Analyzing unparseable dates...")
-    # df_unparseable = df_parsed.filter(
-    #     (F.col("post_date").isNotNull()) &  # Has original value
-    #     (F.col("post_date_parsed").isNull())  # But failed to parse
-    # )
-    # 
-    # unparseable_count = df_unparseable.count()
-    # print(f"Unparseable dates found: {unparseable_count}")
-    # 
-    # if unparseable_count > 0:
-    #     print("\nSample unparseable date formats:")
-    #     df_unparseable.select(
-    #         "post_url",
-    #         "post_date",
-    #         "_day", "_month", "_year"
-    #     ).show(20, truncate=False)
-    #     
-    #     # Count by pattern
-    #     print("\nUnparseable date patterns:")
-    #     df_unparseable.groupBy("post_date") \
-    #         .count() \
-    #         .orderBy(F.desc("count")) \
-    #         .show(20, truncate=False)
+    # 4. Handle very recent posts: "vừa xong", "X phút trước", "X giờ trước" -> Use scrape_date
+    df = df.withColumn("_recent_date",
+        F.when(
+            F.col("post_date").rlike(r"phút|giờ|vừa xong"),
+            F.col("_scrape_date")
+        ).otherwise(F.lit(None).cast(DateType()))
+    )
     
-    # Drop intermediate columns
-    df_final = df_parsed.drop("_day", "_month", "_year", "post_date") \
-                        .withColumnRenamed("post_date_parsed", "post_date")
+    # Combine everything
+    df_final = df.withColumn(
+        "post_date_new",
+        F.coalesce(F.col("_absolute_date"), F.col("_relative_date"), F.col("_recent_date"))
+    )
     
-    # Final stats
-    parsed_count = df_final.filter(F.col("post_date").isNotNull()).count()
-    parse_rate = (parsed_count / total_records * 100) if total_records > 0 else 0
+    # Cleanup and rename
+    df_result = df_final.drop(
+        "post_date", "_scrape_date", "_absolute_date", 
+        "_relative_num", "_relative_unit", "_relative_date", "_recent_date"
+    ).withColumnRenamed("post_date_new", "post_date")
     
-    print(f"Successfully parsed: {parsed_count:,}")
-    print(f"Parse rate: {parse_rate:.2f}%")
-    
-    return df_final
+    return df_result
 
 
 def parse_crawl_time(df):
@@ -301,23 +295,15 @@ def parse_comment_time(df):
         )
     )
     
-    # Try absolute format first: DD-MM-YYYY
-    df = df \
-        .withColumn("_parts", F.split(F.col("time"), "-")) \
-        .withColumn("_day", F.col("_parts")[0].cast("int")) \
-        .withColumn("_month", F.col("_parts")[1].cast("int")) \
-        .withColumn("_year", F.col("_parts")[2].cast("int")) \
-        .withColumn("_absolute_date",
-            F.when(
-                (F.col("_day").isNotNull()) & 
-                (F.col("_month").isNotNull()) & 
-                (F.col("_year").isNotNull()) &
-                (F.size(F.col("_parts")) == 3),
-                F.make_date(F.col("_year"), F.col("_month"), F.col("_day"))
-            ).otherwise(F.lit(None).cast(DateType()))
+    # 1. Try absolute format: DD-MM-YYYY or YYYY-MM-DD
+    df = df.withColumn("_absolute_date",
+        F.coalesce(
+            F.to_date(F.col("time"), "dd-MM-yyyy"),
+            F.to_date(F.col("time"), "yyyy-MM-dd")
         )
+    )
     
-    # Parse relative format: "X ngày trước", "X tuần trước", "X tháng trước"
+    # 2. Parse relative format: "X ngày trước", "X tuần trước", "X tháng trước"
     df = df \
         .withColumn("_relative_num",
             F.regexp_extract(F.col("time"), r"^(\d+)\s+(ngày|tuần|tháng)", 1).cast("int")
@@ -326,7 +312,6 @@ def parse_comment_time(df):
             F.regexp_extract(F.col("time"), r"^(\d+)\s+(ngày|tuần|tháng)", 2)
         )
     
-    # Calculate relative date
     df = df.withColumn("_relative_date",
         F.when(F.col("_relative_unit") == "ngày",
             F.date_sub(F.col("_scrape_date"), F.col("_relative_num"))
@@ -337,13 +322,19 @@ def parse_comment_time(df):
         ).otherwise(F.lit(None).cast(DateType()))
     )
     
-    # Combine: Use absolute if available, else use relative
+    # 3. Handle very recent comments: "vừa xong", "X phút trước", "X giờ trước"
+    df = df.withColumn("_recent_date",
+        F.when(F.col("time").rlike(r"phút|giờ|vừa xong"), F.col("_scrape_date"))
+        .otherwise(F.lit(None).cast(DateType()))
+    )
+    
+    # Combine: Use absolute if available, else use relative, else use recent
     df_with_date = df \
         .withColumn("comment_date",
-            F.coalesce(F.col("_absolute_date"), F.col("_relative_date"))
+            F.coalesce(F.col("_absolute_date"), F.col("_relative_date"), F.col("_recent_date"))
         ) \
-        .drop("time", "_parts", "_day", "_month", "_year", "_absolute_date",
-              "_relative_num", "_relative_unit", "_relative_date", "_scrape_date")
+        .drop("time", "_absolute_date",
+              "_relative_num", "_relative_unit", "_relative_date", "_scrape_date", "_recent_date")
     
     # # Validate parsing results
     # total_count = df.count()
