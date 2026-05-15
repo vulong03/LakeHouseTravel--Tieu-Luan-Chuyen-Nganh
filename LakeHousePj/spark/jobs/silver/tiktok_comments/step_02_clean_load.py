@@ -173,8 +173,8 @@ def parse_post_date(df):
     Parse post_date from mixed format to DateType
     
     Handles:
-    1. Absolute formats: DD-MM-YYYY, YYYY-MM-DD
-    2. Relative formats: "X ngày trước", "X tuần trước", "X tháng trước"
+    1. Absolute formats: DD-MM-YYYY, d-M-yyyy (e.g. 8-9-2025), YYYY-MM-DD
+    2. Relative formats: "X ngày/tuần/tháng/giờ/phút trước", "vừa xong"
     
     Args:
         df: DataFrame with 'post_date' (String) and 'scrape_timestamp' (String)
@@ -184,47 +184,52 @@ def parse_post_date(df):
     """
     print("Parsing post_date (Mixed format → DateType)...")
     
-    # 1. Prepare reference date (scrape_date) from scrape_timestamp
-    df = df.withColumn("_scrape_date",
-        F.to_date(
-            F.regexp_replace(F.col("scrape_timestamp"), "T", " ").substr(1, 10),
-            "yyyy-MM-dd"
+    # 1. Prepare reference timestamp from scrape_timestamp
+    df = df.withColumn("_scrape_ts",
+        F.to_timestamp(
+            F.regexp_replace(F.col("scrape_timestamp"), "T", " "),
+            "yyyy-MM-dd HH-mm-ss"
         )
     )
     
-    # 2. Try Absolute format: DD-MM-YYYY or YYYY-MM-DD
+    # 2. Try Absolute format: DD-MM-YYYY, d-M-yyyy (single-digit day/month), YYYY-MM-DD
     # We use coalesce with multiple to_date patterns
     df = df.withColumn("_absolute_date",
         F.coalesce(
             F.to_date(F.col("post_date"), "dd-MM-yyyy"),
+            F.to_date(F.col("post_date"), "d-M-yyyy"),
             F.to_date(F.col("post_date"), "yyyy-MM-dd")
         )
     )
     
-    # 3. Parse Relative format: "X ngày trước", "X tuần trước", "X tháng trước"
+    # 3. Parse Relative format: "X ngày/tuần/tháng/giờ/phút trước"
     df = df \
         .withColumn("_relative_num",
-            F.regexp_extract(F.col("post_date"), r"^(\d+)\s+(ngày|tuần|tháng)", 1).cast("int")
+            F.regexp_extract(F.col("post_date"), r"^(\d+)\s+(ngày|tuần|tháng|giờ|phút)", 1).cast("int")
         ) \
         .withColumn("_relative_unit",
-            F.regexp_extract(F.col("post_date"), r"^(\d+)\s+(ngày|tuần|tháng)", 2)
+            F.regexp_extract(F.col("post_date"), r"^(\d+)\s+(ngày|tuần|tháng|giờ|phút)", 2)
         )
     
     df = df.withColumn("_relative_date",
         F.when(F.col("_relative_unit") == "ngày",
-            F.date_sub(F.col("_scrape_date"), F.col("_relative_num"))
+            F.date_sub(F.to_date(F.col("_scrape_ts")), F.col("_relative_num"))
         ).when(F.col("_relative_unit") == "tuần",
-            F.date_sub(F.col("_scrape_date"), F.col("_relative_num") * 7)
+            F.date_sub(F.to_date(F.col("_scrape_ts")), F.col("_relative_num") * 7)
         ).when(F.col("_relative_unit") == "tháng",
-            F.add_months(F.col("_scrape_date"), -F.col("_relative_num"))
+            F.add_months(F.to_date(F.col("_scrape_ts")), -F.col("_relative_num"))
+        ).when(F.col("_relative_unit") == "giờ",
+            F.to_date(F.to_timestamp(F.unix_timestamp(F.col("_scrape_ts")) - (F.col("_relative_num") * 3600)))
+        ).when(F.col("_relative_unit") == "phút",
+            F.to_date(F.to_timestamp(F.unix_timestamp(F.col("_scrape_ts")) - (F.col("_relative_num") * 60)))
         ).otherwise(F.lit(None).cast(DateType()))
     )
     
-    # 4. Handle very recent posts: "vừa xong", "X phút trước", "X giờ trước" -> Use scrape_date
+    # 4. Handle very recent posts: "vừa xong" -> Use scrape_ts format to Date
     df = df.withColumn("_recent_date",
         F.when(
-            F.col("post_date").rlike(r"phút|giờ|vừa xong"),
-            F.col("_scrape_date")
+            F.col("post_date").rlike(r"vừa xong"),
+            F.to_date(F.col("_scrape_ts"))
         ).otherwise(F.lit(None).cast(DateType()))
     )
     
@@ -236,7 +241,7 @@ def parse_post_date(df):
     
     # Cleanup and rename
     df_result = df_final.drop(
-        "post_date", "_scrape_date", "_absolute_date", 
+        "post_date", "_scrape_ts", "_absolute_date", 
         "_relative_num", "_relative_unit", "_relative_date", "_recent_date"
     ).withColumnRenamed("post_date_new", "post_date")
     
@@ -271,11 +276,11 @@ def parse_comment_time(df):
     """
     Parse comment time from mixed format to DateType
     
-    Format 1: "DD-MM-YYYY" (absolute date)
-    Format 2: "X ngày trước", "X tuần trước", "X tháng trước" (relative date)
+    Format 1: "DD-MM-YYYY" or "d-M-yyyy" (absolute date, optional leading zeros)
+    Format 2: "X ngày/tuần/tháng/giờ/phút trước", "vừa xong" (relative date)
     
     Strategy:
-    1. Try absolute format first (DD-MM-YYYY)
+    1. Try absolute format first (DD-MM-YYYY, d-M-yyyy, YYYY-MM-DD)
     2. If fails, parse relative format using scrape_timestamp
     3. Keep as NULL if both fail
     
@@ -287,44 +292,49 @@ def parse_comment_time(df):
     """
     print(f"Parsing comment time (Mixed format → DateType)...")
     
-    # Parse scrape_timestamp (YYYY-MM-DDTHH-MM-SS) to date
-    df = df.withColumn("_scrape_date",
-        F.to_date(
-            F.regexp_replace(F.col("scrape_timestamp"), "T", " ").substr(1, 10),
-            "yyyy-MM-dd"
+    # Parse scrape_timestamp (YYYY-MM-DDTHH-MM-SS) to timestamp
+    df = df.withColumn("_scrape_ts",
+        F.to_timestamp(
+            F.regexp_replace(F.col("scrape_timestamp"), "T", " "),
+            "yyyy-MM-dd HH-mm-ss"
         )
     )
     
-    # 1. Try absolute format: DD-MM-YYYY or YYYY-MM-DD
+    # 1. Try absolute format: DD-MM-YYYY, d-M-yyyy (single-digit day/month), YYYY-MM-DD
     df = df.withColumn("_absolute_date",
         F.coalesce(
             F.to_date(F.col("time"), "dd-MM-yyyy"),
+            F.to_date(F.col("time"), "d-M-yyyy"),
             F.to_date(F.col("time"), "yyyy-MM-dd")
         )
     )
     
-    # 2. Parse relative format: "X ngày trước", "X tuần trước", "X tháng trước"
+    # 2. Parse relative format: "X ngày/tuần/tháng/giờ/phút trước"
     df = df \
         .withColumn("_relative_num",
-            F.regexp_extract(F.col("time"), r"^(\d+)\s+(ngày|tuần|tháng)", 1).cast("int")
+            F.regexp_extract(F.col("time"), r"^(\d+)\s+(ngày|tuần|tháng|giờ|phút)", 1).cast("int")
         ) \
         .withColumn("_relative_unit",
-            F.regexp_extract(F.col("time"), r"^(\d+)\s+(ngày|tuần|tháng)", 2)
+            F.regexp_extract(F.col("time"), r"^(\d+)\s+(ngày|tuần|tháng|giờ|phút)", 2)
         )
     
     df = df.withColumn("_relative_date",
         F.when(F.col("_relative_unit") == "ngày",
-            F.date_sub(F.col("_scrape_date"), F.col("_relative_num"))
+            F.date_sub(F.to_date(F.col("_scrape_ts")), F.col("_relative_num"))
         ).when(F.col("_relative_unit") == "tuần",
-            F.date_sub(F.col("_scrape_date"), F.col("_relative_num") * 7)
+            F.date_sub(F.to_date(F.col("_scrape_ts")), F.col("_relative_num") * 7)
         ).when(F.col("_relative_unit") == "tháng",
-            F.add_months(F.col("_scrape_date"), -F.col("_relative_num"))
+            F.add_months(F.to_date(F.col("_scrape_ts")), -F.col("_relative_num"))
+        ).when(F.col("_relative_unit") == "giờ",
+            F.to_date(F.to_timestamp(F.unix_timestamp(F.col("_scrape_ts")) - (F.col("_relative_num") * 3600)))
+        ).when(F.col("_relative_unit") == "phút",
+            F.to_date(F.to_timestamp(F.unix_timestamp(F.col("_scrape_ts")) - (F.col("_relative_num") * 60)))
         ).otherwise(F.lit(None).cast(DateType()))
     )
     
-    # 3. Handle very recent comments: "vừa xong", "X phút trước", "X giờ trước"
+    # 3. Handle very recent comments: "vừa xong"
     df = df.withColumn("_recent_date",
-        F.when(F.col("time").rlike(r"phút|giờ|vừa xong"), F.col("_scrape_date"))
+        F.when(F.col("time").rlike(r"vừa xong"), F.to_date(F.col("_scrape_ts")))
         .otherwise(F.lit(None).cast(DateType()))
     )
     
@@ -334,7 +344,7 @@ def parse_comment_time(df):
             F.coalesce(F.col("_absolute_date"), F.col("_relative_date"), F.col("_recent_date"))
         ) \
         .drop("time", "_absolute_date",
-              "_relative_num", "_relative_unit", "_relative_date", "_scrape_date", "_recent_date")
+              "_relative_num", "_relative_unit", "_relative_date", "_scrape_ts", "_recent_date")
     
     # # Validate parsing results
     # total_count = df.count()
@@ -352,7 +362,7 @@ def clean_and_transform_posts(df):
     Apply data cleaning and type conversions for posts
     
     Transformations:
-    1. Parse post_date: String (DD-MM-YYYY) → DateType
+    1. Parse post_date: String (DD-MM-YYYY / d-M-yyyy / YYYY-MM-DD + relative) → DateType
     2. Parse crawl_time: String → TimestampType
     3. Extract crawl_date from crawl_time (for partitioning)
     4. Convert metrics to INT: likes, comments_count, saves, shares
@@ -367,7 +377,7 @@ def clean_and_transform_posts(df):
     """
     print(f"\nApplying data cleaning and transformations for POSTS...")
     
-    # 1. Parse post_date (DD-MM-YYYY → DateType)
+    # 1. Parse post_date (mixed absolute + relative → DateType)
     df_cleaned = parse_post_date(df)
     
     # 2. Parse crawl_time (String → TimestampType)
