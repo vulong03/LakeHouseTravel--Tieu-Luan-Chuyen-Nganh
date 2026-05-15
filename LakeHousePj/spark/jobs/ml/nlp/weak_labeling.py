@@ -93,11 +93,11 @@ def create_weak_labeling_udf():
     """
 
     output_schema = StructType([
-        StructField("sentiment_label", StringType(), False),
-        StructField("sentiment_confidence", FloatType(), False),
-        StructField("aspects", StringType(), False),
-        StructField("intent_label", StringType(), False),
-        StructField("intent_confidence", FloatType(), False),
+        StructField("sentiment_label", StringType(), True),
+        StructField("sentiment_confidence", FloatType(), True),
+        StructField("aspects", StringType(), True),
+        StructField("intent_label", StringType(), True),
+        StructField("intent_confidence", FloatType(), True),
     ])
 
     @pandas_udf(output_schema)

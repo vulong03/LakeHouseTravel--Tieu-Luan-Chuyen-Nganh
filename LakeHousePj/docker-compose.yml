@@ -351,6 +351,7 @@ services:
       - lakehouse_network
     ports:
       - "8082:8080"
+    user: "0:0"
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
@@ -439,6 +440,10 @@ services:
       hive-metastore:
         condition: service_healthy
     restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
 
   # ============================================
   # MLflow - ML Experiment Tracking

@@ -31,7 +31,7 @@ echo 'DELETE FROM "TABLE_PARAMS" WHERE "TBL_ID" = ID_CUA_BAN; DELETE FROM "PARTI
 Lệnh này xóa các file Parquet và Metadata thực tế trên ổ đĩa.
 
 ```bash
-docker exec lakehouse_minio sh -lc 'mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && mc rm --recursive --force local/silver/lakehouse/silver.db/YOUR_TABLE_NAME/'
+docker exec lakehouse_minio sh -lc 'mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && mc rm --recursive --force local/silver/lakehouse/silver.db/tiktok_post_metadata/'
 ```
 *   **Giải thích**: Tạo lại alias `local` với quyền admin của MinIO rồi mới xóa sạch thư mục của bảng trong bucket `silver`. Nếu không đăng nhập bằng admin, `mc rm` sẽ bị `Access Denied`.
 
