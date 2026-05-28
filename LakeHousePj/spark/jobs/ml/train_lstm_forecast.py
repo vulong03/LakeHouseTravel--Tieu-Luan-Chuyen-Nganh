@@ -1,19 +1,19 @@
 """
-ML Pipeline: Train GRU Deep Learning Model & Forecast Province Hotness
+ML Pipeline: Train LSTM Deep Learning Model & Forecast Province Hotness
 ========================================================================
 
 Reads directly from gold.gold.fact_province_month_dl_features (~40 features).
 No inline hotness calculation — all features pre-computed in Gold layer.
 
 Architecture:
-- GRU + LayerNorm + Temporal Attention
+- LSTM + LayerNorm + Temporal Attention
 - HuberLoss, weight_decay, early stopping
 - Scaler fit on train only (no leakage)
 
 Workflow:
 1. Read fact_province_month_dl_features (ready-to-use)
 2. Select feature columns, scale, build sequences
-3. Train GRU with MLflow tracking
+3. Train LSTM with MLflow tracking
 4. Forecast 12 months (recursive autoregressive)
 
 Output:
@@ -117,7 +117,7 @@ FORECAST_UPDATABLE_FEATURES = set(TEMPORAL_FEATURES + LAG_FEATURES)
 
 
 # ============================================================
-# GRU Model with LayerNorm + Temporal Attention
+# LSTM Model with LayerNorm + Temporal Attention
 # ============================================================
 
 class TemporalAttention(nn.Module):
@@ -125,17 +125,17 @@ class TemporalAttention(nn.Module):
         super().__init__()
         self.attn = nn.Linear(hidden_size, 1)
 
-    def forward(self, gru_output):
-        scores = self.attn(gru_output).squeeze(-1)
+    def forward(self, lstm_output):
+        scores = self.attn(lstm_output).squeeze(-1)
         weights = torch.softmax(scores, dim=1)
-        context = torch.bmm(weights.unsqueeze(1), gru_output).squeeze(1)
+        context = torch.bmm(weights.unsqueeze(1), lstm_output).squeeze(1)
         return context, weights
 
 
-class GRUForecaster(nn.Module):
+class LSTMForecaster(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers, dropout):
         super().__init__()
-        self.gru = nn.GRU(
+        self.lstm = nn.LSTM(
             input_size=input_size, hidden_size=hidden_size,
             num_layers=num_layers, batch_first=True,
             dropout=dropout if num_layers > 1 else 0
@@ -150,9 +150,9 @@ class GRUForecaster(nn.Module):
         )
 
     def forward(self, x):
-        gru_out, _ = self.gru(x)
-        gru_out = self.layer_norm(gru_out)
-        context, _ = self.attention(gru_out)
+        lstm_out, _ = self.lstm(x)  # _ = (h_n, c_n)
+        lstm_out = self.layer_norm(lstm_out)
+        context, _ = self.attention(lstm_out)
         return self.fc(context).squeeze(-1)
 
 
@@ -252,12 +252,12 @@ def prepare_sequences(df_pd, features, target, seq_length):
 
 
 # ============================================================
-# Step 3: Train GRU
+# Step 3: Train LSTM
 # ============================================================
 
 def train_model(df):
     print("\n" + "=" * 80)
-    print("STEP 3: TRAINING GRU MODEL")
+    print("STEP 3: TRAINING LSTM MODEL")
     print("=" * 80)
 
     select_cols = ALL_FEATURES + [TARGET, "year_month", "province_sk", "province_name", "region"]
@@ -304,7 +304,7 @@ def train_model(df):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = GRUForecaster(
+    model = LSTMForecaster(
         input_size=len(ALL_FEATURES), hidden_size=HIDDEN_SIZE,
         num_layers=NUM_LAYERS, dropout=DROPOUT
     ).to(device)
@@ -322,9 +322,9 @@ def train_model(df):
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment(EXPERIMENT_NAME)
 
-    with mlflow.start_run(run_name=f"gru_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
+    with mlflow.start_run(run_name=f"lstm_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
         mlflow.log_params({
-            "model_type": "GRU_Attention",
+            "model_type": "LSTM_Attention",
             "source_table": DL_FEATURES_TABLE,
             "sequence_length": SEQUENCE_LENGTH,
             "hidden_size": HIDDEN_SIZE,
@@ -416,14 +416,14 @@ def train_model(df):
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.plot(train_losses, label='Train')
         ax.plot(val_losses, label='Val')
-        ax.set_xlabel('Epoch'); ax.set_ylabel('Loss'); ax.set_title('GRU Training Loss'); ax.legend()
+        ax.set_xlabel('Epoch'); ax.set_ylabel('Loss'); ax.set_title('LSTM Training Loss'); ax.legend()
         mlflow.log_figure(fig, "loss_curve.png"); plt.close()
 
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.scatter(y_test, y_pred, alpha=0.5, s=15)
         ax.plot([0, 1], [0, 1], 'r--')
         ax.set_xlabel('Actual'); ax.set_ylabel('Predicted')
-        ax.set_title(f'GRU: Actual vs Predicted (R2={metrics["test_r2"]:.3f})')
+        ax.set_title(f'LSTM: Actual vs Predicted (R2={metrics["test_r2"]:.3f})')
         mlflow.log_figure(fig, "actual_vs_predicted.png"); plt.close()
 
         fig, ax = plt.subplots(figsize=(10, 6))
@@ -540,7 +540,7 @@ def forecast_12_months(spark, model, scaler, df_pd, device):
                 'year_month': tym, 'horizon_month': horizon,
                 'predicted_hotness': pred,
                 'forecast_date': datetime.now().strftime('%Y-%m-%d'),
-                'model_version': 'gru_3.0'
+                'model_version': 'lstm_3.0'
             })
 
             recent_hotness.append(pred)
@@ -594,7 +594,7 @@ def forecast_12_months(spark, model, scaler, df_pd, device):
 
 def main():
     print("\n" + "=" * 80)
-    print("ML PIPELINE: PROVINCE HOTNESS FORECASTING (GRU DEEP LEARNING)")
+    print("ML PIPELINE: PROVINCE HOTNESS FORECASTING (LSTM DEEP LEARNING)")
     print("=" * 80)
     print(f"Source: {DL_FEATURES_TABLE}")
     print(f"Features: {len(ALL_FEATURES)} (pre-computed, no inline calculation)")

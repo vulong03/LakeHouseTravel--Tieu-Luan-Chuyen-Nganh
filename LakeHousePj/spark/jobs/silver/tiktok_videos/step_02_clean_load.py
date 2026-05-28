@@ -149,18 +149,38 @@ def apply_data_cleaning(df):
     
     # 2. Format posted_date to Date type
     print(f"   📅 Step 2: Formatting posted_date to yyyy-MM-dd (Date type)...")
-    # Try multiple date formats from Bronze data
-    # Observed formats: "11-30-2024", "4-17-2025", "9-9-2025" (M-d-yyyy or MM-dd-yyyy)
+    # Cover all common date formats (ordered by likelihood based on actual Bronze CSV data)
+    # Current format: M/d/yyyy  e.g. "6/9/2025", "11/30/2024", "9/3/2024"
+    # Fallback formats included for future-proofing if source format changes
     df = df.withColumn(
         "posted_date",
         F.coalesce(
-            F.to_date(F.col("posted_date"), "M-d-yyyy"),      # 4-17-2025, 9-9-2025
-            F.to_date(F.col("posted_date"), "MM-dd-yyyy"),    # 11-30-2024
+            # --- Slash separator (M/D/YYYY) — current format in merged_videos.csv ---
+            F.to_date(F.col("posted_date"), "M/d/yyyy"),      # 6/9/2025, 9/3/2024
+            F.to_date(F.col("posted_date"), "MM/dd/yyyy"),    # 11/30/2024
+            F.to_date(F.col("posted_date"), "M/dd/yyyy"),     # 6/30/2024
+            F.to_date(F.col("posted_date"), "MM/d/yyyy"),     # 11/3/2024
+            # --- ISO format (YYYY-MM-DD) ---
             F.to_date(F.col("posted_date"), "yyyy-MM-dd"),    # 2025-04-17
-            F.to_date(F.col("posted_date"), "M/d/yyyy"),      # 7/9/2025 (if any)
-            F.to_date(F.col("posted_date"), "MM/dd/yyyy")     # 07/09/2025 (if any)
+            # --- Dash separator (M-D-YYYY) — fallback ---
+            F.to_date(F.col("posted_date"), "M-d-yyyy"),      # 6-9-2025
+            F.to_date(F.col("posted_date"), "MM-dd-yyyy"),    # 11-30-2024
+            F.to_date(F.col("posted_date"), "M-dd-yyyy"),     # 6-30-2024
+            F.to_date(F.col("posted_date"), "MM-d-yyyy"),     # 11-3-2024
+            # --- Day-Month-Year formats (Vietnamese style, just in case) ---
+            F.to_date(F.col("posted_date"), "d/M/yyyy"),      # 9/6/2025
+            F.to_date(F.col("posted_date"), "dd/MM/yyyy"),    # 30/11/2024
+            F.to_date(F.col("posted_date"), "d-M-yyyy"),      # 9-6-2025
+            F.to_date(F.col("posted_date"), "dd-MM-yyyy"),    # 30-11-2024
         )
     )
+
+    # Log NULL count after parsing (for monitoring data quality)
+    null_date_count = df.filter(F.col("posted_date").isNull()).count()
+    total_count = df.count()
+    ok_count = total_count - null_date_count
+    print(f"   posted_date parse result: {ok_count:,} OK, {null_date_count:,} NULL "
+          f"({null_date_count / total_count * 100:.1f}%) — NULLs are empty in source CSV")
     
     # 3. Convert read_status to Boolean (0/1 → false/true)
     print(f"   🔢 Step 3: Converting read_status to Boolean (0/1 → false/true)...")

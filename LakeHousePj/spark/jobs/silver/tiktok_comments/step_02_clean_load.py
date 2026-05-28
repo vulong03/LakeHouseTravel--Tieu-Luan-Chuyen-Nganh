@@ -357,20 +357,22 @@ def parse_comment_time(df):
     return df_with_date
 
 
-def clean_and_transform_posts(df):
+def clean_and_transform_posts(df, spark=None):
     """
     Apply data cleaning and type conversions for posts
     
     Transformations:
-    1. Parse post_date: String (DD-MM-YYYY / d-M-yyyy / YYYY-MM-DD + relative) → DateType
-    2. Parse crawl_time: String → TimestampType
-    3. Extract crawl_date from crawl_time (for partitioning)
-    4. Convert metrics to INT: likes, comments_count, saves, shares
-    5. Keep descriptions as String
-    6. Update ingestion_timestamp to current datetime
+    1.   Parse post_date: String (DD-MM-YYYY / d-M-yyyy / YYYY-MM-DD + relative) → DateType
+    1.5. Enrich post_date: Fill NULL post_date from silver.tiktok_videos.posted_date (LEFT JOIN on url)
+    2.   Parse crawl_time: String → TimestampType
+    3.   Extract crawl_date from crawl_time (for partitioning)
+    4.   Convert metrics to INT: likes, comments_count, saves, shares
+    5.   Keep descriptions as String
+    6.   Update ingestion_timestamp to current datetime
     
     Args:
         df: Input DataFrame from Scratch
+        spark: SparkSession (required for step 1.5 tiktok_videos enrich)
     
     Returns:
         Cleaned DataFrame with proper types
@@ -379,6 +381,38 @@ def clean_and_transform_posts(df):
     
     # 1. Parse post_date (mixed absolute + relative → DateType)
     df_cleaned = parse_post_date(df)
+    
+    # 1.5. Enrich NULL post_date from silver.tiktok_videos.posted_date
+    # Strategy: LEFT JOIN on post_url = url, then COALESCE(post_date, posted_date)
+    # tiktok_videos already has a properly-parsed DATE column from its own pipeline.
+    # NOTE: tiktok_videos may also have NULL posted_date for some urls — those stay NULL.
+    if spark is not None:
+        try:
+            null_before = df_cleaned.filter(F.col("post_date").isNull()).count()
+            if null_before > 0:
+                print(f"Enriching post_date from tiktok_videos: {null_before:,} rows have NULL post_date...")
+                df_videos = spark.table("silver.silver.tiktok_videos") \
+                    .select(
+                        F.col("url").alias("_tv_url"),
+                        F.col("posted_date").alias("_tv_posted_date")
+                    )
+                df_cleaned = df_cleaned \
+                    .join(df_videos, df_cleaned["post_url"] == df_videos["_tv_url"], how="left") \
+                    .withColumn(
+                        "post_date",
+                        F.coalesce(F.col("post_date"), F.col("_tv_posted_date"))
+                    ) \
+                    .drop("_tv_url", "_tv_posted_date")
+                null_after = df_cleaned.filter(F.col("post_date").isNull()).count()
+                filled = null_before - null_after
+                print(f"post_date enrich result: filled {filled:,} NULLs from tiktok_videos, {null_after:,} still NULL")
+            else:
+                print(f"No NULL post_date found — skipping tiktok_videos enrich")
+        except Exception as e:
+            print(f"WARNING: Could not enrich post_date from tiktok_videos: {e}")
+            print(f"Continuing without enrichment — post_date NULLs remain as-is")
+    else:
+        print(f"WARNING: spark not provided to clean_and_transform_posts — skipping tiktok_videos enrich")
     
     # 2. Parse crawl_time (String → TimestampType)
     df_cleaned = parse_crawl_time(df_cleaned)
@@ -410,12 +444,13 @@ def clean_and_transform_posts(df):
     print(f"Updating ingestion_timestamp (TimestampType)...")
     df_cleaned = df_cleaned.withColumn("ingestion_timestamp", F.lit(datetime.now()))
     
-    # 6. Filter out posts with shares > 5M (invalid crawl data)
-    print(f"Filtering out posts with shares > 5M (invalid crawl data)...")
+    # 6. Filter out posts with shares > 5M (DISABLED TO PREVENT DATA LOSS)
+    # print(f"Filtering out posts with shares > 5M (invalid crawl data)...")
     count_before = df_cleaned.count()
-    df_filtered = df_cleaned.filter(
-        F.col("shares").isNull() | (F.col("shares") <= 5000000)
-    )
+    # df_filtered = df_cleaned.filter(
+    #     F.col("shares").isNull() | (F.col("shares") <= 5000000)
+    # )
+    df_filtered = df_cleaned
     count_after = df_filtered.count()
     removed_count = count_before - count_after
     if removed_count > 0:
@@ -750,7 +785,7 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
                 
                 # Clean & Transform
                 print(f"Cleaning and transforming posts...")
-                df_posts_cleaned = clean_and_transform_posts(df_posts_raw)
+                df_posts_cleaned = clean_and_transform_posts(df_posts_raw, spark=spark)
                 
                 # Check duplicates with Silver (anti-join)
                 print(f"Checking duplicates with Silver table...")

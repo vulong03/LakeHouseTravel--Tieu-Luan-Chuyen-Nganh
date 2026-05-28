@@ -1,13 +1,21 @@
 """
 NLP Pipeline Step 2: Fine-tune PhoBERT for Tourism Comments
 ============================================================
+[OPTIMIZED v2] Applied 4 key optimizations:
+  1. Layer Freezing      — Bottom 8/12 transformer layers frozen (~50% fewer params)
+  2. Mixed Precision     — FP16 via torch.autocast + GradScaler (GPU only, auto-off on CPU)
+  3. Gradient Accum      — 4 steps → effective batch = BATCH_SIZE * 4 (smoother gradients)
+  4. Early Stopping      — Tracks Val Sentiment F1, stops after patience=2 epochs
+  5. Differential LR     — Backbone: 2e-5 | Heads: 1e-4
+  6. Stratified Sampling — Up to 27K/class (~80K total) instead of 5K/class
+
 Multi-task model:
   Head 1: Sentiment classification (negative/neutral/positive)
-  Head 2: Aspect detection (multi-label: scenery, food, price, service, transport, accommodation)
+  Head 2: Aspect detection (multi-label: scenery/food/price/service/transport/accommodation)
   Head 3: Intent classification (recommend/complain/question/share)
 
-Input:  Weak-labeled Parquet from Step 1
-Output: Fine-tuned PhoBERT model in MLflow registry
+Input:  Weak-labeled Parquet from Step 1 (weak_labeling.py)
+Output: Fine-tuned PhoBERT model registered in MLflow
 """
 
 import sys
@@ -17,19 +25,14 @@ sys.path.append('/opt/spark/jobs')
 import numpy as np
 import pandas as pd
 from datetime import datetime
-from sklearn.metrics import (
-    accuracy_score, f1_score, classification_report
-)
+from sklearn.metrics import accuracy_score, f1_score, classification_report
 from sklearn.model_selection import train_test_split
 
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
-from transformers import (
-    AutoTokenizer, AutoModel,
-    get_linear_schedule_with_warmup,
-)
+from transformers import AutoTokenizer, AutoModel, get_linear_schedule_with_warmup
 
 import mlflow
 import mlflow.pytorch
@@ -50,55 +53,70 @@ from config import (
     INTENT_LABELS, INTENT_TO_ID,
 )
 
+# ============================================================
+# Optimization Hyperparameters
+# ============================================================
+FREEZE_N_LAYERS     = 8       # Freeze bottom N of 12 transformer layers
+GRAD_ACCUM_STEPS    = 4       # Effective batch = BATCH_SIZE * GRAD_ACCUM_STEPS
+EARLY_STOP_PATIENCE = 2       # Stop after N epochs with no Val F1 improvement
+BACKBONE_LR         = 2e-5    # Lower LR for frozen-adjacent backbone layers
+HEAD_LR             = 1e-4    # Higher LR for new classification heads
+MAX_PER_CLASS       = 27_000  # ~80K total (27K × 3 sentiment classes)
+USE_AMP             = torch.cuda.is_available()  # FP16 only when GPU present
+
 
 # ============================================================
-# Multi-Task PhoBERT Model
+# Model
 # ============================================================
 
 class PhoBERTMultiTask(nn.Module):
     """
-    PhoBERT backbone with 3 classification heads:
-    - Sentiment (3-class softmax)
-    - Aspect (6-class sigmoid, multi-label)
-    - Intent (4-class softmax)
+    PhoBERT backbone + 3 heads:
+      - Sentiment : 3-class softmax
+      - Aspect    : 6-class sigmoid (multi-label)
+      - Intent    : 4-class softmax
     """
     def __init__(self, model_name, num_sentiments, num_aspects, num_intents, dropout=0.3):
         super().__init__()
         self.backbone = AutoModel.from_pretrained(model_name)
         hidden = self.backbone.config.hidden_size
-
         self.dropout = nn.Dropout(dropout)
 
         self.sentiment_head = nn.Sequential(
-            nn.Linear(hidden, 128),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(128, num_sentiments),
+            nn.Linear(hidden, 128), nn.ReLU(), nn.Dropout(dropout), nn.Linear(128, num_sentiments),
         )
-
         self.aspect_head = nn.Sequential(
-            nn.Linear(hidden, 128),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(128, num_aspects),
+            nn.Linear(hidden, 128), nn.ReLU(), nn.Dropout(dropout), nn.Linear(128, num_aspects),
         )
-
         self.intent_head = nn.Sequential(
-            nn.Linear(hidden, 64),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(64, num_intents),
+            nn.Linear(hidden, 64), nn.ReLU(), nn.Dropout(dropout), nn.Linear(64, num_intents),
         )
 
     def forward(self, input_ids, attention_mask):
         outputs = self.backbone(input_ids=input_ids, attention_mask=attention_mask)
-        cls_output = self.dropout(outputs.last_hidden_state[:, 0, :])
+        cls = self.dropout(outputs.last_hidden_state[:, 0, :])
+        return self.sentiment_head(cls), self.aspect_head(cls), self.intent_head(cls)
 
-        sentiment_logits = self.sentiment_head(cls_output)
-        aspect_logits = self.aspect_head(cls_output)
-        intent_logits = self.intent_head(cls_output)
 
-        return sentiment_logits, aspect_logits, intent_logits
+def apply_layer_freezing(model, n=FREEZE_N_LAYERS):
+    """
+    Freeze embeddings + bottom N transformer layers.
+    Only top (12 - N) layers + all 3 heads remain trainable.
+    Prevents Catastrophic Forgetting, cuts trainable params ~50%.
+    """
+    for param in model.backbone.embeddings.parameters():
+        param.requires_grad = False
+
+    for i, layer in enumerate(model.backbone.encoder.layer):
+        if i < n:
+            for param in layer.parameters():
+                param.requires_grad = False
+
+    total     = sum(p.numel() for p in model.parameters())
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"  [Freeze] {n}/12 layers frozen | "
+          f"Trainable: {trainable:,}/{total:,} ({trainable/total*100:.1f}%)")
+    return model
 
 
 # ============================================================
@@ -118,7 +136,7 @@ class CommentDataset(Dataset):
         return len(self.texts)
 
     def __getitem__(self, idx):
-        encoding = self.tokenizer(
+        enc = self.tokenizer(
             str(self.texts[idx]),
             max_length=self.max_len,
             padding='max_length',
@@ -126,11 +144,11 @@ class CommentDataset(Dataset):
             return_tensors='pt',
         )
         return {
-            'input_ids': encoding['input_ids'].squeeze(),
-            'attention_mask': encoding['attention_mask'].squeeze(),
-            'sentiment': torch.tensor(self.sentiment_ids[idx], dtype=torch.long),
-            'aspects': torch.tensor(self.aspect_vectors[idx], dtype=torch.float),
-            'intent': torch.tensor(self.intent_ids[idx], dtype=torch.long),
+            'input_ids':      enc['input_ids'].squeeze(),
+            'attention_mask': enc['attention_mask'].squeeze(),
+            'sentiment':      torch.tensor(self.sentiment_ids[idx], dtype=torch.long),
+            'aspects':        torch.tensor(self.aspect_vectors[idx], dtype=torch.float),
+            'intent':         torch.tensor(self.intent_ids[idx], dtype=torch.long),
         }
 
 
@@ -139,96 +157,80 @@ class CommentDataset(Dataset):
 # ============================================================
 
 def load_and_prepare_data():
-    """Load weak-labeled Parquet and prepare for training."""
     print("\n[1/4] Loading weak-labeled data...")
 
     from pyspark.sql import SparkSession
     spark = SparkSession.builder \
         .appName("NLP_Load_Data") \
-        .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
-        .config("spark.hadoop.fs.s3a.access.key", "minioadmin") \
-        .config("spark.hadoop.fs.s3a.secret.key", "minioadmin123") \
+        .config("spark.hadoop.fs.s3a.endpoint",        "http://minio:9000") \
+        .config("spark.hadoop.fs.s3a.access.key",      "minioadmin") \
+        .config("spark.hadoop.fs.s3a.secret.key",      "minioadmin123") \
         .config("spark.hadoop.fs.s3a.path.style.access", "true") \
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
         .getOrCreate()
 
-    df = spark.read.parquet(LABELED_PARQUET_PATH)
-    pdf = df.toPandas()
+    pdf = spark.read.parquet(LABELED_PARQUET_PATH).toPandas()
     spark.stop()
+    print(f"  Loaded {len(pdf):,} raw samples")
 
-    print(f"  Loaded {len(pdf):,} samples")
+    # Encode labels
+    pdf['sentiment_id']  = pdf['sentiment_label'].map(SENTIMENT_TO_ID).fillna(1).astype(int)
+    pdf['intent_id']     = pdf['intent_label'].map(INTENT_TO_ID).fillna(3).astype(int)
 
-    # Encode sentiment
-    pdf['sentiment_id'] = pdf['sentiment_label'].map(SENTIMENT_TO_ID).fillna(1).astype(int)
-
-    # Encode aspects (multi-label binary vector)
-    def aspects_to_vector(aspects_str):
+    def aspects_to_vector(s):
         vec = [0] * len(ASPECT_LABELS)
-        if aspects_str:
-            for a in aspects_str.split(','):
-                a = a.strip()
-                if a in ASPECT_LABELS:
-                    vec[ASPECT_LABELS.index(a)] = 1
+        for a in (s or "").split(','):
+            a = a.strip()
+            if a in ASPECT_LABELS:
+                vec[ASPECT_LABELS.index(a)] = 1
         return vec
 
     pdf['aspect_vector'] = pdf['aspects'].apply(aspects_to_vector)
 
-    # Encode intent
-    pdf['intent_id'] = pdf['intent_label'].map(INTENT_TO_ID).fillna(3).astype(int)
-
-    # Balance dataset: undersample majority class for sentiment
-    print("\n  Class distribution (sentiment):")
+    # Stratified sampling — up to MAX_PER_CLASS per sentiment class (~80K total)
+    print("\n  Distribution before sampling:")
     print(pdf['sentiment_label'].value_counts())
 
-    min_class_size = pdf['sentiment_label'].value_counts().min()
-    max_per_class = max(min_class_size, 5000)
-
-    balanced_dfs = []
+    parts = []
     for label in SENTIMENT_LABELS:
-        subset = pdf[pdf['sentiment_label'] == label]
-        if len(subset) > max_per_class:
-            subset = subset.sample(n=max_per_class, random_state=42)
-        balanced_dfs.append(subset)
+        sub = pdf[pdf['sentiment_label'] == label]
+        n   = min(len(sub), MAX_PER_CLASS)
+        parts.append(sub.sample(n=n, random_state=42) if len(sub) > n else sub)
 
-    pdf_balanced = pd.concat(balanced_dfs, ignore_index=True).sample(frac=1, random_state=42)
-    print(f"\n  Balanced to {len(pdf_balanced):,} samples")
-    print(pdf_balanced['sentiment_label'].value_counts())
-
-    return pdf_balanced
+    pdf_out = pd.concat(parts, ignore_index=True).sample(frac=1, random_state=42)
+    print(f"\n  After stratified sampling: {len(pdf_out):,}")
+    print(pdf_out['sentiment_label'].value_counts())
+    return pdf_out
 
 
 def create_dataloaders(pdf, tokenizer):
-    """Split data and create DataLoaders."""
     print("\n[2/4] Creating DataLoaders...")
 
-    texts = pdf['comment_text'].tolist()
+    texts         = pdf['comment_text'].tolist()
     sentiment_ids = pdf['sentiment_id'].tolist()
-    aspect_vectors = pdf['aspect_vector'].tolist()
-    intent_ids = pdf['intent_id'].tolist()
+    aspect_vecs   = pdf['aspect_vector'].tolist()
+    intent_ids    = pdf['intent_id'].tolist()
 
     idx_train, idx_test = train_test_split(
-        range(len(texts)), test_size=1 - TRAIN_TEST_SPLIT, random_state=42, stratify=sentiment_ids
+        range(len(texts)), test_size=1 - TRAIN_TEST_SPLIT,
+        random_state=42, stratify=sentiment_ids,
     )
 
-    train_ds = CommentDataset(
-        [texts[i] for i in idx_train],
-        [sentiment_ids[i] for i in idx_train],
-        [aspect_vectors[i] for i in idx_train],
-        [intent_ids[i] for i in idx_train],
-        tokenizer, MAX_SEQ_LENGTH,
-    )
-    test_ds = CommentDataset(
-        [texts[i] for i in idx_test],
-        [sentiment_ids[i] for i in idx_test],
-        [aspect_vectors[i] for i in idx_test],
-        [intent_ids[i] for i in idx_test],
-        tokenizer, MAX_SEQ_LENGTH,
-    )
+    def make_ds(idx):
+        return CommentDataset(
+            [texts[i] for i in idx], [sentiment_ids[i] for i in idx],
+            [aspect_vecs[i] for i in idx], [intent_ids[i] for i in idx],
+            tokenizer, MAX_SEQ_LENGTH,
+        )
 
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
-    test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False)
+    train_loader = DataLoader(make_ds(idx_train), batch_size=BATCH_SIZE,
+                              shuffle=True, num_workers=2, pin_memory=USE_AMP)
+    test_loader  = DataLoader(make_ds(idx_test),  batch_size=BATCH_SIZE,
+                              shuffle=False, num_workers=2, pin_memory=USE_AMP)
 
-    print(f"  Train: {len(train_ds):,} samples, Test: {len(test_ds):,} samples")
+    eff_batch = BATCH_SIZE * GRAD_ACCUM_STEPS
+    print(f"  Train: {len(idx_train):,} | Test: {len(idx_test):,}")
+    print(f"  Effective batch size: {BATCH_SIZE} × {GRAD_ACCUM_STEPS} = {eff_batch}")
     return train_loader, test_loader
 
 
@@ -237,163 +239,201 @@ def create_dataloaders(pdf, tokenizer):
 # ============================================================
 
 def train_model(model, train_loader, test_loader, device):
-    """Train multi-task PhoBERT with MLflow tracking."""
-    print("\n[3/4] Training PhoBERT multi-task model...")
+    print("\n[3/4] Training PhoBERT (optimized)...")
+    print(f"  FP16 AMP         : {'ON' if USE_AMP else 'OFF (CPU)'}")
+    print(f"  Grad accumulation: {GRAD_ACCUM_STEPS} steps")
+    print(f"  Early stopping   : patience={EARLY_STOP_PATIENCE}")
+    print(f"  LR backbone/heads: {BACKBONE_LR} / {HEAD_LR}")
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0.01)
-    total_steps = len(train_loader) * EPOCHS
+    # Differential learning rate
+    backbone_params = [p for p in model.backbone.parameters() if p.requires_grad]
+    head_params = (
+        list(model.sentiment_head.parameters())
+        + list(model.aspect_head.parameters())
+        + list(model.intent_head.parameters())
+    )
+    optimizer = torch.optim.AdamW([
+        {"params": backbone_params, "lr": BACKBONE_LR, "weight_decay": 0.01},
+        {"params": head_params,     "lr": HEAD_LR,     "weight_decay": 0.01},
+    ])
+
+    steps_per_epoch = len(train_loader) // GRAD_ACCUM_STEPS
+    total_steps     = steps_per_epoch * EPOCHS
     scheduler = get_linear_schedule_with_warmup(
-        optimizer, num_warmup_steps=int(total_steps * WARMUP_RATIO),
+        optimizer,
+        num_warmup_steps=int(total_steps * WARMUP_RATIO),
         num_training_steps=total_steps,
     )
 
-    sentiment_loss_fn = nn.CrossEntropyLoss()
-    aspect_loss_fn = nn.BCEWithLogitsLoss()
-    intent_loss_fn = nn.CrossEntropyLoss()
+    loss_sent_fn = nn.CrossEntropyLoss()
+    loss_asp_fn  = nn.BCEWithLogitsLoss()
+    loss_int_fn  = nn.CrossEntropyLoss()
+
+    # AMP GradScaler — no-op on CPU
+    amp_scaler = torch.cuda.amp.GradScaler(enabled=USE_AMP)
 
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment(MLFLOW_EXPERIMENT)
 
-    with mlflow.start_run(run_name=f"phobert_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
+    with mlflow.start_run(run_name=f"phobert_opt_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
         mlflow.log_params({
-            "model": PHOBERT_MODEL_NAME,
-            "max_seq_length": MAX_SEQ_LENGTH,
-            "batch_size": BATCH_SIZE,
-            "learning_rate": LEARNING_RATE,
-            "epochs": EPOCHS,
-            "warmup_ratio": WARMUP_RATIO,
-            "tasks": "sentiment+aspect+intent",
-            "sentiment_classes": len(SENTIMENT_LABELS),
-            "aspect_classes": len(ASPECT_LABELS),
-            "intent_classes": len(INTENT_LABELS),
-            "train_size": len(train_loader.dataset),
-            "test_size": len(test_loader.dataset),
+            "model":               PHOBERT_MODEL_NAME,
+            "max_seq_length":      MAX_SEQ_LENGTH,
+            "batch_size":          BATCH_SIZE,
+            "effective_batch":     BATCH_SIZE * GRAD_ACCUM_STEPS,
+            "backbone_lr":         BACKBONE_LR,
+            "head_lr":             HEAD_LR,
+            "epochs":              EPOCHS,
+            "warmup_ratio":        WARMUP_RATIO,
+            "freeze_n_layers":     FREEZE_N_LAYERS,
+            "grad_accum_steps":    GRAD_ACCUM_STEPS,
+            "early_stop_patience": EARLY_STOP_PATIENCE,
+            "use_fp16":            USE_AMP,
+            "train_size":          len(train_loader.dataset),
+            "test_size":           len(test_loader.dataset),
         })
 
-        best_f1 = 0
-        best_state = None
-        train_losses = []
+        best_f1          = 0.0
+        best_state       = None
+        no_improve       = 0
+        train_losses     = []
+        val_f1_history   = []
 
         for epoch in range(EPOCHS):
             model.train()
-            epoch_loss = 0
+            epoch_loss = 0.0
+            optimizer.zero_grad()
 
-            for batch in train_loader:
-                input_ids = batch['input_ids'].to(device)
-                attention_mask = batch['attention_mask'].to(device)
-                sent_labels = batch['sentiment'].to(device)
-                aspect_labels = batch['aspects'].to(device)
-                intent_labels = batch['intent'].to(device)
+            for step, batch in enumerate(train_loader):
+                ids   = batch['input_ids'].to(device)
+                mask  = batch['attention_mask'].to(device)
+                s_lbl = batch['sentiment'].to(device)
+                a_lbl = batch['aspects'].to(device)
+                i_lbl = batch['intent'].to(device)
 
-                optimizer.zero_grad()
+                # FP16 forward
+                with torch.autocast(device_type=device.type, enabled=USE_AMP):
+                    s_logits, a_logits, i_logits = model(ids, mask)
+                    loss = (
+                        loss_sent_fn(s_logits, s_lbl) * 0.4
+                        + loss_asp_fn(a_logits, a_lbl) * 0.3
+                        + loss_int_fn(i_logits, i_lbl) * 0.3
+                    ) / GRAD_ACCUM_STEPS
 
-                sent_logits, aspect_logits, intent_logits = model(input_ids, attention_mask)
+                amp_scaler.scale(loss).backward()
 
-                loss = (
-                    sentiment_loss_fn(sent_logits, sent_labels) * 0.4
-                    + aspect_loss_fn(aspect_logits, aspect_labels) * 0.3
-                    + intent_loss_fn(intent_logits, intent_labels) * 0.3
-                )
+                if (step + 1) % GRAD_ACCUM_STEPS == 0:
+                    amp_scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    amp_scaler.step(optimizer)
+                    amp_scaler.update()
+                    scheduler.step()
+                    optimizer.zero_grad()
 
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
-                scheduler.step()
-
-                epoch_loss += loss.item()
+                epoch_loss += loss.item() * GRAD_ACCUM_STEPS
 
             avg_loss = epoch_loss / len(train_loader)
             train_losses.append(avg_loss)
 
-            # Evaluate
-            metrics = evaluate(model, test_loader, device)
+            metrics  = evaluate(model, test_loader, device)
+            val_f1   = metrics['sentiment_f1']
+            val_f1_history.append(val_f1)
 
             print(f"  Epoch {epoch+1}/{EPOCHS} | Loss: {avg_loss:.4f} | "
-                  f"Sent-F1: {metrics['sentiment_f1']:.4f} | "
-                  f"Intent-F1: {metrics['intent_f1']:.4f}")
+                  f"Sent-F1: {val_f1:.4f} | Intent-F1: {metrics['intent_f1']:.4f}")
 
             mlflow.log_metrics({
-                f"epoch_{epoch+1}_loss": avg_loss,
-                f"epoch_{epoch+1}_sentiment_f1": metrics['sentiment_f1'],
-                f"epoch_{epoch+1}_intent_f1": metrics['intent_f1'],
-            })
+                "train_loss":        avg_loss,
+                "val_sentiment_f1":  val_f1,
+                "val_intent_f1":     metrics['intent_f1'],
+                "val_sent_accuracy": metrics['sentiment_accuracy'],
+            }, step=epoch + 1)
 
-            if metrics['sentiment_f1'] > best_f1:
-                best_f1 = metrics['sentiment_f1']
+            # Early stopping
+            if val_f1 > best_f1:
+                best_f1    = val_f1
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                no_improve = 0
+                print(f"  ✓ New best Val F1: {best_f1:.4f}")
+            else:
+                no_improve += 1
+                print(f"  No improve {no_improve}/{EARLY_STOP_PATIENCE}")
+                if no_improve >= EARLY_STOP_PATIENCE:
+                    print(f"\n  ⚑ Early stopping at epoch {epoch+1} (best F1={best_f1:.4f})")
+                    break
 
+        # Restore best checkpoint
         model.load_state_dict(best_state)
         model.to(device)
 
-        # Final evaluation
-        final_metrics = evaluate(model, test_loader, device, verbose=True)
-
+        # Final report
+        final = evaluate(model, test_loader, device, verbose=True)
         mlflow.log_metrics({
-            "best_sentiment_f1": final_metrics['sentiment_f1'],
-            "sentiment_accuracy": final_metrics['sentiment_accuracy'],
-            "intent_f1": final_metrics['intent_f1'],
-            "intent_accuracy": final_metrics['intent_accuracy'],
+            "best_sentiment_f1":  final['sentiment_f1'],
+            "best_sentiment_acc": final['sentiment_accuracy'],
+            "best_intent_f1":     final['intent_f1'],
+            "best_intent_acc":    final['intent_accuracy'],
+            "epochs_trained":     len(train_losses),
         })
 
-        # Loss plot
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(range(1, len(train_losses) + 1), train_losses, marker='o')
-        ax.set_xlabel('Epoch'); ax.set_ylabel('Loss')
-        ax.set_title('PhoBERT Multi-Task Training Loss')
-        mlflow.log_figure(fig, "training_loss.png")
+        # Plots — loss + validation F1
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+        ax1.plot(range(1, len(train_losses) + 1), train_losses, marker='o', color='steelblue')
+        ax1.set(xlabel='Epoch', ylabel='Loss', title='Training Loss')
+
+        ax2.plot(range(1, len(val_f1_history) + 1), val_f1_history, marker='s', color='green')
+        ax2.axhline(best_f1, color='red', linestyle='--', label=f'Best F1={best_f1:.4f}')
+        ax2.set(xlabel='Epoch', ylabel='Val Sentiment F1', title='Validation F1 (Early Stop)')
+        ax2.legend()
+        plt.tight_layout()
+        mlflow.log_figure(fig, "training_curves.png")
         plt.close()
 
-        # Save model
+        # Register model
         mlflow.pytorch.log_model(model, "model")
         model_uri = f"runs:/{mlflow.active_run().info.run_id}/model"
         mlflow.register_model(model_uri, FINE_TUNED_MODEL_NAME)
 
         print(f"\n  Model registered: {FINE_TUNED_MODEL_NAME}")
-        print(f"  Best Sentiment F1: {best_f1:.4f}")
+        print(f"  Best Sentiment F1 : {best_f1:.4f}")
+        print(f"  Epochs trained     : {len(train_losses)}")
 
-        return model
+    return model
 
+
+# ============================================================
+# Evaluation
+# ============================================================
 
 def evaluate(model, test_loader, device, verbose=False):
-    """Evaluate all 3 tasks."""
     model.eval()
-
-    all_sent_true, all_sent_pred = [], []
+    all_sent_true, all_sent_pred   = [], []
     all_intent_true, all_intent_pred = [], []
 
     with torch.no_grad():
         for batch in test_loader:
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
+            ids  = batch['input_ids'].to(device)
+            mask = batch['attention_mask'].to(device)
 
-            sent_logits, aspect_logits, intent_logits = model(input_ids, attention_mask)
+            with torch.autocast(device_type=device.type, enabled=USE_AMP):
+                s_logits, _, i_logits = model(ids, mask)
 
             all_sent_true.extend(batch['sentiment'].numpy())
-            all_sent_pred.extend(sent_logits.argmax(dim=1).cpu().numpy())
-
+            all_sent_pred.extend(s_logits.argmax(dim=1).cpu().numpy())
             all_intent_true.extend(batch['intent'].numpy())
-            all_intent_pred.extend(intent_logits.argmax(dim=1).cpu().numpy())
-
-    sent_f1 = f1_score(all_sent_true, all_sent_pred, average='macro')
-    sent_acc = accuracy_score(all_sent_true, all_sent_pred)
-    intent_f1 = f1_score(all_intent_true, all_intent_pred, average='macro')
-    intent_acc = accuracy_score(all_intent_true, all_intent_pred)
+            all_intent_pred.extend(i_logits.argmax(dim=1).cpu().numpy())
 
     if verbose:
-        print("\n  Sentiment Classification Report:")
-        print(classification_report(
-            all_sent_true, all_sent_pred, target_names=SENTIMENT_LABELS
-        ))
-        print("\n  Intent Classification Report:")
-        print(classification_report(
-            all_intent_true, all_intent_pred, target_names=INTENT_LABELS
-        ))
+        print("\n  Sentiment Report:")
+        print(classification_report(all_sent_true, all_sent_pred, target_names=SENTIMENT_LABELS))
+        print("\n  Intent Report:")
+        print(classification_report(all_intent_true, all_intent_pred, target_names=INTENT_LABELS))
 
     return {
-        'sentiment_f1': sent_f1,
-        'sentiment_accuracy': sent_acc,
-        'intent_f1': intent_f1,
-        'intent_accuracy': intent_acc,
+        'sentiment_f1':       f1_score(all_sent_true,   all_sent_pred,   average='macro'),
+        'sentiment_accuracy': accuracy_score(all_sent_true,   all_sent_pred),
+        'intent_f1':          f1_score(all_intent_true, all_intent_pred, average='macro'),
+        'intent_accuracy':    accuracy_score(all_intent_true, all_intent_pred),
     }
 
 
@@ -403,18 +443,17 @@ def evaluate(model, test_loader, device, verbose=False):
 
 def main():
     print("=" * 70)
-    print("NLP Pipeline Step 2: Fine-tune PhoBERT")
+    print("NLP Pipeline Step 2: Fine-tune PhoBERT [OPTIMIZED v2]")
     print("=" * 70)
-    print(f"Model: {PHOBERT_MODEL_NAME}")
-    print(f"Tasks: Sentiment (3) + Aspect (6) + Intent (4)")
-    print(f"Start: {datetime.now()}")
+    print(f"Tasks  : Sentiment(3) + Aspect(6) + Intent(4)")
+    print(f"Optims : LayerFreeze({FREEZE_N_LAYERS}/12) | FP16={USE_AMP} | "
+          f"GradAccum={GRAD_ACCUM_STEPS} | EarlyStop(p={EARLY_STOP_PATIENCE})")
+    print(f"Start  : {datetime.now()}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+    print(f"Device : {device}")
 
-    pdf = load_and_prepare_data()
-
-    print(f"\n  Loading tokenizer: {PHOBERT_MODEL_NAME}")
+    pdf       = load_and_prepare_data()
     tokenizer = AutoTokenizer.from_pretrained(PHOBERT_MODEL_NAME)
 
     train_loader, test_loader = create_dataloaders(pdf, tokenizer)
@@ -426,14 +465,13 @@ def main():
         num_intents=len(INTENT_LABELS),
     ).to(device)
 
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"  Total params: {total_params:,}, Trainable: {trainable_params:,}")
+    # === Optimization 1: Layer Freezing ===
+    model = apply_layer_freezing(model)
 
     train_model(model, train_loader, test_loader, device)
 
-    print(f"\nCompleted: {datetime.now()}")
-    print(f"  Next: Run inference_phobert.py to re-score all 465K comments")
+    print(f"\nCompleted : {datetime.now()}")
+    print(f"Next step : Run inference_phobert.py to re-score all comments")
 
 
 if __name__ == "__main__":

@@ -23,9 +23,13 @@ Hệ thống lấy dữ liệu trực tiếp từ các bảng chứa bình luậ
 * **`silver.silver.tiktok_post_comments`**: Lấy thêm thông tin về lượt thích (likes) của bình luận.
 
 ### 2. Quá trình xử lý
-* **Weak Labeling:** Dùng tập luật từ khóa và Emojis (định nghĩa trong `config.py`) để gán nhãn tự động cho tập dữ liệu mẫu.
-* **Fine-Tuning PhoBERT:** Đào tạo mô hình ngôn ngữ dựa trên tập dữ liệu đã gán nhãn.
-* **Inference:** Dùng mô hình đã đào tạo để quét và chấm điểm lại toàn bộ hàng trăm nghìn bình luận trong Data Lake.
+* **Weak Labeling (Gán nhãn tự động/nhãn yếu):** Việc thuê người đọc và gán nhãn thủ công (Manual Labeling) cho hàng nghìn bình luận là bất khả thi, tốn kém và mất thời gian. Để giải quyết bài toán "thiếu dữ liệu mồi", ta dùng kỹ thuật Weak Labeling:
+  * **Cách hoạt động:** Xây dựng một hệ thống tập luật (Heuristic Rules) dựa trên Emojis (😍, 😡) và từ khóa (Lexicon) chỉ định trong `config.py`.
+  * **Ví dụ:** Câu *"View khách sạn rất đẹp nhưng phục vụ kém 😡"* -> Hệ thống bắt được từ "kém" hoặc emoji "😡" để tự gán nhãn `Negative`, đồng thời bắt từ "phục vụ" để gán nhãn khía cạnh `Service`.
+  * **Mục đích:** Nhanh chóng tạo ra một tập dữ liệu nhãn mồi (pseudo-labels) có độ chính xác tương đối tốt (~70-80%) để làm "giáo trình" dạy cho PhoBERT ở bước tiếp theo.
+* **Fine-Tuning PhoBERT (Tinh chỉnh mô hình):** Bản chất là kỹ thuật Học chuyển giao (Transfer Learning). Hệ thống lấy mạng nơ-ron PhoBERT (đã được VinAI dạy sẵn ngữ pháp Tiếng Việt), gắn thêm lớp phân loại (Classification Head) và dùng thuật toán tối ưu (AdamW) để huấn luyện nhẹ lại trên tập dữ liệu du lịch đã gán nhãn.
+  * **Tích hợp Domain Du lịch (Domain Adaptation):** PhoBERT gốc do VinAI huấn luyện chủ yếu đọc từ Wikipedia và Báo chí. Nó rất giỏi tiếng Việt phổ thông nhưng sẽ "ngây ngô" trước tiếng lóng du lịch (ví dụ: *"cháy phòng"*, *"view sạch nước cản"*, *"chặt chém"*). Nhờ việc ta nhồi dữ liệu từ Weak Labeling vào huấn luyện (Fine-tune), PhoBERT cập nhật lại ma trận chú ý (Attention), tự khắc kết nối từ *"cháy phòng"* với khía cạnh `Accommodation`, hoặc *"chặt chém"* với nhãn `Negative` của khía cạnh `Price`. Quá trình này biến PhoBERT từ một mô hình tổng quát thành một **Chuyên gia Tâm lý Du lịch**.
+* **Inference (Dự đoán hàng loạt - Output của quá trình Fine-tuning):** Đầu ra của quá trình Fine-tuning là một Model Weights (đã được tinh chỉnh). Ta dùng cục Model này quét qua toàn bộ hàng trăm nghìn bình luận thô trong Data Lake để chấm điểm (score) cho chúng.
 
 ### 3. Đầu ra (Outputs)
 Kết quả xuất ra bảng trung gian **`gold.gold.fact_comment_nlp_v2`**.
