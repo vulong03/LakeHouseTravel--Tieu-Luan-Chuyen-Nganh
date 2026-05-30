@@ -96,8 +96,15 @@ def write_dq_result(conn, check_name, check_category, status, is_critical,
             json.dumps(details, ensure_ascii=False) if details else None
         ))
     conn.commit()
-    icon = "✅" if status == "PASS" else ("❌" if status == "FAIL" else "⚠️")
-    print(f"  {icon} [{check_category}] {check_name}: {status}")
+    icon = "✅" if status == "PASS" else ("❌" if status == "FAIL" else "⚠️ ")
+    crit = "[CRITICAL]" if is_critical else "[optional]"
+    if metric_value is not None and threshold_value is not None:
+        context = f"  →  {metric_value:.2f} vs threshold {threshold_value}"
+    elif metric_value is not None:
+        context = f"  →  value={metric_value:.2f}"
+    else:
+        context = ""
+    print(f"  {icon} {crit} [{check_category}] {check_name}: {status}{context}")
 
 # ============================================================================
 # DQ LOGIC
@@ -182,22 +189,33 @@ def run_dq_checks(spark, conn):
 # ============================================================================
 
 def main():
+    print("=" * 65)
+    print("  DATA QUALITY — Hotels Reviews")
+    print("=" * 65)
+    print(f"  Table     : {TARGET_TABLE}")
+    print(f"  Run time  : {RUN_TIMESTAMP}")
+    print("=" * 65)
+
     spark = get_spark_session(app_name="DQ_Hotels_Reviews")
-    
+
     try:
         conn = psycopg2.connect(**POSTGRES_CONN)
         ensure_dq_table(conn)
-        
+
         failures = run_dq_checks(spark, conn)
-        
-        print("\n" + "="*50)
+
+        print("\n" + "=" * 65)
+        print("  SUMMARY")
+        print("=" * 65)
         if failures:
-            print(f"❌ DQ FAILED: {len(failures)} critical failures.")
+            print(f"  ❌ DQ FAILED — {len(failures)} critical check(s) violated:")
+            for f in failures:
+                print(f"     • {f}")
             sys.exit(1)
         else:
-            print("✅ DQ PASSED.")
+            print("  ✅ ALL CRITICAL CHECKS PASSED")
             sys.exit(0)
-            
+
     except Exception as e:
         print(f"❌ ERROR: {str(e)}")
         import traceback

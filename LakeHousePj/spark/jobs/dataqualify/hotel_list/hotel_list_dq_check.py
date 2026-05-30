@@ -122,9 +122,15 @@ def write_dq_result(conn, check_name, check_category,
             json.dumps(details, ensure_ascii=False) if details else None
         ))
     conn.commit()
-    icon = "✅" if status == "PASS" else ("❌" if status == "FAIL" else "⚠️")
-    suffix = f" (value={metric_value:.2f}, threshold={threshold_value})" if metric_value is not None else ""
-    print(f"  {icon} [{check_category}] {check_name}: {status}{suffix}")
+    icon = "✅" if status == "PASS" else ("❌" if status == "FAIL" else "⚠️ ")
+    crit = "[CRITICAL]" if is_critical else "[optional]"
+    if metric_value is not None and threshold_value is not None:
+        context = f"  →  {metric_value:.2f} vs threshold {threshold_value}"
+    elif metric_value is not None:
+        context = f"  →  value={metric_value:.2f}"
+    else:
+        context = ""
+    print(f"  {icon} {crit} [{check_category}] {check_name}: {status}{context}")
 
 
 # ============================================================================
@@ -383,18 +389,18 @@ def main():
             all_failures.append("min_records")
 
         # ── Summary ─────────────────────────────────────────────
-        print("\n" + "=" * 70)
-        print("SUMMARY")
-        print("=" * 70)
+        print("\n" + "=" * 65)
+        print("  SUMMARY")
+        print("=" * 65)
 
         if all_failures:
-            print(f"❌ FAILED — {len(all_failures)} critical check(s) violated:")
+            print(f"  ❌ DQ FAILED — {len(all_failures)} critical check(s) violated:")
             for f in all_failures:
-                print(f"   • {f}")
+                print(f"     • {f}")
             conn.close()
             sys.exit(1)
         else:
-            print("✅ ALL CRITICAL CHECKS PASSED")
+            print("  ✅ ALL CRITICAL CHECKS PASSED")
             conn.close()
             sys.exit(0)
 
