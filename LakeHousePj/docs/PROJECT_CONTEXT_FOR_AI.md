@@ -66,8 +66,8 @@ ML Layer
 | Bảng | Grain | Timeline | Strategy | Ghi chú |
 |---|---|---|---|---|
 | `tiktok_videos` | 1 video | `posted_date` | MERGE (url) | Region partition |
-| `tiktok_post_metadata` | 1 bài đăng | `post_date`, `crawl_date` | APPEND | ~1.4K posts |
-| `tiktok_post_comments` | 1 comment | `comment_date`, `scrape_date` | APPEND | ~465K comments |
+| `tiktok_post_metadata` | 1 bài đăng | `post_date`, `crawl_date` | APPEND | ~6K posts |
+| `tiktok_post_comments` | 1 comment | `comment_date`, `scrape_date` | APPEND | ~855K comments |
 
 **Key columns TikTok:**
 - `tiktok_post_comments`: `post_url`, `stt`, `ten`, `tag_ten`, `comment`, `comment_date`, `level_comment` ("Yes"=cấp 1/"No"=cấp 2), `replied_to_tag_name`, `likes`
@@ -110,42 +110,54 @@ ML Layer
 
 ```
 spark/jobs/gold/
-├── dim_province/    → 63 tỉnh, map province_name_afterLaw (luật sáp nhập 2025: 63→38 đơn vị)
-├── dim_date/        → JDBC từ PostgreSQL, ~3.6K rows, 20 calendar columns
-├── dim_author/      → từ tiktok_post_metadata, dedup by author_tag
-├── dim_post/        → JOIN phức tạp: tiktok_post_metadata + tiktok_videos + dim_author + dim_province + dim_date
-│                      dim_province join bằng keyword "du lịch {province_name}"
-├── dim_comment/     → từ tiktok_post_comments, MERGE incremental (465K), business_key=(post_url_nk, stt)
+├── dim_province/    → 63 tỉnh, source: CSV tĩnh, map province_name_afterLaw (luật sáp nhập)
+├── dim_date/        → JDBC từ PostgreSQL, ~9.5K rows
+├── dim_author/      → từ lakehouse.silver.tiktok_post_metadata, dedup by author_tag (lấy latest crawl_time)
+├── dim_post/        → INNER JOIN: tiktok_post_metadata × tiktok_videos (filter read_status=1)
+│                      + join dim_author, dim_province, dim_date (2 FK: crawl_date_sk, post_date_sk)
+│                      dim_province join bằng extract keyword "du lịch {province_name}"
+├── dim_comment/     → từ tiktok_post_comments, MERGE incremental (855K), business_key=(post_url_nk, stt)
 ├── dim_hotel/       → từ hotels_detail + dim_province join
-└── dim_country/     → distinct countries từ hotels_reviews, map country→region bằng dict ~290 entries
+└── dim_country/     → distinct countries từ hotels_reviews
 ```
 
 **dim_post — Job phức tạp nhất:**
-- INNER JOIN `tiktok_post_metadata` với `tiktok_videos` (chỉ lấy `read_status=1`)
+- INNER JOIN `tiktok_post_metadata` với `tiktok_videos` (chỉ lấy `read_status=1`) — bài không có trong videos bị **loại**
+- Dedup by `post_url` (keep latest `crawl_time`)
 - Extract tỉnh từ `keyword` dạng "du lịch {tỉnh}" → lookup `dim_province`
-- 2 FK ngày: `crawl_date_sk` và `post_date_sk`
+- 2 FK ngày: `crawl_date_sk` (từ `crawl_time`) và `post_date_sk` (từ `post_date`)
 - Convert `has_sub` "yes"/"no" → Boolean
+- Write: **OVERWRITE** (`overwritePartitions()`)
 
 **dim_comment — Đặc biệt:**
-- Duy nhất dùng **MERGE incremental** (không OVERWRITE) vì volume 465K
-- Composite business key `(post_url_nk, stt)`, convert `level_comment` "Yes"/"No" → int 2/1
+- Duy nhất dùng **MERGE incremental** (không OVERWRITE) vì volume 855K
+- Composite business key `(post_url_nk, stt)`
+- Convert `level_comment`: **"Yes" → 2** (reply/cấp 2), **"No" → 1** (comment trực tiếp/cấp 1)
+  > ⚠️ Lưu ý: trong Silver `level_comment` "Yes"=cấp 1, nhưng khi vào Gold `dim_comment` đổi ngược lại thành `comment_level` int: "Yes"→2, "No"→1
 
 ### 3.2 Fact Tables
 
 **`fact_hotel_review_daily`** (grain: 1 review)
-- Source: `silver.hotels_reviews`
+- Source: `silver.silver.hotels_reviews`
 - Join: `dim_hotel` (by hotel_url, fallback by hotel_name), `dim_travel_type`, `dim_room_type`, `dim_country`, `dim_date` (stay_date)
+- Columns: `fact_id`, `hotel_sk`, `country_sk`, `stay_date_sk`, `traveler_type_sk`, `room_type_sk`, `review_score`, `reviewer_name`, `review_title`, `review_positive`, `review_negative`
+- ⚠️ **KHÔNG có** `is_low_score`, `is_high_score`, `review_score_bucket` — docstring sai, thực tế code không implement
 - Write: **APPEND** — ⚠️ BUG: không dedup, chạy 2 lần = duplicate toàn bộ
 
 **`fact_province_content_engagement`** (grain: 1 post)
-- Source: `gold.dim_post` + `silver.tiktok_post_metadata`
-- Columns: `post_sk`, `province_sk`, `date_sk`, `author_sk`, `likes`, `comments`, `saves`, `shares`, `engagement_score`
-- Write: **OVERWRITE**
+- Source: `gold.gold.dim_post` JOIN `gold.gold.dim_post` + `lakehouse.silver.tiktok_post_metadata` (lấy metrics: likes, comments, saves, shares)
+- Columns: `post_sk`, `province_sk`, `date_sk`, `author_sk`, `likes`, `comments`, `comments_crawled`, `saves`, `shares`, `level1_comments`, `level2_comments`, `engagement_score`
+- `engagement_score` = likes + comments + saves + shares (simple sum, không phải weighted)
+- Partition by: `province_sk`
+- Write: **OVERWRITE** (`overwritePartitions()`)
 
 **`fact_comment_nlp_engagement`** (grain: 1 comment, v1 - underthesea)
-- NLP bằng Pandas UDF + underthesea (sentiment binary) + emoji library
+- Source: `gold.gold.dim_comment` INNER JOIN `gold.gold.dim_post` + `lakehouse.silver.tiktok_post_comments` (lấy `comment_likes`)
+- Filter: chỉ lấy comment có `is_active=True`, `province_sk IS NOT NULL`, `comment_date_sk IS NOT NULL`
 - 8 NLP features: `word_count`, `unique_word_ratio`, `exclamation_count`, `sentiment_score`, `sentiment_label`, `emoji_count`, `positive_emoji_count`, `negative_emoji_count`
-- Write: **MERGE** incremental
+- Thêm: `comment_likes`, `comment_level`
+- Partition by: `province_sk`
+- Write: **MERGE** incremental (by `comment_sk`)
 
 **`fact_comment_nlp_v2`** (grain: 1 comment, PhoBERT - chạy riêng)
 - Source: `gold.dim_comment` + `gold.dim_post` + `silver.tiktok_post_comments`
@@ -161,25 +173,48 @@ spark/jobs/gold/
 
 | Nhóm | Count | Nguồn data |
 |---|---|---|
-| Volume & Activity | 6 | TikTok posts + comments count |
-| TikTok Engagement | 7 | likes/saves/shares avg, p90, viral_ratio |
-| NLP & Sentiment | 10 | sentiment score/std, ratios, word stats, emoji, reply_ratio |
-| Aspect Scores (NLP v2) | 6 | avg_aspect_scenery/food/price/service/transport/accommodation |
-| Hotel / Booking | 7 | avg_hotel_score, hotel_score_std, review_volume, high/low_score_ratio, unique_reviewer_countries, domestic_review_ratio |
-| Temporal + Lags | 10 | month_sin, month_cos, is_peak_season, hotness_score, lag_1/2/3/12, rolling_3m, momentum |
+| Keys + Metadata | 6 | province_sk, province_name, region, year_month, year, month |
+| Group 1: Volume & Activity | 6 | total_posts, total_comments, total_hotel_reviews, unique_authors, comments_per_post, post_frequency |
+| Group 2: TikTok Engagement | 7 | avg_likes/saves/shares_per_post, median_likes, p90_likes, viral_post_ratio, engagement_score |
+| Group 3: NLP & Sentiment | 10 | avg_sentiment, sentiment_std, positive/negative_ratio, sentiment_polarity, avg_word_count, word_count_std, avg_unique_word_ratio, emoji_sentiment_ratio, reply_ratio |
+| Group 3b: Aspect Scores (NLP v2) | 6 | avg_aspect_scenery/food/price/service/transport/accommodation (= 0.0 nếu dùng NLP v1) |
+| Group 4: Hotel / Booking | 7 | avg_hotel_score, hotel_score_std, hotel_review_volume, high/low_score_ratio, unique_reviewer_countries, domestic_review_ratio |
+| Group 5: Temporal | 4 | month_sin, month_cos, is_peak_season, hotness_score |
+| Group 6: Lags | 6 | hotness_lag_1/2/3/12, hotness_rolling_3m, hotness_momentum |
 
-**Hotness Score Formula** (target variable cho LSTM):
+**Hotness Score Formula** (window = cùng `year` × `month`):
 ```python
-# Dùng percent_rank() trong cùng year_month window → normalize 0-1
-hotness_score = (
-    norm_volume    * 0.25  # posts + comments percent_rank
-    + norm_engagement * 0.35  # likes/saves/comment_likes percent_rank
-    + norm_sentiment  * 0.20  # positive_ratio + avg_sentiment - negative_ratio
-    + norm_emoji      * 0.05  # emoji_sentiment_ratio
-    + norm_nlp        * 0.15  # word_count + unique_word_ratio
+# Weights từ config.py HOTNESS_WEIGHTS
+norm_volume = (
+    percent_rank(total_posts)    * 0.6
+    + percent_rank(total_comments) * 0.4
 )
-# clamp [0, 1]
+norm_engagement = (
+    percent_rank(avg_likes_per_post)     * 0.45
+    + percent_rank(avg_saves_per_post)   * 0.35
+    + percent_rank(_total_comment_likes) * 0.20
+)
+norm_sentiment = (
+    percent_rank(positive_ratio)     * 0.5
+    + percent_rank(avg_sentiment)    * 0.3
+    + (1 - percent_rank(negative_ratio)) * 0.2
+)
+norm_emoji = percent_rank(emoji_sentiment_ratio)
+norm_nlp = (
+    percent_rank(avg_word_count)        * 0.45
+    + percent_rank(avg_unique_word_ratio) * 0.45
+    + percent_rank(CV_word_count)         * 0.10
+)
+
+hotness_score = GREATEST(0, LEAST(1,
+    norm_volume    * w["volume"]       # 0.25
+    + norm_engagement * w["engagement"]  # 0.35
+    + norm_sentiment  * w["sentiment"]   # 0.20
+    + norm_emoji      * w["emoji_vibe"]  # 0.05
+    + norm_nlp        * w["nlp_richness"] # 0.15
+))
 ```
+> **Lưu ý config key tên:** `emoji_vibe` và `nlp_richness` (không phải `emoji` và `nlp`)
 
 ⚠️ **Vấn đề với hotness_score:** Đây là composite index tự thiết kế từ `percent_rank()` — **không phải số liệu du lịch thực tế** (lượt khách/doanh thu). Mô hình đang "tự tạo target rồi dự báo target đó" — cần defend rõ trong báo cáo.
 
@@ -236,13 +271,15 @@ LSTMForecaster:
     → FC: Linear(32→16) → ReLU → Dropout(0.3) → Linear(16→1)
 ```
 
-**26 input features** (từ `fact_province_month_dl_features`):
+**26 input features** (từ `fact_province_month_dl_features` — cần verify lại khi `fact_province_month_dl_features` được tạo):
 - 2 temporal: `month_sin`, `month_cos`
 - 6 lag: `hotness_lag_1/2/3/12`, `hotness_rolling_3m`, `hotness_momentum`
 - 5 volume: `total_posts`, `total_comments`, `total_hotel_reviews`, `unique_authors`, `comments_per_post`
 - 5 engagement: `avg_likes_per_post`, `avg_saves_per_post`, `avg_shares_per_post`, `viral_post_ratio`, `engagement_score`
 - 8 NLP: `avg_sentiment`, `sentiment_std`, `positive_ratio`, `negative_ratio`, `avg_word_count`, `avg_unique_word_ratio`, `emoji_sentiment_ratio`, `reply_ratio`
 - 5 hotel: `avg_hotel_score`, `hotel_score_std`, `hotel_review_volume`, `high_score_ratio`, `domestic_review_ratio`
+
+> ⚠️ **`fact_province_month_dl_features` chưa tồn tại** — LSTM chưa bao giờ thực sự train. Feature list trên là theo thiết kế trong `train_lstm_forecast.py`.
 
 **Training config:**
 - `SEQUENCE_LENGTH = 4` (4 tháng liên tiếp → predict tháng kế tiếp)
@@ -488,13 +525,16 @@ docs/
 1. **Catalog TikTok là `lakehouse`** (không phải `silver`): `spark.table("lakehouse.silver.tiktok_videos")`
 2. **Catalog Hotel là `silver`**: `spark.table("silver.silver.hotels_reviews")`
 3. **Catalog Gold là `gold`**: `spark.table("gold.gold.dim_post")`
-4. **`level_comment` "Yes" = cấp 1** (trực tiếp), "No" = cấp 2 (reply) — tên ngược logic
-5. **PhoBERT inference chưa trong DAG** — aspect features có thể = 0 nếu chưa chạy riêng
-6. **`fact_hotel_review_daily` có APPEND bug** — duplicate nếu chạy >1 lần
-7. **`hotness_score` là self-constructed index** — không phải KPI du lịch thực tế
-8. **LSTM cần ≥ 12 tháng lịch sử/tỉnh** (`hotness_lag_12`) — tỉnh có ít data bị drop
-9. **Surrogate keys không stable** giữa các lần OVERWRITE — potential FK issue
-10. **Chỉ `hotels_reviews.stay_date`** là timeline thực sự từ hotel data — `hotels_detail` và `hotels_list` là static
+4. **`level_comment` trong Silver**: "Yes"=cấp 1 (bình luận trực tiếp), "No"=cấp 2 (reply) — tên ngược logic
+5. **`comment_level` trong Gold `dim_comment`**: "Yes"→**2**, "No"→**1** ← ngược lại so với Silver! Code convert: `when("yes")→2, when("no")→1`
+6. **PhoBERT inference chưa trong DAG** — aspect features có thể = 0 nếu chưa chạy riêng
+7. **`fact_hotel_review_daily` có APPEND bug** — duplicate nếu chạy >1 lần
+8. **`hotness_score` là self-constructed index** — không phải KPI du lịch thực tế
+9. **LSTM cần ≥ 12 tháng lịch sử/tỉnh** (`hotness_lag_12`) — tỉnh có ít data bị drop
+10. **Surrogate keys không stable** giữa các lần OVERWRITE — potential FK issue
+11. **`hotels_reviews` có 2 cột ngày:** `stay_date` (ngày lưu trú) và `review_date` (ngày viết review) — cả hai đều tồn tại. Tuy nhiên **`stay_date` là trục thời gian chính** dùng để join `dim_date` trong Gold và làm feature cho ML (vì phản ánh thời điểm du lịch thực tế). `review_date` chỉ dùng nội bộ (ví dụ: orderBy trong fact job). `hotels_detail` và `hotels_list` mới là hoàn toàn static (không có timeline).
+12. **`fact_hotel_review_daily` KHÔNG có** `is_low_score`/`is_high_score`/`review_score_bucket` — docstring của job đề cập nhưng thực tế không implement
+13. **`dim_post` chỉ lấy bài có `read_status=1`** trong `tiktok_videos` → INNER JOIN → một số bài trong `tiktok_post_metadata` không vào Gold nếu không có trong `tiktok_videos`
 
 ---
 

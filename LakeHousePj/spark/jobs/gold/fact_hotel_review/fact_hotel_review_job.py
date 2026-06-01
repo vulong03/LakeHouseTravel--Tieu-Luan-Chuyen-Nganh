@@ -171,7 +171,7 @@ def transform(spark, df: DataFrame) -> DataFrame:
         how="left",
     )
 
-    # Generate surrogate fact_id
+    # Generate surrogate fact_id — row_number() cho số liên tục 1, 2, 3, ...
     window = Window.orderBy("review_date", "hotel_name")
     final = joined.withColumn("fact_id", F.row_number().over(window).cast(LongType()))
 
@@ -196,8 +196,14 @@ def transform(spark, df: DataFrame) -> DataFrame:
 
 
 def write_to_gold(df: DataFrame):
-    print(f"Writing {df.count():,} rows to {GOLD_TABLE_FULL} (append)")
-    df.writeTo(GOLD_TABLE_FULL).using("iceberg").append()
+    """Write fact data to Gold Iceberg table.
+
+    Mode: OVERWRITE (idempotent — chạy bao nhiêu lần cũng ra cùng kết quả).
+    Thay thế APPEND cũ để tránh inflate data khi DAG chạy nhiều lần.
+    """
+    count = df.count()
+    print(f"Writing {count:,} rows to {GOLD_TABLE_FULL} (overwrite)")
+    df.writeTo(GOLD_TABLE_FULL).using("iceberg").overwritePartitions()
     print("Write complete")
 
 
