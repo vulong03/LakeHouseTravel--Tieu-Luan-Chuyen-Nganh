@@ -1,6 +1,7 @@
 # Implementation Plan: Nâng cấp ML Pipeline — Tourism Trend Forecasting
 
 > **Tạo ngày:** 2026-05-30  
+> **Cập nhật:** 2026-06-03  
 > **Trạng thái:** Đã được duyệt — sẵn sàng thực thi  
 > **Workspace:** `d:\CodeStored\Nam_4\TieuLuanCuoiKy\LakeHouse\LakeHousePj`
 
@@ -18,7 +19,46 @@
 - Target variable rõ ràng: `hotel_review_volume` (lượt đặt phòng thực tế theo `stay_date`) = proxy đo lường du lịch thực
 - Tích hợp đầy đủ hotel signals: volume growth + traveler_type distribution theo tháng
 - LSTM train xong, forecast 12 tháng, so sánh được với legacy XGBoost/RF
-- Câu chuyện học thuật rõ: *"TikTok social signals + Booking.com demand signals → predict future hotel booking volume per province"*
+- Câu chuyện học thuật rõ và defensible về mặt khoa học (xem chi tiết mục bên dưới)
+
+---
+
+## Câu chuyện học thuật (Academic Narrative)
+
+Câu chuyện chính được chọn:
+
+> **"Social Media as a Leading Indicator of Tourism Demand"**
+>
+> *TikTok viral signals (sentiment, engagement, volume) xuất hiện **trước** hành vi đặt phòng — người xem TikTok về Đà Lạt tháng 1, rồi đặt phòng tháng 3. Nếu LSTM học được độ trễ này từ lag features → có giá trị dự báo thực sự và defensible về học thuật.*
+
+Các câu chuyện bổ sung có thể tích hợp vào báo cáo:
+
+| # | Câu chuyện | Đóng góp chính | Dữ liệu cần |
+|---|---|---|---|
+| 1 | **Leading Indicator** (chính) | TikTok buzz → dự báo booking volume | Có sẵn |
+| 2 | **Recovery & Seasonality** | Phân tích phục hồi sau COVID, mùa vụ theo tỉnh | Có sẵn (2019-2025) |
+| 3 | **Destination Competitiveness** | Tỉnh nào đang nổi lên vs bão hòa | Có sẵn sau Phase 1 |
+| 4 | **Traveler Segmentation** | Couple/family react khác nhau với social media | Có sẵn sau Phase 1 |
+| 5 | **LakeHouse Architecture** | Hệ thống tích hợp dữ liệu heterogeneous | Đã có |
+
+### Phân rã Trend vs Seasonality trong Feature Design
+
+Mô hình cần học được **cả hai tín hiệu** mà không bị lẫn lộn — đây là điểm thiết kế quan trọng cần giải thích trong báo cáo.
+
+**Nhóm features học Mùa vụ (Seasonality):**
+- `month_sin` / `month_cos`, `is_peak_season` — định vị thời điểm trong năm
+- `hotel_vol_lag_12` — giá trị cùng kỳ năm ngoái (điểm baseline mùa vụ)
+
+**Nhóm features học Xu hướng (Trend & Momentum):**
+- `hotel_vol_lag_1`, `hotel_vol_lag_3` — tín hiệu ngắn hạn gần nhất
+- `hotel_vol_growth` (month-over-month %) — đo tốc độ tăng trưởng hiện tại
+- `hotel_vol_rolling_3m` — xu hướng trung bình 3 tháng gần đây
+
+Cách LSTM kết hợp hai tín hiệu:
+> *Nếu tháng 7 năm ngoái Nha Trang có 100k reviews (`lag_12`) và xu hướng tăng trưởng gần đây là +15% (`vol_growth`) → LSTM dự báo tháng 7 năm nay ~115k. Model học được quy luật mùa vụ lẫn xu hướng tăng trưởng trong cùng một pass.*
+
+> [!NOTE]
+> **Grain của bảng ML features:** 1 row = 1 tỉnh × 1 tháng (~60 tỉnh × ~72 tháng = ~1,500 rows). Dữ liệu raw (800k comments, 1.55M reviews) được **aggregate trước** theo province-month — đây là thiết kế đúng cho bài toán dự báo monthly trend, không cần học từng comment riêng lẻ.
 
 ---
 
@@ -200,23 +240,97 @@ df[TARGET_COL] = np.log1p(df[TARGET_COL])  # log(x + 1)
 # predicted_volume = np.expm1(predicted_log_volume)
 ```
 
-### Thay đổi 4: Cập nhật output table schema
+### Thay đổi 4: Cập nhật output table schema đầy đủ
+
+Bảng `gold.gold.province_month_forecast_lstm_next12` — mỗi row là 1 tỉnh × 1 tháng dự báo:
+
+| Cột | Kiểu | Nguồn gốc |
+|---|---|---|
+| `province_sk` | Long | Copy từ dòng lịch sử cuối cùng của tỉnh |
+| `province_name` | String | Copy từ `dim_province` qua lịch sử |
+| `region` | String | Copy từ `dim_province` qua lịch sử |
+| `year` | Integer | Tính bằng code: `last_month + horizon` |
+| `month` | Integer | Tính bằng code: `last_month + horizon` |
+| `year_month` | Integer | Tính bằng code: ví dụ `202607` |
+| `horizon_month` | Integer | Vòng lặp `1 → 12` (số tháng trong tương lai) |
+| `predicted_hotel_volume` | Double | **Mô hình LSTM tính ra** (log-scale) |
+| `predicted_hotel_volume_actual` | Double | `np.expm1(predicted_hotel_volume)` — số phòng thực tế |
+| `predicted_growth_pct` | Double | `(pred_actual - last_actual) / last_actual × 100` |
+| `forecast_date` | String | `datetime.now()` — ngày chạy mô hình |
+| `model_version` | String | Hardcode: `'lstm_v3_volume'` |
 
 ```python
-# Output: province_month_forecast_lstm_next12
-StructField("predicted_hotel_volume",        DoubleType(), True),  # log-scale
-StructField("predicted_hotel_volume_actual", DoubleType(), True),  # expm1 converted
-StructField("predicted_growth_pct",          DoubleType(), True),  # vs last known month
+# Schema đầy đủ:
+schema = StructType([
+    StructField("province_sk",                   LongType(),    False),
+    StructField("province_name",                 StringType(),  False),
+    StructField("region",                        StringType(),  False),
+    StructField("year",                          IntegerType(), False),
+    StructField("month",                         IntegerType(), False),
+    StructField("year_month",                    IntegerType(), False),
+    StructField("horizon_month",                 IntegerType(), False),
+    StructField("predicted_hotel_volume",        DoubleType(),  True),  # log-scale
+    StructField("predicted_hotel_volume_actual", DoubleType(),  True),  # expm1
+    StructField("predicted_growth_pct",          DoubleType(),  True),  # %
+    StructField("forecast_date",                 StringType(),  False),
+    StructField("model_version",                 StringType(),  False),
+])
+
+# Logic sinh ra 1 dòng output (trong vòng lặp forecast):
+last_actual_volume = group["hotel_review_volume"].iloc[-1]  # tháng cuối có dữ liệu thực
+
+for horizon in range(1, 13):
+    tym, ty, tm = calculate_next_month(last_ym, horizon)    # tính tháng tương lai
+    pred_log    = model(last_sequence)                       # LSTM dự đoán (log)
+    pred_actual = np.expm1(pred_log)                         # chuyển về số thực
+    growth_pct  = (pred_actual - last_actual_volume) / last_actual_volume * 100
+
+    results.append({
+        'province_sk': province_sk,        # từ lịch sử
+        'province_name': province_name,    # từ lịch sử
+        'region': region,                  # từ lịch sử
+        'year': ty,                        # tính ra từ last_ym + horizon
+        'month': tm,                       # tính ra từ last_ym + horizon
+        'year_month': tym,                 # tính ra từ last_ym + horizon
+        'horizon_month': horizon,          # vòng lặp 1..12
+        'predicted_hotel_volume': pred_log,
+        'predicted_hotel_volume_actual': pred_actual,
+        'predicted_growth_pct': growth_pct,
+        'forecast_date': datetime.now().strftime('%Y-%m-%d'),
+        'model_version': 'lstm_v3_volume'
+    })
 ```
 
-### Thay đổi 5: Evaluation metrics
+### Thay đổi 5: Evaluation — Ground Truth và cách đo hiệu suất
+
+**Target label để đánh giá mô hình là `hotel_review_volume` thực tế trên tập Test (30% cuối).**
+
+Dữ liệu chia theo thời gian (Time-based split, không random) để tránh data leakage:
+- **Train set (70% đầu):** Khoảng 2019–2023 — mô hình học pattern từ đây
+- **Test set (30% cuối):** Khoảng 2024–2025 — dùng để chấm điểm, mô hình **chưa từng thấy**
 
 ```python
+# So sánh trên tập Test:
+# y_true = hotel_review_volume thực tế từ Booking.com (ground truth)
+# y_pred = giá trị mô hình LSTM dự đoán
+
 def mean_absolute_percentage_error(y_true, y_pred):
     mask = y_true > 0
     return np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
 
-# Report: RMSE, MAE, R², MAPE
+# Ví dụ 1 điểm data:
+# y_true = 40,000  (thực tế tháng 7/2025 Nha Trang — từ Booking.com)
+# y_pred = 38,000  (LSTM dự đoán)
+# MAPE điểm này = |40,000 - 38,000| / 40,000 × 100 = 5%
+
+# Report đầy đủ: RMSE, MAE, R², MAPE
+```
+
+**Ngưỡng hiệu suất chấp nhận được:**
+```
+R²   > 0.70   (model giải thích được >70% variance)
+MAPE < 30%    (sai số tương đối trung bình <30%)
+RMSE thấp hơn naive baseline (predict = giá trị tháng trước)
 ```
 
 ---

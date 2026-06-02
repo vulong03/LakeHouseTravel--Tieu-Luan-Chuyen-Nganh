@@ -31,7 +31,7 @@ from config import (
     FACT_COMMENT_NLP_TABLE, FACT_COMMENT_NLP_V2_TABLE,
     FACT_PROVINCE_CONTENT_TABLE, FACT_HOTEL_REVIEW_TABLE,
     DIM_PROVINCE_TABLE, DIM_DATE_TABLE, DIM_POST_TABLE,
-    DIM_HOTEL_TABLE, DIM_COUNTRY_TABLE,
+    DIM_HOTEL_TABLE, DIM_COUNTRY_TABLE, DIM_TRAVEL_TYPE_TABLE,
     GOLD_CATALOG, GOLD_DATABASE, GOLD_TABLE, GOLD_TABLE_FULL,
     PARQUET_EXPORT_PATH, SOURCE_DESCRIPTION,
     HOTNESS_WEIGHTS, VIETNAM_COUNTRY_NAME,
@@ -97,7 +97,7 @@ def create_output_table(spark: SparkSession) -> None:
         StructField("avg_aspect_transport", DoubleType(), True),
         StructField("avg_aspect_accommodation", DoubleType(), True),
 
-        # Group 4: Hotel / Booking (7)
+        # Group 4: Hotel / Booking (12)
         StructField("avg_hotel_score", DoubleType(), True),
         StructField("hotel_score_std", DoubleType(), True),
         StructField("hotel_review_volume", LongType(), True),
@@ -105,6 +105,11 @@ def create_output_table(spark: SparkSession) -> None:
         StructField("low_score_ratio", DoubleType(), True),
         StructField("unique_reviewer_countries", LongType(), True),
         StructField("domestic_review_ratio", DoubleType(), True),
+        StructField("couple_ratio", DoubleType(), True),
+        StructField("family_ratio", DoubleType(), True),
+        StructField("business_ratio", DoubleType(), True),
+        StructField("solo_ratio", DoubleType(), True),
+        StructField("hotel_vol_growth", DoubleType(), True),
 
         # Group 5: Temporal (4)
         StructField("month_sin", DoubleType(), True),
@@ -112,13 +117,19 @@ def create_output_table(spark: SparkSession) -> None:
         StructField("is_peak_season", BooleanType(), True),
         StructField("hotness_score", DoubleType(), True),
 
-        # Group 6: Lags (6)
+        # Group 6: Lags (12)
         StructField("hotness_lag_1", DoubleType(), True),
         StructField("hotness_lag_2", DoubleType(), True),
         StructField("hotness_lag_3", DoubleType(), True),
         StructField("hotness_lag_12", DoubleType(), True),
         StructField("hotness_rolling_3m", DoubleType(), True),
         StructField("hotness_momentum", DoubleType(), True),
+        StructField("hotel_vol_lag_1", LongType(), True),
+        StructField("hotel_vol_lag_2", LongType(), True),
+        StructField("hotel_vol_lag_3", LongType(), True),
+        StructField("hotel_vol_lag_12", LongType(), True),
+        StructField("hotel_vol_rolling_3m", DoubleType(), True),
+        StructField("hotel_vol_momentum", LongType(), True),
 
         # Metadata
         StructField("created_at", TimestampType(), False),
@@ -176,8 +187,8 @@ def aggregate_post_engagement(spark: SparkSession) -> DataFrame:
         F.avg("likes").alias("avg_likes_per_post"),
         F.avg("saves").alias("avg_saves_per_post"),
         F.avg("shares").alias("avg_shares_per_post"),
-        F.expr("percentile_approx(likes, 0.5)").alias("median_likes_per_post"),
-        F.expr("percentile_approx(likes, 0.9)").alias("p90_likes_per_post"),
+        F.expr("percentile_approx(likes, 0.5)").cast("double").alias("median_likes_per_post"),
+        F.expr("percentile_approx(likes, 0.9)").cast("double").alias("p90_likes_per_post"),
 
         F.sum(
             F.col("likes") + F.col("comments") + F.col("saves") + F.col("shares")
@@ -335,12 +346,14 @@ def aggregate_hotel_reviews(spark: SparkSession) -> DataFrame:
     df_hotels = spark.table(DIM_HOTEL_TABLE).select("hotel_sk", "province_sk")
     df_dates = spark.table(DIM_DATE_TABLE).select("date_sk", "year_month")
     df_countries = spark.table(DIM_COUNTRY_TABLE).select("country_sk", "country_name")
+    df_travel = spark.table(DIM_TRAVEL_TYPE_TABLE).select("traveler_type_sk", "traveler_type_name")
 
     df = (
         df_reviews
         .join(df_hotels, "hotel_sk", "inner")
         .join(df_dates, df_reviews.stay_date_sk == df_dates.date_sk, "left")
         .join(df_countries, "country_sk", "left")
+        .join(df_travel, "traveler_type_sk", "left")
         .where(F.col("province_sk").isNotNull())
     )
 
@@ -360,6 +373,16 @@ def aggregate_hotel_reviews(spark: SparkSession) -> DataFrame:
 
         (F.sum(F.when(F.col("country_name") == VIETNAM_COUNTRY_NAME, 1).otherwise(0))
          / total_col).alias("domestic_review_ratio"),
+
+        # Traveler type ratios
+        (F.sum(F.when(F.col("traveler_type_name").contains("Cặp đôi"), 1).otherwise(0))
+         / total_col).alias("couple_ratio"),
+        (F.sum(F.when(F.col("traveler_type_name").contains("Gia đình"), 1).otherwise(0))
+         / total_col).alias("family_ratio"),
+        (F.sum(F.when(F.col("traveler_type_name").contains("Công tác"), 1).otherwise(0))
+         / total_col).alias("business_ratio"),
+        (F.sum(F.when(F.col("traveler_type_name").contains("Một mình"), 1).otherwise(0))
+         / total_col).alias("solo_ratio"),
     )
 
     row_count = agg.count()
@@ -386,6 +409,7 @@ def build_combined_features(
     # --- Join ---
     df = df_posts.join(df_comments, on=["province_sk", "year_month"], how="left")
     df = df.join(df_hotels, on=["province_sk", "year_month"], how="left")
+    df = df.withColumn("total_hotel_reviews", F.col("hotel_review_volume"))
 
     # --- Province info ---
     df_province = spark.table(DIM_PROVINCE_TABLE).select(
@@ -405,6 +429,7 @@ def build_combined_features(
         "hotel_review_volume", "avg_hotel_score", "hotel_score_std",
         "high_score_ratio", "low_score_ratio",
         "unique_reviewer_countries", "domestic_review_ratio",
+        "couple_ratio", "family_ratio", "business_ratio", "solo_ratio",
     ]
     df = df.fillna(0, subset=fill_zero_cols)
 
@@ -492,6 +517,24 @@ def build_combined_features(
         F.col("hotness_lag_1") - F.col("hotness_lag_3")
     )
 
+    # Hotel review volume lags
+    df = df.withColumn("hotel_vol_lag_1", F.lag("hotel_review_volume", 1).over(window_province))
+    df = df.withColumn("hotel_vol_lag_2", F.lag("hotel_review_volume", 2).over(window_province))
+    df = df.withColumn("hotel_vol_lag_3", F.lag("hotel_review_volume", 3).over(window_province))
+    df = df.withColumn("hotel_vol_lag_12", F.lag("hotel_review_volume", 12).over(window_province))
+
+    df = df.withColumn("hotel_vol_rolling_3m", F.avg("hotel_review_volume").over(window_rolling))
+
+    df = df.withColumn("hotel_vol_momentum",
+        F.col("hotel_vol_lag_1") - F.col("hotel_vol_lag_3")
+    )
+
+    df = df.withColumn("hotel_vol_growth",
+        F.when(F.col("hotel_vol_lag_1") > 0,
+               (F.col("hotel_review_volume") - F.col("hotel_vol_lag_1")) / F.col("hotel_vol_lag_1")
+        ).otherwise(F.lit(0.0))
+    )
+
     # --- Drop internal columns ---
     df = df.drop("_total_comment_likes")
 
@@ -522,11 +565,15 @@ def build_combined_features(
         "avg_hotel_score", "hotel_score_std", "hotel_review_volume",
         "high_score_ratio", "low_score_ratio",
         "unique_reviewer_countries", "domestic_review_ratio",
+        "couple_ratio", "family_ratio", "business_ratio", "solo_ratio",
+        "hotel_vol_growth",
         # Temporal
         "month_sin", "month_cos", "is_peak_season", "hotness_score",
         # Lags
         "hotness_lag_1", "hotness_lag_2", "hotness_lag_3", "hotness_lag_12",
         "hotness_rolling_3m", "hotness_momentum",
+        "hotel_vol_lag_1", "hotel_vol_lag_2", "hotel_vol_lag_3", "hotel_vol_lag_12",
+        "hotel_vol_rolling_3m", "hotel_vol_momentum",
         # Metadata
         "created_at", "updated_at",
     ]

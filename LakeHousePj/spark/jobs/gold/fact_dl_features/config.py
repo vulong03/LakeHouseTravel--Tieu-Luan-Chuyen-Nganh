@@ -17,6 +17,7 @@ DIM_DATE_TABLE = "gold.gold.dim_date"
 DIM_POST_TABLE = "gold.gold.dim_post"
 DIM_HOTEL_TABLE = "gold.gold.dim_hotel"
 DIM_COUNTRY_TABLE = "gold.gold.dim_country"
+DIM_TRAVEL_TYPE_TABLE = "gold.gold.dim_travel_type"
 
 # ============================================================
 # Target Table
@@ -85,6 +86,8 @@ HOTEL_FEATURES = [
     "avg_hotel_score", "hotel_score_std", "hotel_review_volume",
     "high_score_ratio", "low_score_ratio",
     "unique_reviewer_countries", "domestic_review_ratio",
+    "couple_ratio", "family_ratio", "business_ratio", "solo_ratio",
+    "hotel_vol_growth",
 ]
 
 TEMPORAL_FEATURES = [
@@ -96,7 +99,12 @@ LAG_FEATURES = [
     "hotness_rolling_3m", "hotness_momentum",
 ]
 
+HOTEL_LAG_FEATURES = [
+    "hotel_vol_lag_1", "hotel_vol_lag_2", "hotel_vol_lag_3", "hotel_vol_lag_12",
+    "hotel_vol_rolling_3m", "hotel_vol_momentum",
+]
+
 ALL_ML_FEATURES = (
     VOLUME_FEATURES + ENGAGEMENT_FEATURES + NLP_FEATURES
-    + HOTEL_FEATURES + TEMPORAL_FEATURES + LAG_FEATURES
+    + HOTEL_FEATURES + TEMPORAL_FEATURES + LAG_FEATURES + HOTEL_LAG_FEATURES
 )

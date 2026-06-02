@@ -494,6 +494,8 @@ services:
       - "7860:7860"  # Gradio UI
     environment:
       MLFLOW_TRACKING_URI: http://mlflow:5000
+      no_proxy: localhost,127.0.0.1
+      NO_PROXY: localhost,127.0.0.1
     volumes:
       - ./gradio:/app
       - ./spark/jobs:/opt/spark/jobs  # Access to utils

@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
 
 # Install MLflow and dependencies
 RUN pip install --no-cache-dir \
-    mlflow==2.9.2 \
+    mlflow==2.17.2 \
     psycopg2-binary==2.9.9 \
     boto3==1.34.34 \
     pymysql==1.1.0

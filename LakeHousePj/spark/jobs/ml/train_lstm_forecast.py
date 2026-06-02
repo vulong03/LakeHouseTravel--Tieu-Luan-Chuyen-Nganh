@@ -58,8 +58,8 @@ from utils.iceberg_utils import create_iceberg_table_if_not_exists
 # ============================================================
 
 MLFLOW_TRACKING_URI = "postgresql://lakehouse_user:lakehouse_pass@postgres:5432/mlflow_db"
-EXPERIMENT_NAME = "province_hotness_forecasting_lstm"
-MODEL_NAME = "province_hotness_forecaster_lstm"
+EXPERIMENT_NAME = "province_hotel_volume_forecasting_lstm"
+MODEL_NAME = "province_hotel_volume_forecaster_lstm"
 
 DL_FEATURES_TABLE = "gold.gold.fact_province_month_dl_features"
 
@@ -74,14 +74,14 @@ LEARNING_RATE = 0.001
 EPOCHS = 150
 BATCH_SIZE = 32
 PATIENCE = 20
-TARGET = "hotness_score"
+TARGET = "hotel_review_volume"
 
 # Features read from DL fact table — no inline computation needed
 TEMPORAL_FEATURES = ["month_sin", "month_cos"]
 
 LAG_FEATURES = [
-    "hotness_lag_1", "hotness_lag_2", "hotness_lag_3",
-    "hotness_lag_12", "hotness_rolling_3m", "hotness_momentum",
+    "hotel_vol_lag_1", "hotel_vol_lag_2", "hotel_vol_lag_3",
+    "hotel_vol_lag_12", "hotel_vol_rolling_3m", "hotel_vol_momentum",
 ]
 
 VOLUME_FEATURES = [
@@ -92,6 +92,7 @@ VOLUME_FEATURES = [
 ENGAGEMENT_FEATURES = [
     "avg_likes_per_post", "avg_saves_per_post", "avg_shares_per_post",
     "viral_post_ratio", "engagement_score",
+    "hotness_score",  # hotness_score acts as input feature (social attention index)
 ]
 
 NLP_FEATURES = [
@@ -101,8 +102,10 @@ NLP_FEATURES = [
 ]
 
 HOTEL_FEATURES = [
-    "avg_hotel_score", "hotel_score_std", "hotel_review_volume",
+    "avg_hotel_score", "hotel_score_std",
     "high_score_ratio", "domestic_review_ratio",
+    "couple_ratio", "family_ratio", "business_ratio", "solo_ratio",
+    "hotel_vol_growth",
 ]
 
 ALL_FEATURES = (
@@ -216,8 +219,10 @@ def load_features(spark):
     # Drop rows with missing lag features (first 12 months per province)
     before = df.count()
     df = df.dropna(subset=LAG_FEATURES + [TARGET])
+    # Also filter out zero-volume rows: log1p(0)=0 is ambiguous ("no data" vs "true zero")
+    df = df.filter(F.col(TARGET) > 0)
     after = df.count()
-    print(f"  Dropped {before - after} rows with NULL lags, remaining: {after}")
+    print(f"  Dropped {before - after} rows (NULL lags or zero target), remaining: {after}")
     print(f"  Features: {len(ALL_FEATURES)} ({len(TEMPORAL_FEATURES)} temporal "
           f"+ {len(LAG_FEATURES)} lag + {len(VOLUME_FEATURES)} volume "
           f"+ {len(ENGAGEMENT_FEATURES)} engagement + {len(NLP_FEATURES)} nlp "
@@ -264,6 +269,14 @@ def train_model(df):
     df_pd = df.select(select_cols).toPandas()
     df_pd = df_pd.sort_values(["province_sk", "year_month"])
     df_pd[ALL_FEATURES] = df_pd[ALL_FEATURES].fillna(0)
+
+    # Clamp hotel_vol_growth to [-1.0, 5.0] to prevent MinMaxScaler distortion.
+    # Outliers (e.g. a province going from 1 to 50 reviews = +4900%) would compress
+    # all normal values near 0 after scaling, degrading model training quality.
+    df_pd["hotel_vol_growth"] = df_pd["hotel_vol_growth"].clip(-1.0, 5.0)
+
+    # Log transform the target variable
+    df_pd[TARGET] = np.log1p(df_pd[TARGET].astype(float))
 
     # Time-based split BEFORE scaling
     split_ym = int(df_pd["year_month"].quantile(TRAIN_TEST_SPLIT))
@@ -393,9 +406,15 @@ def train_model(df):
         model.eval()
         with torch.no_grad():
             y_pred = model(torch.FloatTensor(X_test).to(device)).cpu().numpy()
-            y_pred = np.clip(y_pred, 0, 1)
+            y_pred = np.clip(y_pred, 0.0, None)
             y_train_pred = model(torch.FloatTensor(X_train).to(device)).cpu().numpy()
-            y_train_pred = np.clip(y_train_pred, 0, 1)
+            y_train_pred = np.clip(y_train_pred, 0.0, None)
+
+        y_test_actual = np.expm1(y_test)
+        y_pred_actual = np.expm1(y_pred)
+        
+        mask = y_test_actual > 0
+        test_mape = float(np.mean(np.abs((y_test_actual[mask] - y_pred_actual[mask]) / y_test_actual[mask])) * 100) if np.sum(mask) > 0 else 0.0
 
         metrics = {
             "train_rmse": float(np.sqrt(mean_squared_error(y_train, y_train_pred))),
@@ -404,13 +423,14 @@ def train_model(df):
             "test_rmse": float(np.sqrt(mean_squared_error(y_test, y_pred))),
             "test_mae": float(mean_absolute_error(y_test, y_pred)),
             "test_r2": float(r2_score(y_test, y_pred)),
+            "test_mape_actual": test_mape,
             "best_val_loss": float(best_val_loss),
             "epochs_trained": len(train_losses),
         }
         mlflow.log_metrics(metrics)
 
         print(f"\n  Train: RMSE={metrics['train_rmse']:.4f} MAE={metrics['train_mae']:.4f} R2={metrics['train_r2']:.4f}")
-        print(f"  Test:  RMSE={metrics['test_rmse']:.4f} MAE={metrics['test_mae']:.4f} R2={metrics['test_r2']:.4f}")
+        print(f"  Test:  RMSE={metrics['test_rmse']:.4f} MAE={metrics['test_mae']:.4f} R2={metrics['test_r2']:.4f} MAPE={metrics['test_mape_actual']:.2f}%")
 
         # Plots
         fig, ax = plt.subplots(figsize=(10, 6))
@@ -421,7 +441,8 @@ def train_model(df):
 
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.scatter(y_test, y_pred, alpha=0.5, s=15)
-        ax.plot([0, 1], [0, 1], 'r--')
+        max_val = float(max(y_test.max(), y_pred.max()))
+        ax.plot([0, max_val], [0, max_val], 'r--')
         ax.set_xlabel('Actual'); ax.set_ylabel('Predicted')
         ax.set_title(f'LSTM: Actual vs Predicted (R2={metrics["test_r2"]:.3f})')
         mlflow.log_figure(fig, "actual_vs_predicted.png"); plt.close()
@@ -483,7 +504,9 @@ def create_forecast_table(spark):
         StructField("month", IntegerType(), False),
         StructField("year_month", IntegerType(), False),
         StructField("horizon_month", IntegerType(), False),
-        StructField("predicted_hotness", DoubleType(), False),
+        StructField("predicted_hotel_volume", DoubleType(), True),
+        StructField("predicted_hotel_volume_actual", DoubleType(), True),
+        StructField("predicted_growth_pct", DoubleType(), True),
         StructField("forecast_date", StringType(), False),
         StructField("model_version", StringType(), False),
     ])
@@ -521,7 +544,8 @@ def forecast_12_months(spark, model, scaler, df_pd, device):
         last_ym = int(group["year_month"].iloc[-1])
         last_date = datetime.strptime(str(last_ym), '%Y%m')
 
-        recent_hotness = list(group[TARGET].values[-max(SEQUENCE_LENGTH, 12):])
+        recent_volumes = list(np.expm1(group[TARGET].values[-max(SEQUENCE_LENGTH, 12):]))
+        last_actual_volume = float(recent_volumes[-1])
 
         for horizon in range(1, FORECAST_MONTHS + 1):
             total_m = last_date.year * 12 + last_date.month + horizon
@@ -531,19 +555,26 @@ def forecast_12_months(spark, model, scaler, df_pd, device):
 
             model.eval()
             with torch.no_grad():
-                pred = model(torch.FloatTensor(last_seq).unsqueeze(0).to(device)).cpu().item()
-                pred = float(np.clip(pred, 0, 1))
+                pred_log = model(torch.FloatTensor(last_seq).unsqueeze(0).to(device)).cpu().item()
+                pred_log = float(max(0.0, pred_log))
+                pred_actual = float(np.expm1(pred_log))
+
+            growth_pct = float(0.0)
+            if last_actual_volume > 0:
+                growth_pct = float((pred_actual - last_actual_volume) / last_actual_volume * 100.0)
 
             results.append({
-                'province_sk': province_sk, 'province_name': province_name,
-                'region': region, 'year': ty, 'month': tm,
-                'year_month': tym, 'horizon_month': horizon,
-                'predicted_hotness': pred,
+                'province_sk': int(province_sk), 'province_name': str(province_name),
+                'region': str(region), 'year': int(ty), 'month': int(tm),
+                'year_month': int(tym), 'horizon_month': int(horizon),
+                'predicted_hotel_volume': pred_log,
+                'predicted_hotel_volume_actual': pred_actual,
+                'predicted_growth_pct': growth_pct,
                 'forecast_date': datetime.now().strftime('%Y-%m-%d'),
-                'model_version': 'lstm_3.0'
+                'model_version': 'lstm_v3_volume'
             })
 
-            recent_hotness.append(pred)
+            recent_volumes.append(pred_actual)
 
             new_row = last_seq[-1].copy()
 
@@ -552,24 +583,32 @@ def forecast_12_months(spark, model, scaler, df_pd, device):
             new_row[fi["month_cos"]] = _scale_value(math.cos(2 * math.pi * tm / 12), fi["month_cos"], scaler)
 
             # Update lag features
-            new_row[fi["hotness_lag_3"]] = new_row[fi["hotness_lag_2"]]
-            new_row[fi["hotness_lag_2"]] = new_row[fi["hotness_lag_1"]]
-            new_row[fi["hotness_lag_1"]] = _scale_value(pred, fi["hotness_lag_1"], scaler)
+            new_row[fi["hotel_vol_lag_3"]] = new_row[fi["hotel_vol_lag_2"]]
+            new_row[fi["hotel_vol_lag_2"]] = new_row[fi["hotel_vol_lag_1"]]
+            new_row[fi["hotel_vol_lag_1"]] = _scale_value(pred_actual, fi["hotel_vol_lag_1"], scaler)
 
-            if len(recent_hotness) >= 12:
-                new_row[fi["hotness_lag_12"]] = _scale_value(
-                    recent_hotness[-12], fi["hotness_lag_12"], scaler
+            if len(recent_volumes) >= 12:
+                new_row[fi["hotel_vol_lag_12"]] = _scale_value(
+                    recent_volumes[-12], fi["hotel_vol_lag_12"], scaler
                 )
-            if len(recent_hotness) >= 3:
-                new_row[fi["hotness_rolling_3m"]] = _scale_value(
-                    float(np.mean(recent_hotness[-3:])), fi["hotness_rolling_3m"], scaler
+            if len(recent_volumes) >= 3:
+                new_row[fi["hotel_vol_rolling_3m"]] = _scale_value(
+                    float(np.mean(recent_volumes[-3:])), fi["hotel_vol_rolling_3m"], scaler
                 )
 
-            lag1 = recent_hotness[-1] if len(recent_hotness) >= 1 else 0
-            lag3 = recent_hotness[-3] if len(recent_hotness) >= 3 else lag1
-            new_row[fi["hotness_momentum"]] = _scale_value(
-                lag1 - lag3, fi["hotness_momentum"], scaler
+            lag1 = recent_volumes[-1] if len(recent_volumes) >= 1 else 0
+            lag3 = recent_volumes[-3] if len(recent_volumes) >= 3 else lag1
+            new_row[fi["hotel_vol_momentum"]] = _scale_value(
+                lag1 - lag3, fi["hotel_vol_momentum"], scaler
             )
+
+            # Update hotel_vol_growth (clamped to same range as training data)
+            prev_vol = recent_volumes[-2] if len(recent_volumes) >= 2 else 0.0
+            growth = 0.0
+            if prev_vol > 0:
+                growth = (pred_actual - prev_vol) / prev_vol
+            growth = max(-1.0, min(5.0, growth))  # Clamp: consistent with training preprocessing
+            new_row[fi["hotel_vol_growth"]] = _scale_value(growth, fi["hotel_vol_growth"], scaler)
 
             last_seq = np.vstack([last_seq[1:], new_row])
 
@@ -580,7 +619,7 @@ def forecast_12_months(spark, model, scaler, df_pd, device):
     forecast_df.write.format("iceberg").mode("overwrite") \
         .save("gold.gold.province_month_forecast_lstm_next12")
 
-    export_path = f"s3a://gold/ml_forecast/province_hotness_forecast_lstm_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    export_path = f"s3a://gold/ml_forecast/province_hotel_volume_forecast_lstm_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     forecast_df.coalesce(1).write.mode("overwrite").parquet(export_path)
     print(f"  Exported: {export_path}")
 
