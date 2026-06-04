@@ -45,12 +45,13 @@ warnings.filterwarnings('ignore')
 from config import (
     LABELED_PARQUET_PATH,
     PHOBERT_MODEL_NAME, FINE_TUNED_MODEL_NAME,
-    MAX_SEQ_LENGTH, TRAIN_TEST_SPLIT, BATCH_SIZE,
+    MAX_SEQ_LENGTH, TRAIN_TEST_SPLIT, VAL_SPLIT, BATCH_SIZE,
     LEARNING_RATE, EPOCHS, WARMUP_RATIO,
     MLFLOW_TRACKING_URI, MLFLOW_EXPERIMENT,
     SENTIMENT_LABELS, SENTIMENT_TO_ID,
     ASPECT_LABELS,
     INTENT_LABELS, INTENT_TO_ID,
+    TRAIN_EVAL_SAMPLES,
 )
 
 # ============================================================
@@ -58,7 +59,7 @@ from config import (
 # ============================================================
 FREEZE_N_LAYERS     = 8       # Freeze bottom N of 12 transformer layers
 GRAD_ACCUM_STEPS    = 4       # Effective batch = BATCH_SIZE * GRAD_ACCUM_STEPS
-EARLY_STOP_PATIENCE = 2       # Stop after N epochs with no Val F1 improvement
+EARLY_STOP_PATIENCE = 3       # Stop after N epochs with no Val F1 improvement
 BACKBONE_LR         = 2e-5    # Lower LR for frozen-adjacent backbone layers
 HEAD_LR             = 1e-4    # Higher LR for new classification heads
 MAX_PER_CLASS       = 27_000  # ~80K total (27K × 3 sentiment classes)
@@ -204,16 +205,34 @@ def load_and_prepare_data():
 
 
 def create_dataloaders(pdf, tokenizer):
-    print("\n[2/4] Creating DataLoaders...")
+    """
+    3-way split: Train (75%) / Val (10%) / Test (15%)
+    - Val: dùng cho Early Stopping — đỳ phát hiện overfit sớm
+    - Test: chỉ dùng cho final evaluation — không chạm trong quá trình train
+    - train_eval_loader: subset nhỏ của train để log train_F1 hiệu quả
+    """
+    print("\n[2/4] Creating DataLoaders (train / val / test 3-way split)...")
+
+    import random as _rnd
 
     texts         = pdf['comment_text'].tolist()
     sentiment_ids = pdf['sentiment_id'].tolist()
     aspect_vecs   = pdf['aspect_vector'].tolist()
     intent_ids    = pdf['intent_id'].tolist()
+    n             = len(texts)
 
-    idx_train, idx_test = train_test_split(
-        range(len(texts)), test_size=1 - TRAIN_TEST_SPLIT,
+    # Step 1: tách Test set (15% của tổng)
+    test_ratio = 1.0 - TRAIN_TEST_SPLIT - VAL_SPLIT          # 0.15
+    idx_trainval, idx_test = train_test_split(
+        range(n), test_size=test_ratio,
         random_state=42, stratify=sentiment_ids,
+    )
+
+    # Step 2: tách Val ra khỏi trainval (~10% tổng = 10/85 trong trainval)
+    val_within = VAL_SPLIT / (TRAIN_TEST_SPLIT + VAL_SPLIT)  # ≈ 0.118
+    idx_train, idx_val = train_test_split(
+        list(idx_trainval), test_size=val_within,
+        random_state=42, stratify=[sentiment_ids[i] for i in idx_trainval],
     )
 
     def make_ds(idx):
@@ -223,27 +242,37 @@ def create_dataloaders(pdf, tokenizer):
             tokenizer, MAX_SEQ_LENGTH,
         )
 
-    train_loader = DataLoader(make_ds(idx_train), batch_size=BATCH_SIZE,
-                              shuffle=True, num_workers=2, pin_memory=USE_AMP)
-    test_loader  = DataLoader(make_ds(idx_test),  batch_size=BATCH_SIZE,
-                              shuffle=False, num_workers=2, pin_memory=USE_AMP)
+    train_loader     = DataLoader(make_ds(idx_train), batch_size=BATCH_SIZE,
+                                  shuffle=True,  num_workers=2, pin_memory=USE_AMP)
+    val_loader       = DataLoader(make_ds(idx_val),   batch_size=BATCH_SIZE,
+                                  shuffle=False, num_workers=2, pin_memory=USE_AMP)
+    test_loader      = DataLoader(make_ds(idx_test),  batch_size=BATCH_SIZE,
+                                  shuffle=False, num_workers=2, pin_memory=USE_AMP)
+
+    # Subset nhỏ của train để theo dõi train F1 mỗi epoch (tránh evaluate toàn bộ chậm)
+    sample_n = min(TRAIN_EVAL_SAMPLES, len(idx_train))
+    idx_train_eval    = _rnd.sample(list(idx_train), sample_n)
+    train_eval_loader = DataLoader(make_ds(idx_train_eval), batch_size=BATCH_SIZE,
+                                   shuffle=False, num_workers=2, pin_memory=USE_AMP)
 
     eff_batch = BATCH_SIZE * GRAD_ACCUM_STEPS
-    print(f"  Train: {len(idx_train):,} | Test: {len(idx_test):,}")
-    print(f"  Effective batch size: {BATCH_SIZE} × {GRAD_ACCUM_STEPS} = {eff_batch}")
-    return train_loader, test_loader
+    print(f"  Train: {len(idx_train):,} | Val: {len(idx_val):,} | Test: {len(idx_test):,}")
+    print(f"  Train-eval sample : {sample_n:,} (for overfit monitoring)")
+    print(f"  Effective batch   : {BATCH_SIZE} × {GRAD_ACCUM_STEPS} = {eff_batch}")
+    return train_loader, val_loader, test_loader, train_eval_loader
 
 
 # ============================================================
 # Training
 # ============================================================
 
-def train_model(model, train_loader, test_loader, device):
+def train_model(model, train_loader, val_loader, test_loader, train_eval_loader, device):
     print("\n[3/4] Training PhoBERT (optimized)...")
     print(f"  FP16 AMP         : {'ON' if USE_AMP else 'OFF (CPU)'}")
     print(f"  Grad accumulation: {GRAD_ACCUM_STEPS} steps")
-    print(f"  Early stopping   : patience={EARLY_STOP_PATIENCE}")
+    print(f"  Early stopping   : patience={EARLY_STOP_PATIENCE} (tracks Val F1)")
     print(f"  LR backbone/heads: {BACKBONE_LR} / {HEAD_LR}")
+    print(f"  Split            : Train/Val/Test (75%%/10%%/15%%)")
 
     # Differential learning rate
     backbone_params = [p for p in model.backbone.parameters() if p.requires_grad]
@@ -298,6 +327,7 @@ def train_model(model, train_loader, test_loader, device):
         no_improve       = 0
         train_losses     = []
         val_f1_history   = []
+        train_f1_history = []   # Track train F1 → quan sát overfit gap
 
         for epoch in range(EPOCHS):
             model.train()
@@ -335,21 +365,32 @@ def train_model(model, train_loader, test_loader, device):
             avg_loss = epoch_loss / len(train_loader)
             train_losses.append(avg_loss)
 
-            metrics  = evaluate(model, test_loader, device)
-            val_f1   = metrics['sentiment_f1']
+            # --- Evaluate: Val set (dùng cho early stopping) ---
+            val_metrics = evaluate(model, val_loader, device)
+            val_f1      = val_metrics['sentiment_f1']
             val_f1_history.append(val_f1)
 
+            # --- Evaluate: Train subset (monitor overfit gap) ---
+            train_metrics = evaluate(model, train_eval_loader, device)
+            train_f1      = train_metrics['sentiment_f1']
+            train_f1_history.append(train_f1)
+            overfit_gap   = train_f1 - val_f1  # > 0.1 bắt đầu đáng lo ngại
+
+            gap_flag = " ⚠️ GAP" if overfit_gap > 0.10 else ""
             print(f"  Epoch {epoch+1}/{EPOCHS} | Loss: {avg_loss:.4f} | "
-                  f"Sent-F1: {val_f1:.4f} | Intent-F1: {metrics['intent_f1']:.4f}")
+                  f"Train-F1: {train_f1:.4f} | Val-F1: {val_f1:.4f} | "
+                  f"Gap: {overfit_gap:+.4f}{gap_flag} | Intent-F1: {val_metrics['intent_f1']:.4f}")
 
             mlflow.log_metrics({
-                "train_loss":        avg_loss,
-                "val_sentiment_f1":  val_f1,
-                "val_intent_f1":     metrics['intent_f1'],
-                "val_sent_accuracy": metrics['sentiment_accuracy'],
+                "train_loss":          avg_loss,
+                "train_sentiment_f1":  train_f1,
+                "val_sentiment_f1":    val_f1,
+                "val_intent_f1":       val_metrics['intent_f1'],
+                "val_sent_accuracy":   val_metrics['sentiment_accuracy'],
+                "overfit_gap":         overfit_gap,
             }, step=epoch + 1)
 
-            # Early stopping
+            # --- Early Stopping (theo Val F1, không theo Train F1) ---
             if val_f1 > best_f1:
                 best_f1    = val_f1
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
@@ -359,31 +400,40 @@ def train_model(model, train_loader, test_loader, device):
                 no_improve += 1
                 print(f"  No improve {no_improve}/{EARLY_STOP_PATIENCE}")
                 if no_improve >= EARLY_STOP_PATIENCE:
-                    print(f"\n  ⚑ Early stopping at epoch {epoch+1} (best F1={best_f1:.4f})")
+                    print(f"\n  ⚑ Early stopping at epoch {epoch+1} (best Val F1={best_f1:.4f})")
                     break
 
         # Restore best checkpoint
         model.load_state_dict(best_state)
         model.to(device)
 
-        # Final report
+        # --- Final evaluation trên TEST SET (không dùng trong training) ---
+        print("\n  === Final Evaluation on TEST SET (unbiased) ===")
         final = evaluate(model, test_loader, device, verbose=True)
         mlflow.log_metrics({
-            "best_sentiment_f1":  final['sentiment_f1'],
-            "best_sentiment_acc": final['sentiment_accuracy'],
-            "best_intent_f1":     final['intent_f1'],
-            "best_intent_acc":    final['intent_accuracy'],
+            "best_val_f1":        best_f1,
+            "test_sentiment_f1":  final['sentiment_f1'],
+            "test_sentiment_acc": final['sentiment_accuracy'],
+            "test_intent_f1":     final['intent_f1'],
+            "test_intent_acc":    final['intent_accuracy'],
             "epochs_trained":     len(train_losses),
+            "final_overfit_gap":  train_f1_history[-1] - val_f1_history[-1] if train_f1_history else 0.0,
         })
 
-        # Plots — loss + validation F1
+        # --- Plots: Loss + Train vs Val F1 (Overfit Monitor) ---
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
         ax1.plot(range(1, len(train_losses) + 1), train_losses, marker='o', color='steelblue')
-        ax1.set(xlabel='Epoch', ylabel='Loss', title='Training Loss')
+        ax1.set(xlabel='Epoch', ylabel='Huber Loss', title='Training Loss')
 
-        ax2.plot(range(1, len(val_f1_history) + 1), val_f1_history, marker='s', color='green')
-        ax2.axhline(best_f1, color='red', linestyle='--', label=f'Best F1={best_f1:.4f}')
-        ax2.set(xlabel='Epoch', ylabel='Val Sentiment F1', title='Validation F1 (Early Stop)')
+        epochs_x = range(1, len(val_f1_history) + 1)
+        ax2.plot(epochs_x, train_f1_history, marker='o', color='steelblue', label='Train F1 (subset)')
+        ax2.plot(epochs_x, val_f1_history,   marker='s', color='green',     label='Val F1')
+        if len(val_f1_history) > 1:
+            ax2.fill_between(epochs_x, val_f1_history, train_f1_history,
+                             alpha=0.20, color='orange', label='Overfit Gap')
+        ax2.axhline(best_f1, color='red', linestyle='--', label=f'Best Val F1={best_f1:.4f}')
+        ax2.set(xlabel='Epoch', ylabel='Sentiment F1 (macro)',
+                title='Train vs Val F1 — Overfit Monitor')
         ax2.legend()
         plt.tight_layout()
         mlflow.log_figure(fig, "training_curves.png")
@@ -456,7 +506,7 @@ def main():
     pdf       = load_and_prepare_data()
     tokenizer = AutoTokenizer.from_pretrained(PHOBERT_MODEL_NAME)
 
-    train_loader, test_loader = create_dataloaders(pdf, tokenizer)
+    train_loader, val_loader, test_loader, train_eval_loader = create_dataloaders(pdf, tokenizer)
 
     model = PhoBERTMultiTask(
         model_name=PHOBERT_MODEL_NAME,
@@ -468,7 +518,7 @@ def main():
     # === Optimization 1: Layer Freezing ===
     model = apply_layer_freezing(model)
 
-    train_model(model, train_loader, test_loader, device)
+    train_model(model, train_loader, val_loader, test_loader, train_eval_loader, device)
 
     print(f"\nCompleted : {datetime.now()}")
     print(f"Next step : Run inference_phobert.py to re-score all comments")

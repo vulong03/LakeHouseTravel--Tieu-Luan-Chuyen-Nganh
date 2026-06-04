@@ -20,7 +20,10 @@ LABELED_PARQUET_PATH = "s3a://gold/ml_training/nlp_weak_labeled.parquet"
 PHOBERT_MODEL_NAME = "vinai/phobert-base-v2"
 FINE_TUNED_MODEL_NAME = "tourism_comment_nlp"
 MAX_SEQ_LENGTH = 128
-TRAIN_TEST_SPLIT = 0.85
+TRAIN_TEST_SPLIT = 0.75   # Train proportion (75% of total)
+VAL_SPLIT        = 0.10   # Val proportion  (10% of total)
+# Remaining 15% → Test set (unbiased final evaluation)
+TRAIN_EVAL_SAMPLES = 3000  # Subset size used to track train F1 per epoch (performance)
 BATCH_SIZE = 32
 LEARNING_RATE = 2e-5
 EPOCHS = 5
@@ -29,8 +32,8 @@ WARMUP_RATIO = 0.1
 # ============================================================
 # MLflow
 # ============================================================
-MLFLOW_TRACKING_URI = "postgresql://lakehouse_user:lakehouse_pass@postgres:5432/mlflow_db"
-MLFLOW_EXPERIMENT = "tourism_nlp_phobert"
+MLFLOW_TRACKING_URI = "http://mlflow:5000"
+MLFLOW_EXPERIMENT = "tourism_nlp_phobert_s3"
 
 # ============================================================
 # Sentiment Labels

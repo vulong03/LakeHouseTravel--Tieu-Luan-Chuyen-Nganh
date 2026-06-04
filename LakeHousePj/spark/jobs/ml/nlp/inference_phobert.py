@@ -67,6 +67,9 @@ def create_spark_session():
         .config("spark.hadoop.fs.s3a.path.style.access", "true") \
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
         .config("spark.executor.memory", "2g") \
+        .config("spark.network.timeout", "800s") \
+        .config("spark.executor.heartbeatInterval", "60s") \
+        .config("spark.sql.execution.arrow.maxRecordsPerBatch", "64") \
         .getOrCreate()
 
 
@@ -166,13 +169,24 @@ def create_inference_udf():
 
     @pandas_udf(output_schema)
     def phobert_inference(texts: pd.Series) -> pd.DataFrame:
+        import os as _os
+        _os.environ['HF_HOME'] = '/tmp/huggingface'
+        _os.environ['AWS_ACCESS_KEY_ID'] = 'minioadmin'
+        _os.environ['AWS_SECRET_ACCESS_KEY'] = 'minioadmin123'
+        _os.environ['MLFLOW_S3_ENDPOINT_URL'] = 'http://minio:9000'
+
+        import sys as _sys
+        if '/opt/spark/jobs/ml/nlp' not in _sys.path:
+            _sys.path.append('/opt/spark/jobs/ml/nlp')
+
         import torch as _torch
         import re as _re
         import emoji as _emoji_lib
         from transformers import AutoTokenizer
 
         # Load model once per executor
-        if not hasattr(phobert_inference, '_model'):
+        if getattr(phobert_inference, '_model', None) is None:
+
             _mlflow_uri = MLFLOW_TRACKING_URI
             import mlflow as _mlflow
             _mlflow.set_tracking_uri(_mlflow_uri)
@@ -181,7 +195,10 @@ def create_inference_udf():
                 model_uri = f"models:/{FINE_TUNED_MODEL_NAME}/latest"
                 phobert_inference._model = _mlflow.pytorch.load_model(model_uri)
                 phobert_inference._model.eval()
-            except Exception:
+            except Exception as e:
+                import traceback
+                print(f"❌ ERROR LOADING MODEL: {e}")
+                traceback.print_exc()
                 phobert_inference._model = None
 
             phobert_inference._tokenizer = AutoTokenizer.from_pretrained(PHOBERT_MODEL_NAME)
@@ -191,74 +208,84 @@ def create_inference_udf():
         tokenizer = phobert_inference._tokenizer
         device = phobert_inference._device
 
-        results = []
+        # ── Pre-compute basic stats ──────────────────────────────────────────
+        texts_list = texts.tolist()
+        word_counts = [len(str(t).split()) if t else 0 for t in texts_list]
+        emoji_counts = [sum(1 for c in str(t) if c in _emoji_lib.EMOJI_DATA) if t else 0 for t in texts_list]
 
-        for text in texts:
-            text_str = str(text) if text else ""
+        # Clean texts
+        def _clean(t):
+            s = str(t) if t else ""
+            s = _re.sub(r'http\S+|www\S+|@\w+', '', s)
+            return ' '.join(s.split()).strip()
 
-            # Basic stats
-            words = text_str.split()
-            word_count = len(words)
-            emoji_count = sum(1 for c in text_str if c in _emoji_lib.EMOJI_DATA)
+        cleaned = [_clean(t) for t in texts_list]
 
-            if model is None or len(text_str.strip()) < 3:
-                results.append({
-                    "sentiment_score": 0.5,
-                    "sentiment_label": "neutral",
-                    "aspect_scenery": 0.0, "aspect_food": 0.0,
-                    "aspect_price": 0.0, "aspect_service": 0.0,
-                    "aspect_transport": 0.0, "aspect_accommodation": 0.0,
-                    "intent_label": "share",
-                    "intent_confidence": 0.5,
-                    "word_count": word_count,
-                    "emoji_count": emoji_count,
-                })
-                continue
+        # ── Default results for empty / model-not-loaded rows ────────────────
+        def _default(wc, ec):
+            return {
+                "sentiment_score": 0.5, "sentiment_label": "neutral",
+                "aspect_scenery": 0.0, "aspect_food": 0.0,
+                "aspect_price": 0.0, "aspect_service": 0.0,
+                "aspect_transport": 0.0, "aspect_accommodation": 0.0,
+                "intent_label": "share", "intent_confidence": 0.5,
+                "word_count": wc, "emoji_count": ec,
+            }
 
-            # Preprocess
-            text_clean = _re.sub(r'http\S+|www\S+|@\w+', '', text_str)
-            text_clean = ' '.join(text_clean.split()).strip()
+        results = [None] * len(texts_list)
 
-            # Tokenize
+        # Indices that need model inference
+        valid_idx = [i for i, t in enumerate(cleaned) if model is not None and len(t) >= 3]
+        skip_idx  = [i for i in range(len(texts_list)) if i not in valid_idx]
+
+        for i in skip_idx:
+            results[i] = _default(word_counts[i], emoji_counts[i])
+
+        # ── Batch inference ──────────────────────────────────────────────────
+        MINI_BATCH = 32
+        for batch_start in range(0, len(valid_idx), MINI_BATCH):
+            batch_ids = valid_idx[batch_start: batch_start + MINI_BATCH]
+            batch_texts = [cleaned[i] for i in batch_ids]
+
             encoding = tokenizer(
-                text_clean, max_length=MAX_SEQ_LENGTH,
-                padding='max_length', truncation=True,
+                batch_texts,
+                max_length=MAX_SEQ_LENGTH,
+                padding='max_length',
+                truncation=True,
                 return_tensors='pt',
             )
-            input_ids = encoding['input_ids'].to(device)
+            input_ids      = encoding['input_ids'].to(device)
             attention_mask = encoding['attention_mask'].to(device)
 
             with _torch.no_grad():
                 sent_logits, aspect_logits, intent_logits = model(input_ids, attention_mask)
 
-            # Sentiment: softmax → continuous score
-            sent_probs = _torch.softmax(sent_logits, dim=1).cpu().numpy()[0]
-            sent_score = float(sent_probs[0] * 0.0 + sent_probs[1] * 0.5 + sent_probs[2] * 1.0)
-            sent_label = SENTIMENT_LABELS[int(sent_probs.argmax())]
+            sent_probs   = _torch.softmax(sent_logits, dim=1).cpu().numpy()
+            aspect_probs = _torch.sigmoid(aspect_logits).cpu().numpy()
+            intent_probs = _torch.softmax(intent_logits, dim=1).cpu().numpy()
 
-            # Aspects: sigmoid probabilities
-            aspect_probs = _torch.sigmoid(aspect_logits).cpu().numpy()[0]
+            for j, i in enumerate(batch_ids):
+                sp = sent_probs[j]
+                ap = aspect_probs[j]
+                ip = intent_probs[j]
+                intent_idx = int(ip.argmax())
+                results[i] = {
+                    "sentiment_score": round(float(sp[0]*0.0 + sp[1]*0.5 + sp[2]*1.0), 4),
+                    "sentiment_label": SENTIMENT_LABELS[int(sp.argmax())],
+                    "aspect_scenery":       round(float(ap[0]), 4),
+                    "aspect_food":          round(float(ap[1]), 4),
+                    "aspect_price":         round(float(ap[2]), 4),
+                    "aspect_service":       round(float(ap[3]), 4),
+                    "aspect_transport":     round(float(ap[4]), 4),
+                    "aspect_accommodation": round(float(ap[5]), 4),
+                    "intent_label":      INTENT_LABELS[intent_idx],
+                    "intent_confidence": round(float(ip[intent_idx]), 4),
+                    "word_count":  word_counts[i],
+                    "emoji_count": emoji_counts[i],
+                }
 
-            # Intent: argmax + confidence
-            intent_probs = _torch.softmax(intent_logits, dim=1).cpu().numpy()[0]
-            intent_idx = int(intent_probs.argmax())
-            intent_label = INTENT_LABELS[intent_idx]
-            intent_conf = float(intent_probs[intent_idx])
-
-            results.append({
-                "sentiment_score": round(sent_score, 4),
-                "sentiment_label": sent_label,
-                "aspect_scenery": round(float(aspect_probs[0]), 4),
-                "aspect_food": round(float(aspect_probs[1]), 4),
-                "aspect_price": round(float(aspect_probs[2]), 4),
-                "aspect_service": round(float(aspect_probs[3]), 4),
-                "aspect_transport": round(float(aspect_probs[4]), 4),
-                "aspect_accommodation": round(float(aspect_probs[5]), 4),
-                "intent_label": intent_label,
-                "intent_confidence": round(intent_conf, 4),
-                "word_count": word_count,
-                "emoji_count": emoji_count,
-            })
+            # Free memory after each mini-batch
+            del input_ids, attention_mask, sent_logits, aspect_logits, intent_logits
 
         return pd.DataFrame(results)
 
@@ -287,7 +314,7 @@ def run_inference(spark, df):
         F.col("nlp.intent_confidence"),
         F.col("nlp.word_count"),
         F.col("nlp.emoji_count"),
-        F.coalesce(F.col("comment_likes"), F.lit(0)).alias("comment_likes"),
+        F.coalesce(F.col("comment_likes"), F.lit(0)).cast("long").alias("comment_likes"),
         F.col("comment_level"),
         F.current_timestamp().alias("created_at"),
         F.current_timestamp().alias("updated_at"),

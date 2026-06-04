@@ -42,6 +42,10 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import os
+os.environ['MLFLOW_S3_ENDPOINT_URL'] = 'http://minio:9000'
+os.environ['AWS_ACCESS_KEY_ID'] = 'minioadmin'
+os.environ['AWS_SECRET_ACCESS_KEY'] = 'minioadmin123'
+
 import pickle
 import json
 import warnings
@@ -57,7 +61,7 @@ from utils.iceberg_utils import create_iceberg_table_if_not_exists
 # Configuration
 # ============================================================
 
-MLFLOW_TRACKING_URI = "postgresql://lakehouse_user:lakehouse_pass@postgres:5432/mlflow_db"
+MLFLOW_TRACKING_URI = "http://mlflow:5000"
 EXPERIMENT_NAME = "province_hotel_volume_forecasting_lstm"
 MODEL_NAME = "province_hotel_volume_forecaster_lstm"
 

@@ -111,3 +111,4 @@ mlartifacts/
 # Keep these files
 !.gitkeep
 !README.md
+*.pt

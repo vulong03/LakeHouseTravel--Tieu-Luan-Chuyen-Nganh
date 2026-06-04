@@ -1,11 +1,12 @@
-# Luồng Dữ Liệu Machine Learning: Từ Xử Lý Ngôn Ngữ Tự Nhiên (NLP) đến Dự Báo Dòng Thời Gian (LSTM/GRU)
+# Luồng Dữ Liệu Machine Learning: Từ Xử Lý Ngôn Ngữ Tự Nhiên (NLP) đến Dự Báo Dòng Thời Gian (LSTM)
+========================================================================================================
 
-Tài liệu này mô tả chi tiết luồng xử lý dữ liệu và mô hình hóa, bắt đầu từ việc phân tích văn bản bình luận (NLP) cho đến khi biến đổi thành các đặc trưng đầu vào cho mô hình dự báo học sâu (Deep Learning LSTM/GRU).
+Tài liệu này mô tả chi tiết luồng xử lý dữ liệu và mô hình hóa, bắt đầu từ việc phân tích văn bản bình luận (NLP) cho đến khi biến đổi thành các đặc trưng đầu vào cho mô hình dự báo học sâu (Deep Learning LSTM).
 
 Quá trình chia làm 3 giai đoạn chính:
 1. **Giai đoạn NLP**: Đọc hiểu văn bản và trích xuất đặc trưng ngôn ngữ cho từng bình luận.
 2. **Giai đoạn Tổng hợp (Aggregation)**: Nhóm các đặc trưng theo không gian (Tỉnh) và thời gian (Tháng).
-3. **Giai đoạn Dự báo (Forecasting)**: Dùng dữ liệu lịch sử để dự đoán độ hot của tỉnh trong tương lai.
+3. **Giai đoạn Dự báo (Forecasting)**: Dùng dữ liệu lịch sử để dự đoán lượng đặt phòng thực tế của tỉnh trong tương lai.
 
 ---
 
@@ -23,12 +24,12 @@ Hệ thống lấy dữ liệu trực tiếp từ các bảng chứa bình luậ
 * **`silver.silver.tiktok_post_comments`**: Lấy thêm thông tin về lượt thích (likes) của bình luận.
 
 ### 2. Quá trình xử lý
-* **Weak Labeling (Gán nhãn tự động/nhãn yếu):** Việc thuê người đọc và gán nhãn thủ công (Manual Labeling) cho hàng nghìn bình luận là bất khả thi, tốn kém và mất thời gian. Để giải quyết bài toán "thiếu dữ liệu mồi", ta dùng kỹ thuật Weak Labeling:
+* **Weak Labeling (Gán nhãn tự động/nhãn yếu):** Để giải quyết bài toán "thiếu dữ liệu mồi" trên tập văn bản lớn (>600k dòng), ta dùng kỹ thuật Weak Labeling:
   * **Cách hoạt động:** Xây dựng một hệ thống tập luật (Heuristic Rules) dựa trên Emojis (😍, 😡) và từ khóa (Lexicon) chỉ định trong `config.py`.
   * **Ví dụ:** Câu *"View khách sạn rất đẹp nhưng phục vụ kém 😡"* -> Hệ thống bắt được từ "kém" hoặc emoji "😡" để tự gán nhãn `Negative`, đồng thời bắt từ "phục vụ" để gán nhãn khía cạnh `Service`.
   * **Mục đích:** Nhanh chóng tạo ra một tập dữ liệu nhãn mồi (pseudo-labels) có độ chính xác tương đối tốt (~70-80%) để làm "giáo trình" dạy cho PhoBERT ở bước tiếp theo.
 * **Fine-Tuning PhoBERT (Tinh chỉnh mô hình):** Bản chất là kỹ thuật Học chuyển giao (Transfer Learning). Hệ thống lấy mạng nơ-ron PhoBERT (đã được VinAI dạy sẵn ngữ pháp Tiếng Việt), gắn thêm lớp phân loại (Classification Head) và dùng thuật toán tối ưu (AdamW) để huấn luyện nhẹ lại trên tập dữ liệu du lịch đã gán nhãn.
-  * **Tích hợp Domain Du lịch (Domain Adaptation):** PhoBERT gốc do VinAI huấn luyện chủ yếu đọc từ Wikipedia và Báo chí. Nó rất giỏi tiếng Việt phổ thông nhưng sẽ "ngây ngô" trước tiếng lóng du lịch (ví dụ: *"cháy phòng"*, *"view sạch nước cản"*, *"chặt chém"*). Nhờ việc ta nhồi dữ liệu từ Weak Labeling vào huấn luyện (Fine-tune), PhoBERT cập nhật lại ma trận chú ý (Attention), tự khắc kết nối từ *"cháy phòng"* với khía cạnh `Accommodation`, hoặc *"chặt chém"* với nhãn `Negative` của khía cạnh `Price`. Quá trình này biến PhoBERT từ một mô hình tổng quát thành một **Chuyên gia Tâm lý Du lịch**.
+  * **Tích hợp Domain Du lịch (Domain Adaptation):** Giúp PhoBERT cập nhật lại ma trận chú ý (Attention), tự khắc kết nối các tiếng lóng du lịch (ví dụ: *"cháy phòng"*, *"view sạch nước cản"*, *"chặt chém"*) với khía cạnh `Accommodation`, hoặc nhãn `Negative` của khía cạnh `Price`. Quá trình này biến PhoBERT từ một mô hình tổng quát thành một **Chuyên gia Tâm lý Du lịch**.
 * **Inference (Dự đoán hàng loạt - Output của quá trình Fine-tuning):** Đầu ra của quá trình Fine-tuning là một Model Weights (đã được tinh chỉnh). Ta dùng cục Model này quét qua toàn bộ hàng trăm nghìn bình luận thô trong Data Lake để chấm điểm (score) cho chúng.
 
 ### 3. Đầu ra (Outputs)
@@ -67,15 +68,14 @@ Xuất ra bảng **`gold.gold.fact_province_month_dl_features`**.
   * **Biến NLP (Kế thừa từ Giai đoạn 1):** 
     * `avg_sentiment`: Điểm cảm xúc trung bình của Tỉnh tháng đó.
     * `positive_ratio`, `negative_ratio`: Tỷ lệ % bình luận tích cực/tiêu cực.
-    * `avg_word_count`: Mức độ đầu tư viết bình luận.
-  * **Biến trễ (Lag/Target):** `hotness_lag_1`, `hotness_lag_2`, `hotness_lag_12`, v.v...
-  * Biến mục tiêu **TARGET**: `hotness_score` (Điểm độ hot thực tế của tháng hiện tại).
+  * **Biến trễ (Lag/Target):** `hotel_vol_lag_1`, `hotel_vol_lag_2`, `hotel_vol_lag_12`, v.v...
+  * Biến mục tiêu **TARGET**: `hotel_review_volume` (Lượt đặt phòng thực tế của tháng hiện tại - được log-normalized).
 
 ---
 
-## GIAI ĐOẠN 3: DỰ BÁO LSTM/GRU FORECASTING
+## GIAI ĐOẠN 3: DỰ BÁO LSTM FORECASTING
 * **Thực thi bởi:** `train_lstm_forecast.py`
-* **Mục tiêu:** Tìm ra quy luật (Pattern) từ chuỗi thời gian lịch sử kết hợp với các biến NLP/Tương tác để dự đoán điểm độ hot (`hotness_score`) của Tỉnh trong 12 tháng kế tiếp.
+* **Mục tiêu:** Tìm ra quy luật (Pattern) từ chuỗi thời gian lịch sử kết hợp với các biến NLP/Tương tác để dự đoán lượng đặt phòng thực tế (`hotel_review_volume`) của Tỉnh trong 12 tháng kế tiếp.
 
 ### 1. Đầu vào (Inputs)
 Đọc bảng feature sinh ra từ bước trước: **`gold.gold.fact_province_month_dl_features`**.
@@ -84,20 +84,22 @@ Không cần tính toán lại bất kỳ feature nào trong Pipeline này, toà
 ### 2. Quá trình xử lý
 1. **Prepare Sequences:** Tạo cửa sổ trượt (Sequence Window), ví dụ `SEQUENCE_LENGTH = 4` tháng liên tục để dự đoán tháng thứ 5.
 2. **Scaling:** Chuẩn hóa dữ liệu bằng `MinMaxScaler` dựa trên tập Training.
-3. **Training:** Đưa vào kiến trúc mạng `GRU + Lớp Attention`.
-4. **Forecasting (Dự báo 12 tháng):** Dự báo cuốn chiếu (Autoregressive). Nó dùng mô hình để đoán Tháng T+1. Sau đó lấy kết quả T+1 nhét vào chuỗi đầu vào để dự đoán tiếp T+2, T+3,...
+3. **Training:** Đưa vào kiến trúc mạng `LSTM + Lớp Attention`.
+4. **Forecasting (Dự báo 12 tháng):** Dự báo cuốn chiếu (Autoregressive). Nó dùng mô hình để đoán Tháng T+1. Sau đó lấy kết quả T+1 nhét vào chuỗi đầu vào để dự đoán tiếp T+2, T+3,... và tính toán lại động các thuộc tính lag (như `rolling_avg` và `lag_12` từ quá khứ).
+5. **Inverse Transform:** Sử dụng `expm1` đưa kết quả từ log-scale về định dạng volume thực tế.
 
 ### 3. Đầu ra (Outputs)
 Kết quả sẽ được ghi xuất dưới hai dạng: Artifact mô hình (MLFlow) và Dữ liệu dự báo.
 
 1. **Mô hình Model (Lưu trên MLflow):** 
-   Tên mô hình: `province_hotness_forecaster_lstm`. Các file hỗ trợ kèm theo: `/tmp/scaler_lstm.pkl`, `feature_config.json`.
+   Tên mô hình: `province_hotel_volume_forecaster_lstm`. Các file hỗ trợ kèm theo: `scaler_lstm.pkl`, `feature_config.json`.
 2. **Bảng kết quả Iceberg trên DL:** **`gold.gold.province_month_forecast_lstm_next12`**.
    * **Cấu trúc:**
      * `province_sk`, `province_name`, `region`: Thông tin định danh của Tỉnh.
      * `year`, `month`, `year_month`: Thời điểm được dự báo tương lai.
      * `horizon_month` (Int, từ 1 tới 12): Quãng thời gian dự báo (Tháng T+1 tới T+12).
-     * `predicted_hotness` (Double): **Kết quả dự đoán** - Điểm độ hot được hệ thống dự tính.
+     * `predicted_hotel_volume_actual` (Double): **Kết quả dự đoán** - Lượt đặt phòng thực tế sau expm1.
+     * `predicted_growth_pct` (Double): Tốc độ tăng trưởng dự tính.
      * `forecast_date`: Ngày thực hiện dự báo.
 3. **File Parquet Export:**
-   * Một bản copy Parquet xuất thẳng lên Cloud/MinIO: `s3a://gold/ml_forecast/province_hotness_forecast_lstm_*` để API giao diện (Gradio App) có thể dễ dàng truy xuất phục vụ biểu đồ.
+   * Một bản copy Parquet xuất thẳng lên Cloud/MinIO: `s3a://gold/ml_forecast/province_hotel_volume_forecast_lstm_*` để API giao diện (Gradio App) có thể dễ dàng truy xuất phục vụ biểu đồ.
