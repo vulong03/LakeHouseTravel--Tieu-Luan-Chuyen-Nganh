@@ -104,7 +104,12 @@ HOTEL_LAG_FEATURES = [
     "hotel_vol_rolling_3m", "hotel_vol_momentum",
 ]
 
+CUSTOM_FEATURES = [
+    "social_to_booking_ratio", "sentiment_polarity_change", "hotel_vol_std_rolling_3m",
+]
+
 ALL_ML_FEATURES = (
     VOLUME_FEATURES + ENGAGEMENT_FEATURES + NLP_FEATURES
     + HOTEL_FEATURES + TEMPORAL_FEATURES + LAG_FEATURES + HOTEL_LAG_FEATURES
+    + CUSTOM_FEATURES
 )

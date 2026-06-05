@@ -111,6 +111,11 @@ def create_output_table(spark: SparkSession) -> None:
         StructField("solo_ratio", DoubleType(), True),
         StructField("hotel_vol_growth", DoubleType(), True),
 
+        # Group 7: Custom / Advanced Features (3)
+        StructField("social_to_booking_ratio", DoubleType(), True),
+        StructField("sentiment_polarity_change", DoubleType(), True),
+        StructField("hotel_vol_std_rolling_3m", DoubleType(), True),
+
         # Group 5: Temporal (4)
         StructField("month_sin", DoubleType(), True),
         StructField("month_cos", DoubleType(), True),
@@ -454,6 +459,10 @@ def build_combined_features(
         ).otherwise(0)
     )
 
+    df = df.withColumn("social_to_booking_ratio",
+        F.col("total_comments") / (F.col("hotel_review_volume") + 1.0)
+    )
+
     # --- Temporal features ---
     df = df.withColumn("month_sin", F.sin(2 * math.pi * F.col("month") / 12))
     df = df.withColumn("month_cos", F.cos(2 * math.pi * F.col("month") / 12))
@@ -535,6 +544,17 @@ def build_combined_features(
         ).otherwise(F.lit(0.0))
     )
 
+    df = df.withColumn("sentiment_polarity_lag_1", F.lag("sentiment_polarity", 1).over(window_province))
+    df = df.withColumn("sentiment_polarity_change",
+        F.when(F.col("sentiment_polarity_lag_1").isNotNull(),
+               F.col("sentiment_polarity") - F.col("sentiment_polarity_lag_1")
+        ).otherwise(F.lit(0.0))
+    ).drop("sentiment_polarity_lag_1")
+
+    df = df.withColumn("hotel_vol_std_rolling_3m",
+        F.coalesce(F.stddev("hotel_review_volume").over(window_rolling), F.lit(0.0))
+    )
+
     # --- Drop internal columns ---
     df = df.drop("_total_comment_likes")
 
@@ -567,6 +587,8 @@ def build_combined_features(
         "unique_reviewer_countries", "domestic_review_ratio",
         "couple_ratio", "family_ratio", "business_ratio", "solo_ratio",
         "hotel_vol_growth",
+        # Custom / Advanced Features
+        "social_to_booking_ratio", "sentiment_polarity_change", "hotel_vol_std_rolling_3m",
         # Temporal
         "month_sin", "month_cos", "is_peak_season", "hotness_score",
         # Lags

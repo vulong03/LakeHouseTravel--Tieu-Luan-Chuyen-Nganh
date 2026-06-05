@@ -130,12 +130,12 @@ TRAIN_TEST_SPLIT = 0.7
 # ------------------------------------------------------------
 
 SEQUENCE_LENGTH = 3       # best: seq=3 → test_r2=0.9115, gap=0.068, RMSE=0.4994
-HIDDEN_SIZE = 48          # 40 too small (test_r2 dropped 0.913→0.903) → keep 48
+HIDDEN_SIZE = 48          # Increased from 40 to recover model capacity
 NUM_LAYERS = 2            # v3: 1  → v4: 2   (deeper LSTM)
-DROPOUT = 0.4             # 0.45 causes underfitting (gap 0.089, test_r2 0.877) → keep 0.4
+DROPOUT = 0.43            # Increased to prevent overfitting with larger capacity
 LEARNING_RATE = 0.0005    # v3: 0.001 → v4: 0.0005 (stable convergence)
 EPOCHS = 200              # v3: 150 → v4: 200 (paired with patience=25)
-BATCH_SIZE = 16           # v3: 32  → v4: 16  (more gradient noise → better generalization)
+BATCH_SIZE = 32           # 16→32: smoother gradients → better generalization (anti-overfit)
 PATIENCE = 25             # v3: 20  → v4: 25  (allow more convergence time)
 TARGET = "hotel_review_volume"
 
@@ -177,10 +177,15 @@ HOTEL_FEATURES = [
     "hotel_vol_growth",
 ]
 
+CUSTOM_FEATURES = [
+    "social_to_booking_ratio", "sentiment_polarity_change", "hotel_vol_std_rolling_3m",
+]
+
 ALL_FEATURES = (
     TEMPORAL_FEATURES + LAG_FEATURES
     + VOLUME_FEATURES + ENGAGEMENT_FEATURES
     + NLP_FEATURES + HOTEL_FEATURES
+    + CUSTOM_FEATURES
 )
 
 # Features that should use LAGGED values during forecast (from previous step)
@@ -454,7 +459,7 @@ def train_model(df):
     print(f"  Device: {device}, Parameters: {total_params:,}")
 
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=LEARNING_RATE, weight_decay=2e-4  # v4: 1e-4 → 2e-4
+        model.parameters(), lr=LEARNING_RATE, weight_decay=7e-4  # 7e-4 anti-overfit
     )
     criterion = HybridLoss(delta=0.5, smape_weight=0.3)
 
@@ -482,7 +487,7 @@ def train_model(df):
             "epochs_max": EPOCHS,
             "batch_size": BATCH_SIZE,
             "patience": PATIENCE,
-            "weight_decay": "2e-4",
+            "weight_decay": "7e-4",
             "scheduler": "CosineAnnealingWarmRestarts_T0=30",
             "num_features": len(ALL_FEATURES),
             "features": json.dumps(ALL_FEATURES),
@@ -771,6 +776,17 @@ def forecast_12_months(spark, model, scaler, df_pd, device):
                 growth = (pred_actual - prev_vol) / prev_vol
             growth = max(-1.0, min(5.0, growth))
             new_row[fi["hotel_vol_growth"]] = _scale_value(growth, fi["hotel_vol_growth"], scaler)
+
+            # Update custom/advanced features
+            idx_tc = fi["total_comments"]
+            raw_tc = new_row[idx_tc] * scaler.scale_[idx_tc] + scaler.center_[idx_tc] if scaler.scale_[idx_tc] != 0 else scaler.center_[idx_tc]
+            new_ratio = raw_tc / (pred_actual + 1.0)
+            new_row[fi["social_to_booking_ratio"]] = _scale_value(new_ratio, fi["social_to_booking_ratio"], scaler)
+
+            new_row[fi["sentiment_polarity_change"]] = _scale_value(0.0, fi["sentiment_polarity_change"], scaler)
+
+            new_std = float(np.std(recent_volumes[-3:]))
+            new_row[fi["hotel_vol_std_rolling_3m"]] = _scale_value(new_std, fi["hotel_vol_std_rolling_3m"], scaler)
 
             last_seq = np.vstack([last_seq[1:], new_row])
 
