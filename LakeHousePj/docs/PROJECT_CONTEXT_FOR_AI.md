@@ -482,7 +482,11 @@ spark/jobs/
 │   │   ├── config.py           → keywords, emojis, labels, PhoBERT hyperparams
 │   │   ├── weak_labeling.py    → Bước 1: auto-label 465K comments
 │   │   ├── train_phobert.py    → Bước 2: fine-tune PhoBERT multi-task
-│   │   └── inference_phobert.py → Bước 3: score all comments → fact_comment_nlp_v2
+│   │   ├── inference_phobert.py → Bước 3: score all comments → fact_comment_nlp_v2
+│   │   └── GoogleColab/        → Google Colab GPU-accelerated pipeline
+│   │       ├── export_comments_for_colab.py
+│   │       ├── colab_inference_phobert.py
+│   │       └── import_colab_results.py
 │   └── train_lstm_forecast.py  → LSTM + Attention, forecast 12 months
 │
 └── utils/

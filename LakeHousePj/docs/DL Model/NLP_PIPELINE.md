@@ -198,6 +198,30 @@ docker exec lakehouse_spark_master /opt/spark/bin/spark-submit \
 ```
 
 ### Buoc 3: Inference
+
+#### Option A: Chạy bằng Google Colab (Khuyên dùng - GPU nhanh, mất ~10-15 phút)
+
+1. **Export dữ liệu comments ra file Parquet**:
+   ```bash
+   docker exec lakehouse_spark_master /opt/spark/bin/spark-submit \
+       --master spark://spark-master:7077 \
+       /opt/spark/jobs/ml/nlp/GoogleColab/export_comments_for_colab.py
+   ```
+   *File xuất ra sẽ nằm tại `LakeHousePj/data/GoogleColab/comments_to_score.parquet`.*
+
+2. **Chạy inference trên Google Colab**:
+   - Upload file `comments_to_score.parquet` và file trọng số model `phobert_multi_task.pt` lên Google Colab (sử dụng runtime GPU T4).
+   - Copy nội dung hoặc chạy trực tiếp script [colab_inference_phobert.py](file:///d:/CodeStored/Nam_4/TieuLuanCuoiKy/LakeHouse/LakeHousePj/spark/jobs/ml/nlp/GoogleColab/colab_inference_phobert.py).
+   - Tải file kết quả `colab_inference_results.parquet` về máy và lưu vào thư mục `LakeHousePj/data/GoogleColab/`.
+
+3. **Import kết quả ngược trở lại Iceberg local**:
+   ```bash
+   docker exec lakehouse_spark_master /opt/spark/bin/spark-submit \
+       --master spark://spark-master:7077 \
+       /opt/spark/jobs/ml/nlp/GoogleColab/import_colab_results.py
+   ```
+
+#### Option B: Chạy local (CPU - Rất chậm, mất từ vài tiếng đến vài ngày)
 ```bash
 docker exec lakehouse_spark_master /opt/spark/bin/spark-submit \
     --master spark://spark-master:7077 \
