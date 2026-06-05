@@ -15,6 +15,7 @@ from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator, ShortCircuitOperator
 from airflow.operators.empty import EmptyOperator
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.utils.task_group import TaskGroup
 
 import sys
@@ -295,19 +296,14 @@ with DAG(
     )
     
     # ============================================
-    # PHASE 4: ML Training
+    # PHASE 4: ML Training (Trigger Separate DAG)
     # ============================================
     
-    with TaskGroup(group_id='phase4_ml_training') as phase4_tg:
-        
-        # Train province engagement prediction model
-        train_model = BashOperator(
-            task_id='train_province_model',
-            bash_command=build_spark_command(
-                GOLD_JOBS['train_province_model']['job_path'],
-                resource_level=GOLD_JOBS['train_province_model']['resource_level']
-            )
-        )
+    trigger_ml_training = TriggerDagRunOperator(
+        task_id='trigger_ml_lstm_training',
+        trigger_dag_id='ml_lstm_training_dag',
+        wait_for_completion=False,
+    )
     
     # ============================================
     # Completion Task
@@ -339,8 +335,8 @@ with DAG(
     # Phase 3b: DL Feature aggregation (after all 3 fact tables)
     wait_phase3 >> fact_dl_features >> wait_dl_features
     
-    # Phase 4: ML Training (after DL features + province_month_features)
-    wait_dl_features >> phase4_tg
+    # Phase 4: Trigger ML training DAG
+    wait_dl_features >> trigger_ml_training
     
     # Complete
-    phase4_tg >> complete
+    trigger_ml_training >> complete

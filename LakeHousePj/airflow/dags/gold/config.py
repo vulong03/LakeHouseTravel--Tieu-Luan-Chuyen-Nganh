@@ -197,18 +197,6 @@ GOLD_JOBS = {
         'depends_on': ['fact_province_content_engagement', 'fact_comment_nlp_engagement', 'fact_hotel_review'],
         'description': 'Aggregate 3 fact tables into ~40 ML-optimized features at province-month grain'
     },
-
-    # ===================================
-    # PHASE 4: ML Training (After all facts complete)
-    # ===================================
-    
-    'train_province_model': {
-        'job_path': 'TrainingModel/train_province_model.py',
-        'phase': 4,
-        'resource_level': 'heavy',
-        'depends_on': ['fact_province_content_engagement', 'fact_comment_nlp_engagement'],
-        'description': 'Train province engagement prediction model using MLflow'
-    },
 }
 
 # ============================================

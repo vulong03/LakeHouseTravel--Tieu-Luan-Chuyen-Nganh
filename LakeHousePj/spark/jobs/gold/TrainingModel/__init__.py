@@ -1,1 +1,0 @@
-# TrainingModel - Province-Month Aggregation

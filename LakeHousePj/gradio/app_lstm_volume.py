@@ -2,32 +2,31 @@
 Tourism Trend Forecasting — LSTM Hotel Volume Dashboard
 ========================================================
 
-Giao diện Gradio cho mô hình LSTM v3 dự báo lượng đặt phòng (hotel_review_volume).
-Target: hotel_review_volume (log-normalized, expm1 để hiển thị số thực)
+Gradio interface for the LSTM v3 model predicting reservation volume (hotel_review_volume).
+Target: hotel_review_volume (log-normalized, expm1 used for actual display scaling)
 
 Tabs:
-  Tab 1: Dự báo 12 tháng tới — top tỉnh theo lượng đặt phòng dự báo
-  Tab 2: So sánh tỉnh — biểu đồ xu hướng dự báo theo thời gian
-  Tab 3: Phân tích Traveler Type — couple/family/business/solo ratio theo tỉnh & tháng
-  Tab 4: Thông tin Model & Metrics
-
-Data source: MinIO s3a://gold/ml_forecast/province_hotel_volume_forecast_lstm_*
-Model registry: MLflow — province_hotel_volume_forecaster_lstm
+  Tab 1: 🏖️ Seasonal Recommendations — Seasonal & themed destination ranking
+  Tab 2: 🏆 Forecast Ranking — Top provinces by forecasted booking volume
+  Tab 3: 📈 Compare Provinces — Historical & forecasted trends over time
+  Tab 4: 👥 Traveler Demographics — Couple/family/business/solo ratios per province
+  Tab 5: 🏨 Hotel Segments — Search hotels by customer segments via K-Means (K=3)
+  Tab 6: 🧠 Model Specs — Deep learning architecture & MLflow metrics
 """
 
-import gradio as gr
+import os
+import time
+import sys
+from datetime import datetime
+from io import BytesIO
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from datetime import datetime
-import mlflow
-import os
-import time
-from io import BytesIO
+import gradio as gr
 from minio import Minio
 from minio.error import S3Error
+import mlflow
 
 # ============================================================
 # Configuration
@@ -41,7 +40,8 @@ MINIO_CLIENT = Minio(
 )
 BUCKET_NAME = "gold"
 FORECAST_PREFIX = "ml_forecast/"
-FEATURES_PREFIX = "ml_training/"          # dl_features.parquet (for traveler type tab)
+FEATURES_PREFIX = "ml_training/"          # dl_features.parquet (for traveler type & nlp avg)
+CLUSTERING_PREFIX = "ml-outputs/hotel-clustering-v2/results/"  # Hotel clustering
 LSTM_FILE_PATTERN = "province_hotel_volume_forecast_lstm_"
 
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
@@ -50,18 +50,19 @@ LSTM_MODEL_NAME = "province_hotel_volume_forecaster_lstm"
 CACHE_DURATION = 60   # seconds
 _forecast_cache = {"data": None, "timestamp": 0, "run_folder": ""}
 _features_cache = {"data": None, "timestamp": 0}
+_clustering_cache = {"data": None, "timestamp": 0}
 
-REGION_MAP_VI = {
-    "Northeast":           "Đông Bắc",
-    "Northwest":           "Tây Bắc",
-    "Red_River_Delta":     "Đồng bằng Sông Hồng",
-    "North_Central_Coast": "Bắc Trung Bộ",
-    "Central_Highlands":   "Tây Nguyên",
-    "South_Central_Coast": "Duyên hải Nam Trung Bộ",
-    "Southeast":           "Đông Nam Bộ",
-    "Mekong_Delta":        "Đồng bằng Sông Cửu Long",
+REGION_MAP_EN = {
+    "Northeast":           "Northeast",
+    "Northwest":           "Northwest",
+    "Red_River_Delta":     "Red River Delta",
+    "North_Central_Coast": "North Central Coast",
+    "Central_Highlands":   "Central Highlands",
+    "South_Central_Coast": "South Central Coast",
+    "Southeast":           "Southeast",
+    "Mekong_Delta":        "Mekong Delta",
 }
-REGIONS_VI = {"Tất cả": None, **{v: k for k, v in REGION_MAP_VI.items()}}
+REGIONS_EN = {"All Regions": None, **{v: k for k, v in REGION_MAP_EN.items()}}
 
 MONTH_CHOICES = [
     "10/2025", "11/2025", "12/2025",
@@ -69,6 +70,15 @@ MONTH_CHOICES = [
     "04/2026", "05/2026", "06/2026",
     "07/2026", "08/2026", "09/2026",
 ]
+
+# Exact coastal province names as represented in the database
+BEACH_PROVINCES = {
+    "Đà Nẵng", "Khánh Hòa", "Kiên Giang", "Bà Rịa Vũng Tàu", "Bình Thuận", 
+    "Quảng Ninh", "Hải Phòng", "Bình Định", "Phú Yên", "Quảng Nam", 
+    "Thừa Thiên Huế", "Ninh Thuận", "Thanh Hóa", "Nghệ An", "Quảng Bình",
+    "Bến Tre", "Trà Vinh", "Sóc Trăng", "Bạc Liêu", "Cà Mau",
+    "Quảng Ngãi", "Quảng Trị", "Hà Tĩnh", "Tiền Giang", "Nam Định", "Thái Bình"
+}
 
 def _ym_int(month_str: str) -> int:
     """Convert 'MM/YYYY' → YYYYMM int."""
@@ -79,7 +89,203 @@ def _ym_label(ym_int: int) -> str:
     return f"{ym_int % 100:02d}/{ym_int // 100}"
 
 
-# ============================================================
+def _get_months_from_range(range_str: str) -> list:
+    """Parse range string 'MM/YYYY - MM/YYYY' and return all months in between from MONTH_CHOICES."""
+    if not range_str:
+        return ["05/2026", "06/2026", "07/2026", "08/2026"]  # Fallback to Summer
+    try:
+        # Strip optional "season|" prefix
+        if "|" in range_str:
+            range_str = range_str.split("|")[1]
+            
+        if " - " not in range_str:
+            return ["05/2026", "06/2026", "07/2026", "08/2026"]
+            
+        parts = range_str.split(" - ")
+        if len(parts) != 2:
+            return ["05/2026", "06/2026", "07/2026", "08/2026"]
+        start_m, end_m = parts[0].strip(), parts[1].strip()
+        if start_m not in MONTH_CHOICES or end_m not in MONTH_CHOICES:
+            return ["05/2026", "06/2026", "07/2026", "08/2026"]
+        idx_start = MONTH_CHOICES.index(start_m)
+        idx_end = MONTH_CHOICES.index(end_m)
+        if idx_start > idx_end:
+            idx_start, idx_end = idx_end, idx_start
+        return MONTH_CHOICES[idx_start : idx_end + 1]
+    except Exception as e:
+        print(f"Error parsing range: {e}")
+        return ["05/2026", "06/2026", "07/2026", "08/2026"]
+
+
+def create_slider_html() -> str:
+    return """
+<div class="double-slider-wrapper">
+  <div class="slider-header">
+    <span class="slider-title-label">Selected Month Range:</span>
+    <span id="range-val-display" class="slider-range-val">05/2026 - 08/2026</span>
+  </div>
+  <div class="range-slider-container">
+    <div class="slider-track" id="slider-track-id"></div>
+    <input type="range" min="0" max="3" value="0" id="slider-1" class="slider-thumb-input">
+    <input type="range" min="0" max="3" value="3" id="slider-2" class="slider-thumb-input">
+  </div>
+  <div class="slider-ticks">
+    <span>05/2026</span>
+    <span>06/2026</span>
+    <span>07/2026</span>
+    <span>08/2026</span>
+  </div>
+</div>
+<script>
+(function() {
+  const SEASONS = {
+    "summer": ["05/2026", "06/2026", "07/2026", "08/2026"],
+    "winter": ["11/2025", "12/2025", "01/2026"],
+    "spring": ["02/2026", "03/2026", "04/2026"],
+    "none": [
+      "10/2025", "11/2025", "12/2025",
+      "01/2026", "02/2026", "03/2026",
+      "04/2026", "05/2026", "06/2026",
+      "07/2026", "08/2026", "09/2026"
+    ]
+  };
+
+  let active_season = "summer";
+  let active_choices = SEASONS["summer"];
+
+  function initSlider() {
+    const slider1 = document.getElementById("slider-1");
+    const slider2 = document.getElementById("slider-2");
+    const track = document.getElementById("slider-track-id");
+    const display = document.getElementById("range-val-display");
+
+    if (!slider1 || !slider2 || !track || !display) {
+      setTimeout(initSlider, 100);
+      return;
+    }
+
+    const minGap = 0;
+
+    function updateTrack() {
+      let val1 = parseInt(slider1.value);
+      let val2 = parseInt(slider2.value);
+      let maxVal = active_choices.length - 1;
+      let p1 = maxVal > 0 ? (val1 / maxVal) * 100 : 0;
+      let p2 = maxVal > 0 ? (val2 / maxVal) * 100 : 100;
+      track.style.background = `linear-gradient(to right, #374151 0%, #374151 ${p1}%, #4f46e5 ${p1}%, #4f46e5 ${p2}%, #374151 ${p2}%, #374151 100%)`;
+      display.textContent = `${active_choices[val1]} - ${active_choices[val2]}`;
+    }
+
+    function syncToGradio() {
+      let val1 = parseInt(slider1.value);
+      let val2 = parseInt(slider2.value);
+      let rangeStr = `${active_choices[val1]} - ${active_choices[val2]}`;
+      let fullVal = `${active_season}|${rangeStr}`;
+      const textarea = document.querySelector("#month-range-hidden-input textarea") || document.querySelector("#month-range-hidden-input input");
+      if (textarea && textarea.value !== fullVal) {
+        textarea.value = fullVal;
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    }
+
+    slider1.oninput = function() {
+      let val1 = parseInt(slider1.value);
+      let val2 = parseInt(slider2.value);
+      if (val2 - val1 < minGap) {
+        slider1.value = val2 - minGap;
+      }
+      updateTrack();
+      syncToGradio();
+    };
+
+    slider2.oninput = function() {
+      let val1 = parseInt(slider1.value);
+      let val2 = parseInt(slider2.value);
+      if (val2 - val1 < minGap) {
+        slider2.value = val1 + minGap;
+      }
+      updateTrack();
+      syncToGradio();
+    };
+
+    // Set up a listener for changes in the hidden textarea (from python side)
+    let lastValue = "";
+    setInterval(function() {
+      const textarea = document.querySelector("#month-range-hidden-input textarea") || document.querySelector("#month-range-hidden-input input");
+      if (textarea && textarea.value !== lastValue) {
+        lastValue = textarea.value;
+        
+        let parts = lastValue.split("|");
+        let new_season = "none";
+        let range_str = lastValue;
+        if (parts.length === 2) {
+          new_season = parts[0].trim();
+          range_str = parts[1].trim();
+        } else {
+          if (lastValue === "05/2026 - 08/2026") new_season = "summer";
+          else if (lastValue === "11/2025 - 01/2026") new_season = "winter";
+          else if (lastValue === "02/2026 - 04/2026") new_season = "spring";
+        }
+
+        active_season = new_season;
+        active_choices = SEASONS[active_season] || SEASONS["none"];
+
+        // Update slider min/max limits
+        let maxIdx = active_choices.length - 1;
+        slider1.max = maxIdx;
+        slider2.max = maxIdx;
+
+        // Rebuild tick marks
+        const ticksContainer = document.querySelector(".slider-ticks");
+        if (ticksContainer) {
+          ticksContainer.innerHTML = "";
+          active_choices.forEach(function(month) {
+            let span = document.createElement("span");
+            if (active_choices.length > 4) {
+              let m_y = month.split("/");
+              span.textContent = `${m_y[0]}/${m_y[1].substring(2)}`;
+            } else {
+              span.textContent = month;
+            }
+            ticksContainer.appendChild(span);
+          });
+        }
+
+        // Parse range to set values
+        let range_parts = range_str.split(" - ");
+        if (range_parts.length === 2) {
+          let idx1 = active_choices.indexOf(range_parts[0].trim());
+          let idx2 = active_choices.indexOf(range_parts[1].trim());
+          if (idx1 !== -1 && idx2 !== -1) {
+            slider1.value = idx1;
+            slider2.value = idx2;
+          } else {
+            slider1.value = 0;
+            slider2.value = maxIdx;
+          }
+        } else {
+          slider1.value = 0;
+          slider2.value = maxIdx;
+        }
+
+        updateTrack();
+      }
+    }, 150);
+
+    // Initial load sync
+    updateTrack();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initSlider);
+  } else {
+    initSlider();
+  }
+})();
+</script>
+"""
+
+# ============================================================================
 # Data Loading
 # ============================================================
 
@@ -104,7 +310,7 @@ def load_forecast_data():
                     files_by_folder.setdefault(folder, []).append(obj.object_name)
 
         if not folder_ts:
-            return pd.DataFrame(), "⚠️ Không tìm thấy file dự báo LSTM trong MinIO. Hãy chạy train_lstm_forecast.py trước!"
+            return pd.DataFrame(), "⚠️ No LSTM forecast files found in MinIO. Please run train_lstm_forecast.py first!"
 
         latest = max(folder_ts, key=folder_ts.get)
         dfs = []
@@ -113,8 +319,8 @@ def load_forecast_data():
             dfs.append(pd.read_parquet(BytesIO(resp.read())))
 
         df = pd.concat(dfs, ignore_index=True)
-        df["region_vi"] = df["region"].map(REGION_MAP_VI).fillna(df["region"])
-        df["date"] = pd.to_datetime(df["year_month"].astype(str), format="%Y%m")
+        df["region_vi"] = df["region"].map(REGION_MAP_EN).fillna(df["region"])
+        df["date"] = pd.to_datetime(df["year_month"].astype(float).astype(int).astype(str), format="%Y%m")
         df["month_label"] = df["date"].dt.strftime("%m/%Y")
 
         _forecast_cache.update({"data": df, "timestamp": now, "run_folder": latest})
@@ -122,14 +328,14 @@ def load_forecast_data():
         return df, None
 
     except S3Error as e:
-        return pd.DataFrame(), f"❌ Lỗi kết nối MinIO: {e}"
+        return pd.DataFrame(), f"❌ MinIO connection error: {e}"
     except Exception as e:
         import traceback; traceback.print_exc()
-        return pd.DataFrame(), f"❌ Lỗi load dữ liệu: {e}"
+        return pd.DataFrame(), f"❌ Data loading error: {e}"
 
 
 def load_features_data():
-    """Load dl_features parquet (for traveler type analysis) from MinIO."""
+    """Load dl_features parquet (for traveler type analysis and aspect weights) from MinIO."""
     global _features_cache
     now = time.time()
     if _features_cache["data"] is not None and (now - _features_cache["timestamp"]) < CACHE_DURATION:
@@ -139,7 +345,7 @@ def load_features_data():
         objects = list(MINIO_CLIENT.list_objects(BUCKET_NAME, prefix=FEATURES_PREFIX, recursive=True))
         parquet_files = [o.object_name for o in objects if o.object_name.endswith(".parquet")]
         if not parquet_files:
-            return pd.DataFrame(), "⚠️ Không tìm thấy dl_features.parquet trong MinIO."
+            return pd.DataFrame(), "⚠️ dl_features.parquet not found in MinIO."
 
         dfs = []
         for fpath in parquet_files:
@@ -147,14 +353,64 @@ def load_features_data():
             dfs.append(pd.read_parquet(BytesIO(resp.read())))
 
         df = pd.concat(dfs, ignore_index=True)
-        df["region_vi"] = df["region"].map(REGION_MAP_VI).fillna(df.get("region", ""))
+        df["region_vi"] = df["region"].map(REGION_MAP_EN).fillna(df.get("region", ""))
         _features_cache.update({"data": df, "timestamp": now})
         print(f"✅ Loaded {len(df)} feature rows for traveler analysis")
         return df, None
 
     except Exception as e:
         import traceback; traceback.print_exc()
-        return pd.DataFrame(), f"❌ Lỗi load features: {e}"
+        return pd.DataFrame(), f"❌ Features loading error: {e}"
+
+
+def load_clustering_data():
+    """Load hotel clustering results from MinIO with caching."""
+    global _clustering_cache
+    now = time.time()
+    if _clustering_cache["data"] is not None and (now - _clustering_cache["timestamp"]) < CACHE_DURATION:
+        return _clustering_cache["data"], None
+
+    try:
+        parquet_objects = list(MINIO_CLIENT.list_objects(BUCKET_NAME, prefix=CLUSTERING_PREFIX, recursive=True))
+        parquet_files = [obj.object_name for obj in parquet_objects if obj.object_name.endswith('.parquet')]
+
+        if not parquet_files:
+            return pd.DataFrame(), "⚠️ Hotel clustering results not found in MinIO!"
+
+        dfs = []
+        for obj_name in parquet_files:
+            response = MINIO_CLIENT.get_object(BUCKET_NAME, obj_name)
+            dfs.append(pd.read_parquet(BytesIO(response.read())))
+
+        df = pd.concat(dfs, ignore_index=True)
+        _clustering_cache.update({"data": df, "timestamp": now})
+        print(f"✅ Loaded {len(df)} hotels from clustering results")
+        return df, None
+
+    except S3Error as e:
+        return pd.DataFrame(), f"❌ MinIO connection error: {e}"
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return pd.DataFrame(), f"❌ Hotel clustering loading error: {e}"
+
+
+def load_average_aspects():
+    """Load aspects from features and compute historical averages per province."""
+    df_feat, err = load_features_data()
+    if err or df_feat.empty:
+        return pd.DataFrame(), err or "Empty dataset"
+
+    aspect_cols = [
+        "avg_aspect_scenery", "avg_aspect_food", "avg_aspect_price",
+        "avg_aspect_service", "avg_aspect_accommodation"
+    ]
+    existing = [c for c in aspect_cols if c in df_feat.columns]
+    if not existing:
+        return pd.DataFrame(), "⚠️ PhoBERT aspect columns not found in dl_features."
+
+    # Group by province_sk to get baseline characteristics
+    df_avg = df_feat.groupby("province_sk")[existing].mean().reset_index()
+    return df_avg, None
 
 
 def get_model_info():
@@ -188,26 +444,255 @@ def get_model_info():
 
 
 # ============================================================
-# Tab 1 — Top Province Forecast
+# Tab 1 — Seasonal & Themed Recommendations
 # ============================================================
 
-def tab1_top_provinces(start_month, end_month, region_vi, top_n, sort_by):
+def tab1_seasonal_recommend(selected_months, selected_theme, selected_region, top_n):
+    """Generate recommendations based on predicted volume and PhoBERT aspect scores over multiple months."""
+    df_forecast, err = load_forecast_data()
+    if err:
+        return pd.DataFrame(), None, _error_html(err), _error_html(err)
+    if df_forecast.empty:
+        return pd.DataFrame(), None, _warn_html("No forecast data available."), _warn_html("No data.")
+
+    # Convert selected_months (list or string) to a list of YYYYMM integers
+    if not selected_months:
+        return pd.DataFrame(), None, _warn_html("Please select at least one month."), _warn_html("No month selected.")
+    if isinstance(selected_months, str):
+        selected_months = _get_months_from_range(selected_months)
+    elif not isinstance(selected_months, list):
+        selected_months = [selected_months]
+
+    month_ints = [_ym_int(m) for m in selected_months if m]
+    if not month_ints:
+        return pd.DataFrame(), None, _warn_html("No valid months selected."), _warn_html("No valid months.")
+
+    # Filter by selected months
+    df_filtered = df_forecast[df_forecast["year_month"].isin(month_ints)].copy()
+    if selected_region != "Tất cả" and selected_region != "All Regions":
+        df_filtered = df_filtered[df_filtered["region_vi"] == selected_region]
+
+    if df_filtered.empty:
+        return pd.DataFrame(), None, _warn_html("No forecast data found matching selected criteria."), _warn_html("No data.")
+
+    # Fetch aspect scores
+    df_aspects, _ = load_average_aspects()
+    if not df_aspects.empty:
+        df_filtered = df_filtered.merge(df_aspects, on="province_sk", how="left")
+
+    # Set default values for aspects if missing
+    aspect_cols = [
+        "avg_aspect_scenery", "avg_aspect_food", "avg_aspect_price",
+        "avg_aspect_service", "avg_aspect_accommodation"
+    ]
+    for c in aspect_cols:
+        if c in df_filtered.columns:
+            df_filtered[c] = df_filtered[c].fillna(0.5)
+        else:
+            df_filtered[c] = 0.5
+
+    # Compute themed recommendation score for each month row
+    theme_col_map = {
+        "🏞️ Scenery": "avg_aspect_scenery",
+        "🍲 Food": "avg_aspect_food",
+        "💰 Price": "avg_aspect_price",
+        "🛎️ Service": "avg_aspect_service",
+        "🏨 Accommodation": "avg_aspect_accommodation",
+        "All": None
+    }
+    aspect_col = theme_col_map.get(selected_theme)
+    if aspect_col:
+        df_filtered["recommendation_score"] = df_filtered["predicted_hotel_volume_actual"] * df_filtered[aspect_col]
+        theme_label = selected_theme
+    else:
+        df_filtered["recommendation_score"] = df_filtered["predicted_hotel_volume_actual"]
+        theme_label = "Overall Demand"
+
+    # Now aggregate across months to get a single row per province
+    agg_dict = {
+        "predicted_hotel_volume_actual": "mean",  # Average monthly volume
+        "recommendation_score": "mean"            # Average monthly recommendation score
+    }
+    for c in aspect_cols:
+        if c in df_filtered.columns:
+            agg_dict[c] = "first" # Aspect sentiments are constant per province anyway
+
+    df_m = df_filtered.groupby(["province_sk", "province_name", "region_vi"]).agg(agg_dict).reset_index()
+
+    # Scale scores to 0-100
+    max_score = df_m["recommendation_score"].max()
+    if max_score > 0:
+        df_m["rec_index"] = (df_m["recommendation_score"] / max_score) * 100
+    else:
+        df_m["rec_index"] = 0.0
+
+    df_m = df_m.sort_values("rec_index", ascending=False).head(int(top_n)).reset_index(drop=True)
+    df_m["rank"] = range(1, len(df_m) + 1)
+
+    # 1. Create Plotly Bar Chart (Dark Theme)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=df_m["province_name"],
+        y=df_m["rec_index"].round(1),
+        marker=dict(
+            color=df_m["rec_index"],
+            colorscale="Viridis",
+            showscale=True,
+            colorbar=dict(title="Recommendation Score"),
+        ),
+        text=df_m["rec_index"].round(1),
+        textposition="outside",
+        hovertemplate="<b>%{x}</b><br>Score: %{y:.1f}/100<br><extra></extra>",
+    ))
+    
+    months_label_str = ", ".join(selected_months)
+    fig.update_layout(
+        title={"text": f"🎯 Top Destination Recommendations — Criteria: {theme_label} ({months_label_str})",
+               "x": 0.5, "xanchor": "center", "font": {"size": 18, "color": "#f1f5f9"}},
+        xaxis=dict(title="", tickangle=-30, tickfont=dict(color="#94a3b8")),
+        yaxis=dict(title="Recommendation Score (0-100)", range=[0, 115], tickfont=dict(color="#94a3b8")),
+        template="plotly_dark",
+        height=420,
+        plot_bgcolor="#111827",
+        paper_bgcolor="#111827",
+    )
+
+    # 2. Generate Premium HTML cards (Dark Theme)
+    cards_html = f"""
+    <div style="margin-top: 25px; padding-bottom: 5px; border-bottom: 2px solid #1f2937; margin-bottom: 20px;">
+        <h3 style="margin: 0; font-size: 1.5em; font-weight: 700; color: #f1f5f9; display: flex; align-items: center; gap: 8px;">
+            🏖️ Special Travel Recommendations for {months_label_str}
+        </h3>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 24px;">
+    """
+
+    rank_colors = {
+        1: ("#fbbf24", "rgba(251, 191, 36, 0.15)", "#fbbf24", "linear-gradient(135deg, #1e1b4b 0%, #1e293b 100%)"), # Gold
+        2: ("#94a3b8", "rgba(148, 163, 184, 0.15)", "#cbd5e1", "linear-gradient(135deg, #0f172a 0%, #1e293b 100%)"), # Silver
+        3: ("#b45309", "rgba(180, 83, 9, 0.15)", "#f97316", "linear-gradient(135deg, #1e1b4b 0%, #1c1917 100%)")  # Bronze
+    }
+
+    # Determine representative season details based on selected months
+    summer_months_in_sel = [m % 100 for m in month_ints if (m % 100) in [5, 6, 7, 8]]
+    winter_months_in_sel = [m % 100 for m in month_ints if (m % 100) in [11, 12, 1]]
+    spring_months_in_sel = [m % 100 for m in month_ints if (m % 100) in [2, 3, 4]]
+    
+    if len(summer_months_in_sel) >= len(winter_months_in_sel) and len(summer_months_in_sel) >= len(spring_months_in_sel):
+        rep_season = "summer"
+    elif len(winter_months_in_sel) >= len(summer_months_in_sel) and len(winter_months_in_sel) >= len(spring_months_in_sel):
+        rep_season = "winter"
+    elif len(spring_months_in_sel) >= len(summer_months_in_sel) and len(spring_months_in_sel) >= len(winter_months_in_sel):
+        rep_season = "spring"
+    else:
+        rep_season = "autumn"
+
+    for i, row in df_m.iterrows():
+        rank = row["rank"]
+        prov_name = row["province_name"]
+        region = row["region_vi"]
+        rec_idx = row["rec_index"]
+        pred_vol = row["predicted_hotel_volume_actual"]
+
+        border_color, badge_bg, text_color, card_bg = rank_colors.get(rank, ("#4f46e5", "rgba(79, 70, 229, 0.15)", "#818cf8", "#111827"))
+
+        # Check coastal and mountainous characteristics
+        is_beach = prov_name in BEACH_PROVINCES
+        is_highland = prov_name in {"Lâm Đồng", "Lào Cai", "Hà Giang", "Sơn La", "Yên Bái", "Lai Châu", "Điện Biên", "Cao Bằng", "Lạng Sơn"}
+        
+        season_badge = ""
+        season_desc = ""
+        
+        if rep_season == "summer":
+            if is_beach:
+                season_badge = "🏖️ Summer - Beach Travel"
+                season_desc = f"{prov_name} is welcoming a high volume of visitors. Highly suitable for swimming, water sports, and beach resorts."
+            else:
+                season_badge = "☀️ Summer - Sightseeing & Entertainment"
+                season_desc = f"{prov_name} is in its bustling summer phase. Ideal for indoor sightseeing, diverse culinary exploration, and active summer entertainment."
+        elif rep_season == "winter":
+            if is_highland:
+                season_badge = "❄️ Winter - Highland Cloud Hunting"
+                season_desc = f"The cold weather in {prov_name} is perfect for mountain cloud hunting, viewing misty landscapes, winter flowers (wild sunflowers/apricots), and warm local delicacies."
+            else:
+                season_badge = "🍁 Winter - Urban Tourism & Relaxation"
+                season_desc = f"The cool and pleasant year-end weather in {prov_name} is ideal for walking, festival shopping, and gathering with friends."
+        elif rep_season == "spring":
+            season_badge = "🌸 Spring - Festivals & Scenic Tours"
+            season_desc = f"This is when {prov_name} hosts many traditional early-year festivals, suitable for temple sightseeing and spring heritage exploration."
+        else:
+            season_badge = "🍂 Autumn - Moderate & Romantic"
+            season_desc = f"The climate in {prov_name} is cool, pleasant, and beautiful, suitable for outdoor picnics or wellness recovery retreat tours."
+
+        # Aspect details
+        aspect_info = ""
+        if selected_theme != "Tất cả" and selected_theme != "All":
+            val = row[theme_col_map[selected_theme]]
+            aspect_info = f'<span style="background:#10b981; color:white; padding:3px 8px; border-radius:12px; font-size:0.8em; font-weight:600; margin-left:6px;">Aspect: {val:.2f}</span>'
+
+        cards_html += f"""
+        <div style="background: {card_bg}; border-radius: 18px; border: 1px solid #1f2937; box-shadow: 0 4px 20px rgba(0,0,0,0.15); padding: 24px; position: relative; overflow: hidden;">
+            <div style="position: absolute; top: 0; left: 0; height: 100%; width: 6px; background: {border_color};"></div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+                <span style="background: {badge_bg}; color: {text_color}; padding: 4px 12px; border-radius: 20px; font-size: 0.85em; font-weight: 700; border: 1px solid {border_color}33;">
+                    Rank {rank}
+                </span>
+                <span style="font-size: 0.9em; color: #94a3b8; font-weight: 600;">{region}</span>
+            </div>
+            <h4 style="margin: 0 0 10px 0; font-size: 1.4em; font-weight: 800; color: #f8fafc;">{prov_name}</h4>
+            <div style="margin-bottom: 16px;">
+                <span style="background: #1f2937; color: #cbd5e1; padding: 4px 10px; border-radius: 12px; font-size: 0.8em; font-weight: 600;">{season_badge}</span>
+                {aspect_info}
+            </div>
+            <div style="background: #0f172a; border-radius: 12px; padding: 14px; margin-bottom: 16px; border: 1px solid #1f2937;">
+                <div style="display: flex; justify-content: space-between; font-size: 0.92em; margin-bottom: 6px;">
+                    <span style="color: #94a3b8;">Avg Recommendation Index:</span>
+                    <strong style="color: #38bdf8; font-size: 1.1em;">{rec_idx:.1f} / 100</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.92em;">
+                    <span style="color: #94a3b8;">Avg Forecasted Reviews:</span>
+                    <strong style="color: #f1f5f9;">{pred_vol:,.0f} reviews/mo</strong>
+                </div>
+            </div>
+            <p style="margin: 0; font-size: 0.88em; color: #94a3b8; line-height: 1.6; font-weight: 450;">{season_desc}</p>
+        </div>
+        """
+
+    cards_html += "</div>"
+
+    info_html = _info_html(
+        f"Travel recommendations for: {months_label_str} · Ranked by: {theme_label} · Showing Top {len(df_m)} best destinations."
+    )
+
+    table_df = df_m[["rank", "province_name", "region_vi", "rec_index", "predicted_hotel_volume_actual"]].copy()
+    table_df.columns = ["Rank", "Province", "Region", "Recommendation Score (100)", "Avg Forecasted Reviews/Month"]
+    table_df["Avg Forecasted Reviews/Month"] = table_df["Avg Forecasted Reviews/Month"].round(0).astype(int)
+    table_df["Recommendation Score (100)"] = table_df["Recommendation Score (100)"].round(1)
+
+    return table_df, fig, cards_html, info_html
+
+
+# ============================================================
+# Tab 2 — Top Province Forecast
+# ============================================================
+
+def tab2_top_provinces(start_month, end_month, region_vi, top_n, sort_by):
     df, err = load_forecast_data()
     if err:
         return pd.DataFrame(), None, _error_html(err)
     if df.empty:
-        return pd.DataFrame(), None, _warn_html("Không có dữ liệu dự báo.")
+        return pd.DataFrame(), None, _warn_html("No forecast data available.")
 
     s_ym, e_ym = _ym_int(start_month), _ym_int(end_month)
     if s_ym > e_ym:
-        return pd.DataFrame(), None, _error_html("Tháng bắt đầu phải ≤ tháng kết thúc!")
+        return pd.DataFrame(), None, _error_html("Start month must be before or equal to end month!")
 
     fdf = df[(df["year_month"] >= s_ym) & (df["year_month"] <= e_ym)].copy()
-    if region_vi != "Tất cả":
+    if region_vi != "Tất cả" and region_vi != "All Regions":
         fdf = fdf[fdf["region_vi"] == region_vi]
 
     if fdf.empty:
-        return pd.DataFrame(), None, _warn_html("Không có dữ liệu cho khoảng thời gian/vùng đã chọn.")
+        return pd.DataFrame(), None, _warn_html("No data available for the selected range/region.")
 
     # Aggregate
     agg = fdf.groupby(["province_sk", "province_name", "region_vi"]).agg(
@@ -217,7 +702,7 @@ def tab1_top_provinces(start_month, end_month, region_vi, top_n, sort_by):
         peak_month=("predicted_hotel_volume_actual", "idxmax"),
     ).reset_index()
 
-    sort_col = "avg_volume" if sort_by == "Lượng đặt phòng TB/tháng" else "avg_growth"
+    sort_col = "avg_volume" if sort_by == "Avg Monthly Reviews" else "avg_growth"
     agg = agg.sort_values(sort_col, ascending=False).head(int(top_n)).reset_index(drop=True)
     agg["rank"] = range(1, len(agg) + 1)
 
@@ -232,14 +717,13 @@ def tab1_top_provinces(start_month, end_month, region_vi, top_n, sort_by):
 
     result_df = agg[["rank", "province_name", "region_vi",
                       "avg_volume", "total_volume", "avg_growth", "peak_month_label"]].copy()
-    result_df.columns = ["#", "Tỉnh/Thành", "Vùng",
-                         "TB Lượt/Tháng", "Tổng Lượt (12T)", "Tăng trưởng TB %", "Tháng Đỉnh"]
-    result_df["TB Lượt/Tháng"] = result_df["TB Lượt/Tháng"].round(0).astype(int)
-    result_df["Tổng Lượt (12T)"] = result_df["Tổng Lượt (12T)"].round(0).astype(int)
-    result_df["Tăng trưởng TB %"] = result_df["Tăng trưởng TB %"].round(1)
+    result_df.columns = ["Rank", "Province", "Region",
+                         "Avg Reviews/Month", "Total Reviews (12M)", "Avg Growth %", "Peak Month"]
+    result_df["Avg Reviews/Month"] = result_df["Avg Reviews/Month"].round(0).astype(int)
+    result_df["Total Reviews (12M)"] = result_df["Total Reviews (12M)"].round(0).astype(int)
+    result_df["Avg Growth %"] = result_df["Avg Growth %"].round(1)
 
-    # Bar chart
-    colors = px.colors.qualitative.Vivid
+    # Bar chart (Dark Theme)
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=agg["province_name"],
@@ -248,36 +732,33 @@ def tab1_top_provinces(start_month, end_month, region_vi, top_n, sort_by):
             color=agg["avg_volume"],
             colorscale="Teal",
             showscale=True,
-            colorbar=dict(title="Lượt/tháng"),
+            colorbar=dict(title="Reviews/Month"),
         ),
         text=agg["avg_volume"].round(0).astype(int),
         textposition="outside",
-        hovertemplate=(
-            "<b>%{x}</b><br>"
-            "TB Lượt/Tháng: %{y:,.0f}<br>"
-            "<extra></extra>"
-        ),
+        hovertemplate="<b>%{x}</b><br>Avg Reviews: %{y:,.0f}<br><extra></extra>",
     ))
     fig.update_layout(
-        title={"text": f"🏆 Top {len(agg)} Tỉnh — Lượt Đặt Phòng Dự Báo ({start_month}→{end_month})",
-               "x": 0.5, "xanchor": "center", "font": {"size": 18}},
-        xaxis=dict(title="", tickangle=-35),
-        yaxis=dict(title="Lượt review/tháng (dự báo)"),
-        template="plotly_white",
-        height=480,
-        plot_bgcolor="rgba(248,250,255,0.8)",
+        title={"text": f"🏆 Top {len(agg)} Provinces — Forecasted Reviews ({start_month} to {end_month})",
+               "x": 0.5, "xanchor": "center", "font": {"size": 18, "color": "#f1f5f9"}},
+        xaxis=dict(title="", tickangle=-35, tickfont=dict(color="#94a3b8")),
+        yaxis=dict(title="Forecasted reviews/month", tickfont=dict(color="#94a3b8")),
+        template="plotly_dark",
+        height=450,
+        plot_bgcolor="#111827",
+        paper_bgcolor="#111827",
     )
 
     n_prov = df["province_sk"].nunique()
     info = _info_html(
-        f"Đã lọc {n_prov} tỉnh · {fdf['year_month'].nunique()} tháng · "
-        f"Hiển thị top {len(agg)} ({sort_by})"
+        f"Filtered {n_prov} provinces · {fdf['year_month'].nunique()} months · "
+        f"Showing Top {len(agg)} ({sort_by})"
     )
     return result_df, fig, info
 
 
 # ============================================================
-# Tab 2 — Province Comparison (time series)
+# Tab 3 — Province Comparison (time series)
 # ============================================================
 
 def tab2_compare(province_list, metric):
@@ -285,13 +766,13 @@ def tab2_compare(province_list, metric):
     if err:
         return None, _error_html(err)
     if df.empty or not province_list:
-        return None, _warn_html("Chưa chọn tỉnh nào.")
+        return None, _warn_html("No provinces selected.")
 
     fdf = df[df["province_name"].isin(province_list)].copy()
     fdf = fdf.sort_values(["province_name", "date"])
 
-    col = "predicted_hotel_volume_actual" if metric == "Lượt đặt phòng (actual)" else "predicted_growth_pct"
-    ylab = "Lượt review (dự báo)" if metric == "Lượt đặt phòng (actual)" else "Tăng trưởng % so với tháng trước"
+    col = "predicted_hotel_volume_actual" if metric == "Forecasted Reviews (Actual)" else "predicted_growth_pct"
+    ylab = "Forecasted Reviews" if metric == "Forecasted Reviews (Actual)" else "Growth Rate % vs Previous Month"
 
     fig = go.Figure()
     palette = px.colors.qualitative.Bold
@@ -306,33 +787,34 @@ def tab2_compare(province_list, metric):
             marker=dict(size=9, symbol="circle"),
             hovertemplate=(
                 f"<b>{prov}</b><br>"
-                "Tháng: %{x|%m/%Y}<br>"
+                "Month: %{x|%m/%Y}<br>"
                 f"{ylab}: %{{y:,.1f}}<br>"
                 "<extra></extra>"
             )
         ))
 
     fig.update_layout(
-        title={"text": f"📈 So sánh Dự báo: {metric}", "x": 0.5, "xanchor": "center", "font": {"size": 18}},
-        xaxis=dict(title="Thời gian", tickformat="%m/%Y", dtick="M1", tickangle=-40),
-        yaxis=dict(title=ylab),
+        title={"text": f"📈 Forecast Comparison: {metric}", "x": 0.5, "xanchor": "center", "font": {"size": 18, "color": "#f1f5f9"}},
+        xaxis=dict(title="Timeline", tickformat="%m/%Y", dtick="M1", tickangle=-40, tickfont=dict(color="#94a3b8")),
+        yaxis=dict(title=ylab, tickfont=dict(color="#94a3b8")),
         hovermode="x unified",
-        template="plotly_white",
+        template="plotly_dark",
         height=520,
         legend=dict(orientation="v", xanchor="left", x=1.02, yanchor="top", y=0.98,
-                    bgcolor="rgba(255,255,255,0.9)", bordercolor="#ddd", borderwidth=1),
+                    bgcolor="rgba(17,24,39,0.9)", bordercolor="#334155", borderwidth=1),
         margin=dict(r=200),
-        plot_bgcolor="rgba(248,250,255,0.8)",
+        plot_bgcolor="#111827",
+        paper_bgcolor="#111827",
     )
-    fig.update_xaxes(showgrid=True, gridcolor="rgba(200,220,240,0.5)")
-    fig.update_yaxes(showgrid=True, gridcolor="rgba(200,220,240,0.5)")
+    fig.update_xaxes(showgrid=True, gridcolor="rgba(51,65,85,0.4)")
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(51,65,85,0.4)")
 
-    info = _info_html(f"So sánh {len(province_list)} tỉnh · 12 tháng dự báo · LSTM v3")
+    info = _info_html(f"Comparing {len(province_list)} provinces · 12-Month Forecast · LSTM Model v3")
     return fig, info
 
 
 # ============================================================
-# Tab 3 — Traveler Type Analysis
+# Tab 4 — Traveler Type Analysis
 # ============================================================
 
 def tab3_traveler(province_name, year_filter):
@@ -340,24 +822,24 @@ def tab3_traveler(province_name, year_filter):
     if err:
         return None, None, _error_html(err)
     if df_feat.empty:
-        return None, None, _warn_html("Không có dữ liệu đặc trưng.")
+        return None, None, _warn_html("No feature data available.")
 
     fdf = df_feat[df_feat["province_name"] == province_name].copy()
-    if year_filter != "Tất cả":
+    if year_filter != "Tất cả" and year_filter != "All":
         fdf = fdf[fdf["year"] == int(year_filter)]
 
     if fdf.empty:
-        return None, None, _warn_html(f"Không có dữ liệu cho {province_name}.")
+        return None, None, _warn_html(f"No data available for {province_name}.")
 
     fdf = fdf.sort_values("year_month")
-    fdf["date"] = pd.to_datetime(fdf["year_month"].astype(str), format="%Y%m")
+    fdf["date"] = pd.to_datetime(fdf["year_month"].astype(float).astype(int).astype(str), format="%Y%m")
 
-    # --- Chart 1: Stacked area traveler type ---
+    # --- Chart 1: Stacked area traveler type (Dark Theme) ---
     fig1 = go.Figure()
     colors_map = {"couple_ratio": "#4ECDC4", "family_ratio": "#FF6B6B",
                   "business_ratio": "#45B7D1", "solo_ratio": "#FFA07A"}
-    labels_map = {"couple_ratio": "Cặp đôi", "family_ratio": "Gia đình",
-                  "business_ratio": "Công tác", "solo_ratio": "Một mình"}
+    labels_map = {"couple_ratio": "Couple", "family_ratio": "Family",
+                  "business_ratio": "Business", "solo_ratio": "Solo"}
     for col in ["couple_ratio", "family_ratio", "business_ratio", "solo_ratio"]:
         fig1.add_trace(go.Scatter(
             x=fdf["date"],
@@ -367,28 +849,29 @@ def tab3_traveler(province_name, year_filter):
             stackgroup="one",
             line=dict(width=0.5, color=colors_map[col]),
             fillcolor=colors_map[col],
-            hovertemplate=f"<b>{labels_map[col]}</b>: %{{y:.1f}}%<br>Tháng: %{{x|%m/%Y}}<extra></extra>",
+            hovertemplate=f"<b>{labels_map[col]}</b>: %{{y:.1f}}%<br>Month: %{{x|%m/%Y}}<extra></extra>",
         ))
 
     fig1.update_layout(
-        title={"text": f"👥 Phân bổ Loại Du khách — {province_name}", "x": 0.5, "xanchor": "center"},
-        xaxis=dict(tickformat="%m/%Y", dtick="M1", tickangle=-40),
-        yaxis=dict(title="Tỷ lệ (%)", range=[0, 100]),
+        title={"text": f"👥 Traveler Type Distribution — {province_name}", "x": 0.5, "xanchor": "center", "font": {"color": "#f1f5f9"}},
+        xaxis=dict(tickformat="%m/%Y", dtick="M1", tickangle=-40, tickfont=dict(color="#94a3b8")),
+        yaxis=dict(title="Percentage Ratio (%)", range=[0, 100], tickfont=dict(color="#94a3b8")),
         hovermode="x unified",
-        template="plotly_white",
-        height=400,
+        template="plotly_dark",
+        height=380,
         legend=dict(orientation="h", y=-0.2),
-        plot_bgcolor="rgba(248,250,255,0.8)",
+        plot_bgcolor="#111827",
+        paper_bgcolor="#111827",
     )
 
-    # --- Chart 2: Hotel review volume bar ---
+    # --- Chart 2: Hotel review volume bar (Dark Theme) ---
     fig2 = go.Figure()
     fig2.add_trace(go.Bar(
         x=fdf["date"],
         y=fdf["hotel_review_volume"],
         marker=dict(color=fdf["hotel_review_volume"], colorscale="Blues", showscale=False),
-        name="Lượt review",
-        hovertemplate="Tháng: %{x|%m/%Y}<br>Lượt review: %{y:,}<extra></extra>",
+        name="Review Volume",
+        hovertemplate="Month: %{x|%m/%Y}<br>Reviews: %{y:,}<extra></extra>",
     ))
     if "hotness_score" in fdf.columns:
         fig2.add_trace(go.Scatter(
@@ -404,35 +887,109 @@ def tab3_traveler(province_name, year_filter):
         ))
 
     fig2.update_layout(
-        title={"text": f"📊 Lượt Đặt Phòng Thực tế & Hotness — {province_name}", "x": 0.5, "xanchor": "center"},
-        xaxis=dict(tickformat="%m/%Y", dtick="M1", tickangle=-40),
-        yaxis=dict(title="Lượt review/tháng"),
-        yaxis2=dict(title="Hotness Score", overlaying="y", side="right", showgrid=False),
-        template="plotly_white",
-        height=400,
+        title={"text": f"📊 Actual Review Volume & Hotness — {province_name}", "x": 0.5, "xanchor": "center", "font": {"color": "#f1f5f9"}},
+        xaxis=dict(tickformat="%m/%Y", dtick="M1", tickangle=-40, tickfont=dict(color="#94a3b8")),
+        yaxis=dict(title="Reviews/Month", tickfont=dict(color="#94a3b8")),
+        yaxis2=dict(title="Hotness Score", overlaying="y", side="right", showgrid=False, tickfont=dict(color="#94a3b8")),
+        template="plotly_dark",
+        height=380,
         legend=dict(orientation="h", y=-0.2),
-        plot_bgcolor="rgba(248,250,255,0.8)",
+        plot_bgcolor="#111827",
+        paper_bgcolor="#111827",
     )
 
     # Summary stats
     summary = fdf[["couple_ratio", "family_ratio", "business_ratio", "solo_ratio"]].mean() * 100
     info = f"""
-<div style="background: linear-gradient(135deg, #4ECDC4, #45B7D1); padding: 18px; border-radius: 12px; color: white;">
-  <h3 style="margin:0 0 10px">📍 {province_name} — Tổng kết</h3>
+<div style="background: linear-gradient(135deg, #1e293b, #334155); padding: 18px; border-radius: 12px; color: #f1f5f9; border: 1px solid #475569;">
+  <h3 style="margin:0 0 10px; color:#38bdf8;">📍 {province_name} — Summary Stats</h3>
   <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; text-align: center;">
-    <div><div style="font-size:1.8em; font-weight:800">{summary['couple_ratio']:.1f}%</div><div>Cặp đôi</div></div>
-    <div><div style="font-size:1.8em; font-weight:800">{summary['family_ratio']:.1f}%</div><div>Gia đình</div></div>
-    <div><div style="font-size:1.8em; font-weight:800">{summary['business_ratio']:.1f}%</div><div>Công tác</div></div>
-    <div><div style="font-size:1.8em; font-weight:800">{summary['solo_ratio']:.1f}%</div><div>Một mình</div></div>
+    <div><div style="font-size:1.8em; font-weight:800; color:#4ecdc4;">{summary['couple_ratio']:.1f}%</div><div>Couple</div></div>
+    <div><div style="font-size:1.8em; font-weight:800; color:#ff6b6b;">{summary['family_ratio']:.1f}%</div><div>Family</div></div>
+    <div><div style="font-size:1.8em; font-weight:800; color:#45b7d1;">{summary['business_ratio']:.1f}%</div><div>Business</div></div>
+    <div><div style="font-size:1.8em; font-weight:800; color:#ffa07a;">{summary['solo_ratio']:.1f}%</div><div>Solo</div></div>
   </div>
-  <p style="margin:10px 0 0; font-size:0.9em; opacity:0.9">{len(fdf)} tháng dữ liệu | Avg review/tháng: {fdf['hotel_review_volume'].mean():.0f}</p>
+  <p style="margin:10px 0 0; font-size:0.9em; opacity:0.9; color:#94a3b8;">{len(fdf)} months of data | Avg reviews/month: {fdf['hotel_review_volume'].mean():.0f}</p>
 </div>
 """
     return fig1, fig2, info
 
 
 # ============================================================
-# Tab 4 — Model Info
+# Tab 5 — Hotel Clustering V2
+# ============================================================
+
+def filter_hotels_by_cluster(cluster_name, province_filter, min_score, top_n):
+    """Filter hotels by segment/cluster and show recommendations."""
+    df, error = load_clustering_data()
+    if error:
+        return pd.DataFrame(), None, _error_html(error)
+    if df.empty:
+        return pd.DataFrame(), None, _warn_html("No clustering data available.")
+
+    if cluster_name != "Tất cả" and cluster_name != "All Segments":
+        df_filtered = df[df['cluster_name'] == cluster_name]
+    else:
+        df_filtered = df.copy()
+
+    if province_filter != "Tất cả" and province_filter != "All":
+        df_filtered = df_filtered[df_filtered['province_name'] == province_filter]
+
+    df_filtered = df_filtered[df_filtered['review_quality'] >= min_score]
+
+    if df_filtered.empty:
+        return pd.DataFrame(), None, _warn_html("No hotels match the selected filters.")
+
+    # Top best rated hotels in segment
+    df_result = df_filtered.sort_values('review_quality', ascending=False).head(int(top_n))
+
+    result_df = df_result[[
+        'hotel_name', 'province_name', 'cluster_name', 'review_quality', 'total_reviews',
+        'western_dominance', 'vietnamese_dominance', 'family_preference', 'guest_diversity'
+    ]].copy()
+
+    result_df.columns = [
+        'Hotel Name', 'Province', 'Segment', 'Average Rating', 'Total Reviews',
+        'Western Dominance', '% Vietnamese Guest', 'Family Preference', 'Guest Diversity'
+    ]
+
+    result_df['Western Dominance'] = result_df['Western Dominance'].round(2)
+    result_df['% Vietnamese Guest'] = result_df['% Vietnamese Guest'].round(1)
+    result_df['Family Preference'] = result_df['Family Preference'].round(2)
+    result_df['Guest Diversity'] = result_df['Guest Diversity'].round(2)
+    result_df['Average Rating'] = result_df['Average Rating'].round(2)
+
+    # Segment counts bar chart (Dark Theme)
+    cluster_counts = df.groupby('cluster_name').size().reset_index(name='count')
+    fig = px.bar(
+        cluster_counts, x='cluster_name', y='count',
+        title='Hotel Distribution by Customer Segment',
+        labels={'cluster_name': 'Segment', 'count': 'Number of Hotels'},
+        color='cluster_name',
+        color_discrete_sequence=px.colors.qualitative.Safe
+    )
+    fig.update_layout(
+        showlegend=False, 
+        height=360, 
+        template='plotly_dark', 
+        plot_bgcolor="#111827",
+        paper_bgcolor="#111827",
+        title_font=dict(color="#f1f5f9")
+    )
+
+    info_html = f"""
+    <div style="background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); padding: 18px; border-radius: 12px; color: white; border: 1px solid #4f46e5;">
+        <h3 style="margin: 0 0 8px; font-size: 1.1em; font-weight: 700; color: #38bdf8;">🏨 Hotel Clustering K-Means (K=3)</h3>
+        <p style="margin: 4px 0; font-size: 0.95em;">Total hotels in database: <strong>{len(df):,}</strong> | Matched filters: <strong>{len(df_filtered):,}</strong></p>
+        <p style="margin: 4px 0; font-size: 0.95em;">Showing Top <strong>{len(df_result)}</strong> best rated hotels based on review quality.</p>
+    </div>
+    """
+
+    return result_df, fig, info_html
+
+
+# ============================================================
+# Tab 6 — Model Info
 # ============================================================
 
 def tab4_model_info():
@@ -444,9 +1001,9 @@ def tab4_model_info():
         top10 = (df.groupby("province_name")["predicted_hotel_volume_actual"]
                    .mean().sort_values(ascending=False).head(10))
         forecast_stats = "".join(
-            f'<tr><td style="padding:6px 14px">{i+1}</td>'
-            f'<td style="padding:6px 14px"><b>{name}</b></td>'
-            f'<td style="padding:6px 14px; text-align:right">{val:,.0f}</td></tr>'
+            f'<tr><td style="padding:8px 14px">{i+1}</td>'
+            f'<td style="padding:8px 14px"><b>{name}</b></td>'
+            f'<td style="padding:8px 14px; text-align:right">{val:,.0f}</td></tr>'
             for i, (name, val) in enumerate(top10.items())
         )
 
@@ -455,53 +1012,53 @@ def tab4_model_info():
             return f"{v:.4f}" if v is not None else "—"
 
         html = f"""
-<div style="font-family: 'Inter', sans-serif; max-width: 900px; margin: 0 auto;">
+<div style="font-family: 'Inter', sans-serif; max-width: 900px; margin: 0 auto; color: #f1f5f9;">
 
   <!-- Model Header -->
-  <div style="background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 16px; padding: 28px; color: white; margin-bottom: 20px; box-shadow: 0 8px 30px rgba(102,126,234,0.35);">
-    <h2 style="margin: 0 0 8px">🧠 LSTM Deep Learning Model</h2>
-    <p style="margin:0; opacity:0.9; font-size:1.1em">province_hotel_volume_forecaster_lstm · Version {info['version']}</p>
-    <p style="margin:8px 0 0; opacity:0.75; font-size:0.9em">Trained: {info['trained_at']} · Run ID: {info['run_id'][:8]}…</p>
+  <div style="background: linear-gradient(135deg, #0f172a, #1e293b); border-radius: 16px; padding: 28px; color: white; margin-bottom: 20px; box-shadow: 0 8px 30px rgba(0,0,0,0.3); border: 1px solid #312e81;">
+    <h2 style="margin: 0 0 8px; font-weight: 800; color: #38bdf8;">🧠 LSTM Deep Learning Model (v3)</h2>
+    <p style="margin:0; opacity:0.9; font-size:1.1em">Forecast Model Name: {LSTM_MODEL_NAME} · Version {info['version']}</p>
+    <p style="margin:8px 0 0; opacity:0.75; font-size:0.9em">Trained: {info['trained_at']} · Run ID: {info['run_id'][:12]}…</p>
   </div>
 
   <!-- Metrics grid -->
   <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 20px;">
-    <div style="background:#f0fdf4; border-left:4px solid #22c55e; border-radius:10px; padding:18px;">
-      <div style="font-size:0.85em; color:#666; margin-bottom:6px;">TRAIN SET</div>
-      <div style="font-size:1.4em; font-weight:700; color:#15803d">R² = {_fmt(info['train_r2'])}</div>
-      <div style="color:#444; margin-top:4px">RMSE = {_fmt(info['train_rmse'])}</div>
+    <div style="background:rgba(34, 197, 94, 0.1); border-left:4px solid #22c55e; border-radius:10px; padding:18px; border-top:1px solid rgba(34,197,94,0.15); border-right:1px solid rgba(34,197,94,0.15); border-bottom:1px solid rgba(34,197,94,0.15);">
+      <div style="font-size:0.85em; color:#22c55e; font-weight:700; margin-bottom:6px;">TRAIN SET</div>
+      <div style="font-size:1.4em; font-weight:700; color:#4ade80">R² = {_fmt(info['train_r2'])}</div>
+      <div style="color:#a7f3d0; margin-top:4px; font-size:0.9em;">RMSE = {_fmt(info['train_rmse'])}</div>
     </div>
-    <div style="background:#eff6ff; border-left:4px solid #3b82f6; border-radius:10px; padding:18px;">
-      <div style="font-size:0.85em; color:#666; margin-bottom:6px;">TEST SET (hold-out 30%)</div>
-      <div style="font-size:1.4em; font-weight:700; color:#1d4ed8">R² = {_fmt(info['test_r2'])}</div>
-      <div style="color:#444; margin-top:4px">RMSE = {_fmt(info['test_rmse'])} · MAE = {_fmt(info['test_mae'])}</div>
+    <div style="background:rgba(59, 130, 246, 0.1); border-left:4px solid #3b82f6; border-radius:10px; padding:18px; border-top:1px solid rgba(59,130,246,0.15); border-right:1px solid rgba(59,130,246,0.15); border-bottom:1px solid rgba(59,130,246,0.15);">
+      <div style="font-size:0.85em; color:#3b82f6; font-weight:700; margin-bottom:6px;">TEST SET (hold-out 30%)</div>
+      <div style="font-size:1.4em; font-weight:700; color:#60a5fa">R² = {_fmt(info['test_r2'])}</div>
+      <div style="color:#bfdbfe; margin-top:4px; font-size:0.9em;">RMSE = {_fmt(info['test_rmse'])} · MAE = {_fmt(info['test_mae'])}</div>
     </div>
   </div>
 
   <!-- Architecture -->
-  <div style="background:#fafafa; border:1px solid #e5e7eb; border-radius:12px; padding:20px; margin-bottom:20px;">
-    <h3 style="margin:0 0 14px; color:#374151">⚙️ Kiến trúc & Hyperparameters</h3>
-    <table style="width:100%; border-collapse:collapse; font-size:0.95em;">
-      <tr style="background:#f3f4f6"><td style="padding:8px 14px; font-weight:600">Kiến trúc</td><td style="padding:8px 14px">LSTM + LayerNorm + Temporal Attention + FC(16→1)</td></tr>
-      <tr><td style="padding:8px 14px; font-weight:600">Target Variable</td><td style="padding:8px 14px">hotel_review_volume (log1p normalized, expm1 output)</td></tr>
-      <tr style="background:#f3f4f6"><td style="padding:8px 14px; font-weight:600">Số features</td><td style="padding:8px 14px">{info.get('num_features', '36')} (temporal + lag + volume + NLP + hotel)</td></tr>
-      <tr><td style="padding:8px 14px; font-weight:600">Sequence length</td><td style="padding:8px 14px">{info.get('sequence_length', '4')} tháng</td></tr>
-      <tr style="background:#f3f4f6"><td style="padding:8px 14px; font-weight:600">Hidden size</td><td style="padding:8px 14px">{info.get('hidden_size', '32')}</td></tr>
-      <tr><td style="padding:8px 14px; font-weight:600">Loss function</td><td style="padding:8px 14px">HuberLoss (delta=0.5) — robust to outliers</td></tr>
-      <tr style="background:#f3f4f6"><td style="padding:8px 14px; font-weight:600">Epochs trained</td><td style="padding:8px 14px">{info.get('epochs_trained', '—')} (early stopping patience=20)</td></tr>
-      <tr><td style="padding:8px 14px; font-weight:600">Best val loss</td><td style="padding:8px 14px">{_fmt(info.get('best_val_loss'))}</td></tr>
+  <div style="background:#111827; border:1px solid #1f2937; border-radius:12px; padding:20px; margin-bottom:20px;">
+    <h3 style="margin:0 0 14px; color:#38bdf8; font-weight: 700;">⚙️ Model Architecture & Hyperparameters</h3>
+    <table style="width:100%; border-collapse:collapse; font-size:0.95em; color:#cbd5e1;">
+      <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Model Architecture</td><td style="padding:8px 14px">LSTM + LayerNorm + Temporal Attention + Dense (Multi-features)</td></tr>
+      <tr><td style="padding:8px 14px; font-weight:600">Target Variable (Log-normalized)</td><td style="padding:8px 14px">hotel_review_volume (Log1p scaled, Expm1 output)</td></tr>
+      <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Number of Features</td><td style="padding:8px 14px">{info.get('num_features', '36')} (includes Volume, TikTok engagement, NLP, Lags)</td></tr>
+      <tr><td style="padding:8px 14px; font-weight:600">Input Sequence Length</td><td style="padding:8px 14px">{info.get('sequence_length', '4')} historical months</td></tr>
+      <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Hidden Size</td><td style="padding:8px 14px">{info.get('hidden_size', '32')} units</td></tr>
+      <tr><td style="padding:8px 14px; font-weight:600">Loss Function</td><td style="padding:8px 14px">HuberLoss (delta=0.5) — mitigates outlier noise</td></tr>
+      <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Actual Epochs Run</td><td style="padding:8px 14px">{info.get('epochs_trained', '—')} (Early Stopping patience=20)</td></tr>
+      <tr><td style="padding:8px 14px; font-weight:600">Best Validation Loss</td><td style="padding:8px 14px">{_fmt(info.get('best_val_loss'))}</td></tr>
     </table>
   </div>
 
   <!-- Top 10 provinces -->
-  <div style="background:#fafafa; border:1px solid #e5e7eb; border-radius:12px; padding:20px;">
-    <h3 style="margin:0 0 14px; color:#374151">🏆 Top 10 Tỉnh — Lượt Đặt Phòng Dự Báo TB/Tháng</h3>
-    <table style="width:100%; border-collapse:collapse; font-size:0.95em;">
+  <div style="background:#111827; border:1px solid #1f2937; border-radius:12px; padding:20px;">
+    <h3 style="margin:0 0 14px; color:#38bdf8; font-weight: 700;">🏆 Top 10 Provinces — Avg Forecasted Reviews/Month</h3>
+    <table style="width:100%; border-collapse:collapse; font-size:0.95em; color:#cbd5e1;">
       <thead>
-        <tr style="background:#667eea; color:white;">
-          <th style="padding:8px 14px; text-align:left">#</th>
-          <th style="padding:8px 14px; text-align:left">Tỉnh/Thành</th>
-          <th style="padding:8px 14px; text-align:right">TB Lượt/Tháng</th>
+        <tr style="background:#312e81; color:white; border-bottom: 2px solid #4f46e5;">
+          <th style="padding:8px 14px; text-align:left; border-top-left-radius: 8px;">#</th>
+          <th style="padding:8px 14px; text-align:left">Province Name</th>
+          <th style="padding:8px 14px; text-align:right; border-top-right-radius: 8px;">Avg Forecasted Reviews/Month</th>
         </tr>
       </thead>
       <tbody>{forecast_stats}</tbody>
@@ -510,7 +1067,7 @@ def tab4_model_info():
 </div>
 """
     else:
-        html = _warn_html("Không thể kết nối MLflow để lấy thông tin model. Kiểm tra MLflow server.")
+        html = _warn_html("Could not connect to MLflow to retrieve model info. Please check the MLflow server status.")
 
     return html
 
@@ -520,13 +1077,13 @@ def tab4_model_info():
 # ============================================================
 
 def _error_html(msg):
-    return f'<div style="background:#fee2e2;border-left:4px solid #ef4444;padding:16px;border-radius:8px;color:#7f1d1d"><b>❌ Lỗi</b><br>{msg}</div>'
+    return f'<div style="background:rgba(239, 68, 68, 0.15);border-left:4px solid #ef4444;padding:16px;border-radius:8px;color:#fca5a5;border: 1px solid rgba(239, 68, 68, 0.2)"><b>❌ System Error</b><br>{msg}</div>'
 
 def _warn_html(msg):
-    return f'<div style="background:#fef9c3;border-left:4px solid #eab308;padding:16px;border-radius:8px;color:#713f12"><b>⚠️ Cảnh báo</b><br>{msg}</div>'
+    return f'<div style="background:rgba(234, 179, 8, 0.15);border-left:4px solid #eab308;padding:16px;border-radius:8px;color:#fde047;border: 1px solid rgba(234, 179, 8, 0.2)"><b>⚠️ Note</b><br>{msg}</div>'
 
 def _info_html(msg):
-    return f'<div style="background:linear-gradient(135deg,#667eea,#764ba2);padding:14px 20px;border-radius:10px;color:white;font-weight:500">ℹ️ {msg}</div>'
+    return f'<div style="background:linear-gradient(135deg,#1e1b4b,#312e81);padding:14px 20px;border-radius:10px;color:#cbd5e1;font-weight:600;box-shadow: 0 4px 10px rgba(0,0,0,0.3); border: 1px solid #4f46e5;">ℹ️ {msg}</div>'
 
 
 # ============================================================
@@ -550,13 +1107,13 @@ def _get_feature_provinces():
 def _get_feature_years():
     df, _ = load_features_data()
     if df is None or df.empty:
-        return ["Tất cả"]
+        return ["All"]
     years = [str(int(float(x))) for x in df["year"].dropna().unique() if x is not None]
-    return ["Tất cả"] + sorted(list(set(years)), reverse=True)
+    return ["All"] + sorted(list(set(years)), reverse=True)
 
 
 # ============================================================
-# Gradio Interface
+# Gradio Interface Overhaul (Dark Theme)
 # ============================================================
 
 def create_app():
@@ -564,50 +1121,305 @@ def create_app():
     feat_provinces = _get_feature_provinces()
     feat_years = _get_feature_years()
 
+    # ─── Season button toggle callbacks ───
+    def toggle_summer(current_season):
+        if current_season == "summer":
+            return "none", "10/2025 - 09/2026", gr.Button(variant="secondary"), gr.Button(variant="secondary"), gr.Button(variant="secondary")
+        else:
+            return "summer", "05/2026 - 08/2026", gr.Button(variant="primary"), gr.Button(variant="secondary"), gr.Button(variant="secondary")
+
+    def toggle_winter(current_season):
+        if current_season == "winter":
+            return "none", "10/2025 - 09/2026", gr.Button(variant="secondary"), gr.Button(variant="secondary"), gr.Button(variant="secondary")
+        else:
+            return "winter", "11/2025 - 01/2026", gr.Button(variant="secondary"), gr.Button(variant="primary"), gr.Button(variant="secondary")
+
+    def toggle_spring(current_season):
+        if current_season == "spring":
+            return "none", "10/2025 - 09/2026", gr.Button(variant="secondary"), gr.Button(variant="secondary"), gr.Button(variant="secondary")
+        else:
+            return "spring", "02/2026 - 04/2026", gr.Button(variant="secondary"), gr.Button(variant="secondary"), gr.Button(variant="primary")
+
+    # High-fidelity Slate-Dark Theme CSS
     css = """
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-    * { font-family: 'Inter', sans-serif !important; }
-    .gradio-container { max-width: 1500px !important; }
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
+    * { font-family: 'Outfit', 'Inter', sans-serif !important; }
+    
+    /* Force Custom Xanh Đen (Dark Navy) Variable System for native elements */
+    :root, .dark {
+        --body-background-fill: #0b0f19 !important;
+        --background-fill-primary: #0b0f19 !important;
+        --background-fill-secondary: #0f172a !important;
+        
+        --block-background-fill: #111827 !important;
+        --block-border-color: #1f2937 !important;
+        --block-border-width: 1px !important;
+        
+        --input-background-fill: #1f2937 !important;
+        --input-border-color: #374151 !important;
+        --input-text-color: #f1f5f9 !important;
+        
+        --button-primary-background-fill: linear-gradient(135deg, #4f46e5, #6366f1) !important;
+        --button-primary-background-fill-hover: linear-gradient(135deg, #4338ca, #4f46e5) !important;
+        --button-primary-text-color: #ffffff !important;
+        
+        --button-secondary-background-fill: #1f2937 !important;
+        --button-secondary-background-fill-hover: #374151 !important;
+        --button-secondary-text-color: #f1f5f9 !important;
+        
+        --neutral-50: #f8fafc !important;
+        --neutral-100: #f1f5f9 !important;
+        --neutral-200: #e2e8f0 !important;
+        --neutral-300: #cbd5e1 !important;
+        --neutral-400: #94a3b8 !important;
+        --neutral-500: #64748b !important;
+        --neutral-600: #475569 !important;
+        --neutral-700: #334155 !important;
+        --neutral-800: #1f2937 !important;
+        --neutral-900: #111827 !important;
+        --neutral-950: #0b0f19 !important;
+        
+        --body-text-color: #f1f5f9 !important;
+        --block-title-text-color: #f8fafc !important;
+        --block-label-text-color: #94a3b8 !important;
+    }
+    
+    body, .gradio-container {
+        background-color: #0b0f19 !important;
+        color: #f1f5f9 !important;
+    }
+    
+    /* Header Card (Indigo to Slate Gradient) */
     .header-hero {
-        background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 40%, #134e80 100%);
-        border-radius: 20px;
-        padding: 48px 40px;
+        background: linear-gradient(135deg, #1e1b4b 0%, #312e81 40%, #1e1b4b 100%) !important;
+        border-radius: 24px;
+        padding: 50px 40px;
         color: white;
         text-align: center;
-        margin-bottom: 24px;
+        margin-bottom: 30px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+        border: 1px solid #1f2937;
         position: relative;
         overflow: hidden;
     }
     .header-hero::before {
         content: '';
         position: absolute; inset: 0;
-        background: radial-gradient(ellipse at 70% 50%, rgba(99,179,237,0.15) 0%, transparent 70%);
+        background: radial-gradient(circle at 80% 50%, rgba(99, 102, 241, 0.15) 0%, transparent 60%);
     }
-    .header-hero h1 { font-size: 2.6em; font-weight: 800; margin: 0 0 8px; letter-spacing: -0.5px; }
-    .header-hero .sub { font-size: 1.1em; opacity: 0.8; margin: 0; }
-    .header-hero .badges { margin-top: 18px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+    .header-hero h1 { font-size: 3em; font-weight: 800; margin: 0 0 10px; letter-spacing: -1px; text-shadow: 0 2px 10px rgba(0,0,0,0.2); }
+    .header-hero .sub { font-size: 1.25em; opacity: 0.9; margin: 0; font-weight: 400; }
+    .header-hero .badges { margin-top: 20px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
     .header-hero .badge {
-        background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3);
-        padding: 5px 14px; border-radius: 20px; font-size: 0.85em; font-weight: 600;
-        backdrop-filter: blur(4px);
+        background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.18);
+        padding: 6px 16px; border-radius: 30px; font-size: 0.88em; font-weight: 600;
+        backdrop-filter: blur(8px);
     }
-    .filter-panel { background: #f8fafc; border-radius: 14px; padding: 20px; border: 1px solid #e2e8f0; }
-    button.primary { background: linear-gradient(135deg, #667eea, #764ba2) !important; border: none !important; }
+    
+    /* Control panels & custom container styles */
+    .filter-panel, .gr-tabs {
+        background: #111827 !important;
+        border-radius: 16px;
+        padding: 24px;
+        border: 1px solid #1f2937 !important;
+        box-shadow: 0 4px 25px rgba(0,0,0,0.15);
+    }
+    .filter-title {
+        font-size: 1.20em;
+        font-weight: 700;
+        color: #f1f5f9;
+        margin-bottom: 15px;
+        border-bottom: 2px solid #1f2937;
+        padding-bottom: 8px;
+    }
+    
+    /* Button overrides */
+    button.primary {
+        background: linear-gradient(135deg, #4f46e5, #6366f1) !important;
+        border: none !important;
+        color: white !important;
+        font-weight: 700 !important;
+        box-shadow: 0 4px 12px rgba(79, 70, 229, 0.25) !important;
+        transition: all 0.2s;
+    }
+    button.primary:hover {
+        background: linear-gradient(135deg, #4338ca, #4f46e5) !important;
+        transform: translateY(-1px);
+        box-shadow: 0 6px 16px rgba(79, 70, 229, 0.35) !important;
+    }
+    
+    /* Tabs custom navigation */
+    .gr-tabs {
+        background: #111827 !important;
+        border-radius: 16px;
+        padding: 10px;
+        border: 1px solid #1f2937 !important;
+    }
+    .tab-nav {
+        border-bottom: 1px solid #1f2937 !important;
+    }
+    .tab-nav button {
+        color: #94a3b8 !important;
+        font-weight: 600 !important;
+        padding: 12px 24px !important;
+        transition: all 0.15s;
+    }
+    .tab-nav button:hover {
+        color: #e2e8f0 !important;
+    }
+    .tab-nav button.selected {
+        color: #f1f5f9 !important;
+        border-bottom: 2px solid #4f46e5 !important;
+        background: #1f2937 !important;
+        border-radius: 8px 8px 0 0 !important;
+    }
+    
+    /* Dataframe layout */
+    .dataframe {
+        background-color: #111827 !important;
+        color: #f1f5f9 !important;
+        border-color: #1f2937 !important;
+        font-size: 0.92em !important;
+    }
+    .dataframe th {
+        background-color: #1f2937 !important;
+        color: #f1f5f9 !important;
+        border-bottom: 2px solid #374151 !important;
+    }
+    .dataframe td {
+        border-bottom: 1px solid #1f2937 !important;
+    }
+    
+    /* Custom Range Slider Styles */
+    .double-slider-wrapper {
+        background: #111827;
+        border: 1px solid #1f2937;
+        border-radius: 12px;
+        padding: 16px;
+        margin-top: 10px;
+        margin-bottom: 20px;
+    }
+    .slider-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+    }
+    .slider-title-label {
+        font-size: 0.9em;
+        font-weight: 600;
+        color: #94a3b8;
+    }
+    .slider-range-val {
+        font-size: 1.05em;
+        font-weight: 700;
+        color: #38bdf8;
+        background: rgba(56, 189, 248, 0.1);
+        padding: 2px 8px;
+        border-radius: 6px;
+        border: 1px solid rgba(56, 189, 248, 0.2);
+    }
+    .range-slider-container {
+        position: relative;
+        width: 100%;
+        height: 20px;
+        margin-top: 10px;
+    }
+    .range-slider-container input[type="range"] {
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        appearance: none;
+        width: 100%;
+        outline: none;
+        position: absolute;
+        margin: auto;
+        top: 0;
+        bottom: 0;
+        background: transparent;
+        pointer-events: none;
+    }
+    .slider-track {
+        width: 100%;
+        height: 6px;
+        position: absolute;
+        margin: auto;
+        top: 0;
+        bottom: 0;
+        border-radius: 3px;
+        background: #374151;
+    }
+    .range-slider-container input[type="range"]::-webkit-slider-runnable-track {
+        -webkit-appearance: none;
+        height: 6px;
+    }
+    .range-slider-container input[type="range"]::-moz-range-track {
+        -moz-appearance: none;
+        height: 6px;
+    }
+    .range-slider-container input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        height: 18px;
+        width: 18px;
+        border-radius: 50%;
+        background-color: #6366f1;
+        cursor: pointer;
+        margin-top: -6px;
+        pointer-events: auto;
+        box-shadow: 0 0 10px rgba(99, 102, 241, 0.8);
+        transition: transform 0.1s, background-color 0.1s;
+    }
+    .range-slider-container input[type="range"]::-webkit-slider-thumb:hover {
+        transform: scale(1.2);
+        background-color: #818cf8;
+    }
+    .range-slider-container input[type="range"]::-moz-range-thumb {
+        -moz-appearance: none;
+        height: 18px;
+        width: 18px;
+        border-radius: 50%;
+        background-color: #6366f1;
+        cursor: pointer;
+        pointer-events: auto;
+        border: none;
+        box-shadow: 0 0 10px rgba(99, 102, 241, 0.8);
+        transition: transform 0.1s, background-color 0.1s;
+    }
+    .range-slider-container input[type="range"]::-moz-range-thumb:hover {
+        transform: scale(1.2);
+        background-color: #818cf8;
+    }
+    .slider-ticks {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 12px;
+        color: #64748b;
+        font-size: 0.72em;
+        font-weight: 500;
+    }
+    .slider-ticks span {
+        width: 32px;
+        text-align: center;
+    }
+    #month-range-hidden-input {
+        display: none !important;
+    }
     """
 
-    with gr.Blocks(title="🏖️ LSTM Tourism Forecast — Vietnam", theme=gr.themes.Soft(), css=css) as app:
+    with gr.Blocks(title="🏖️ LSTM Tourism Forecast — Vietnam", theme=gr.themes.Soft(), css=css, js="() => document.documentElement.classList.add('dark')") as app:
+        # Force dark mode immediately using JS inside layout
+        gr.HTML("<script>document.documentElement.classList.add('dark');</script>")
 
-        # ─── Hero Header ───────────────────────────────────────────────────
+        # ─── Hero Header ───
         gr.HTML("""
         <div class="header-hero">
-            <h1>🏖️ VIETNAM TOURISM FORECAST</h1>
-            <p class="sub">Dự báo Lượt Đặt Phòng Khách sạn 12 tháng tới · Powered by LSTM Deep Learning</p>
+            <h1>🏖️ VIETNAM TOURISM RECOMMENDATION SYSTEM</h1>
+            <p class="sub">Intelligent seasonal recommendation & tourism volume forecasting using LSTM Deep Learning</p>
             <div class="badges">
-                <span class="badge">🧠 LSTM + Attention</span>
-                <span class="badge">📊 1.55M Reviews</span>
-                <span class="badge">🗓️ 62 Tỉnh · 12 Tháng</span>
-                <span class="badge">🎯 R² = 0.81 (Test)</span>
-                <span class="badge">⚡ Iceberg Lakehouse</span>
+                <span class="badge">🧠 LSTM v3 + Attention</span>
+                <span class="badge">💬 PhoBERT Multi-task Sentiment</span>
+                <span class="badge">🏖️ Seasonal Destination Tips</span>
+                <span class="badge">🏨 Hotel Customer Segments</span>
+                <span class="badge">📦 MinIO & Iceberg Lakehouse</span>
             </div>
         </div>
         """)
@@ -615,114 +1427,284 @@ def create_app():
         with gr.Tabs():
 
             # ══════════════════════════════════════════════
-            # TAB 1: TOP PROVINCES
+            # TAB 1: SEASONAL & THEMED RECOMMENDATIONS
             # ══════════════════════════════════════════════
-            with gr.Tab("🏆 Top Tỉnh Dự Báo"):
+            with gr.Tab("🏖️ Seasonal Recommendations"):
                 with gr.Row():
-                    with gr.Column(scale=1, min_width=280):
-                        gr.Markdown("### ⚙️ Bộ lọc")
+                    with gr.Column(scale=1, min_width=300):
+                        gr.HTML('<div class="filter-title">⚙️ Recommendation Filters</div>')
+                        
                         with gr.Group(elem_classes="filter-panel"):
-                            start_m = gr.Dropdown(MONTH_CHOICES, value="10/2025", label="Tháng bắt đầu")
-                            end_m   = gr.Dropdown(MONTH_CHOICES, value="09/2026", label="Tháng kết thúc")
-                            region_dd = gr.Dropdown(list(REGIONS_VI.keys()), value="Tất cả", label="Vùng địa lý")
-                            top_n_dd  = gr.Dropdown(["5", "10", "15", "20", "30"], value="10", label="Hiển thị Top N")
-                            sort_dd   = gr.Dropdown(
-                                ["Lượng đặt phòng TB/tháng", "Tăng trưởng TB %"],
-                                value="Lượng đặt phòng TB/tháng",
-                                label="Sắp xếp theo"
+                            selected_season = gr.State("summer")
+                            
+                            gr.HTML('<div style="font-weight: 600; font-size: 0.9em; color: var(--block-label-text-color); margin-bottom: 8px;">Quick Season Presets</div>')
+                            with gr.Row():
+                                summer_btn = gr.Button("☀️ Summer", variant="primary", size="sm")
+                                winter_btn = gr.Button("❄️ Winter", variant="secondary", size="sm")
+                                spring_btn = gr.Button("🌸 Spring", variant="secondary", size="sm")
+
+                            month_range_input = gr.Textbox(
+                                value="summer|05/2026 - 08/2026",
+                                label="Hidden Month Range",
+                                elem_id="month-range-hidden-input",
+                                visible=True
                             )
-                            btn1 = gr.Button("🔍 Xem kết quả", variant="primary", size="lg")
+                            
+                            slider_html = gr.HTML(value=create_slider_html())
+                            
+                            theme_dd = gr.Dropdown(
+                                choices=[
+                                    "All",
+                                    "🏞️ Scenery",
+                                    "🍲 Food",
+                                    "💰 Price",
+                                    "🛎️ Service",
+                                    "🏨 Accommodation"
+                                ],
+                                value="All",
+                                label="Aspect Experience (NLP)",
+                                info="Incorporate PhoBERT multi-task sentiment weights"
+                            )
+                            
+                            region_dd = gr.Dropdown(
+                                choices=list(REGIONS_EN.keys()),
+                                value="All Regions",
+                                label="Geographical Region"
+                            )
+                            
+                            top_n_dd = gr.Dropdown(
+                                choices=["5", "10", "15"],
+                                value="10",
+                                label="Show Top N"
+                            )
+                            
+                            recommend_btn = gr.Button("🔍 Recommend Best Destinations", variant="primary", size="lg")
 
                     with gr.Column(scale=3):
-                        info1 = gr.HTML()
-                        chart1 = gr.Plot()
-                        table1 = gr.Dataframe(
-                            headers=["#", "Tỉnh/Thành", "Vùng", "TB Lượt/Tháng",
-                                     "Tổng Lượt (12T)", "Tăng trưởng TB %", "Tháng Đỉnh"],
+                        info_rec = gr.HTML()
+                        chart_rec = gr.Plot()
+                        
+                        with gr.Tabs():
+                            with gr.Tab("📍 Visual Destination Cards"):
+                                cards_html = gr.HTML()
+                            with gr.Tab("📊 Detailed Data Table"):
+                                table_rec = gr.Dataframe(
+                                    headers=["Rank", "Province", "Region", "Recommendation Score (100)", "Avg Forecasted Reviews/Month"],
+                                    wrap=True,
+                                    interactive=False
+                                )
+
+                # Season selection button clicks
+                summer_btn.click(
+                    toggle_summer,
+                    inputs=[selected_season],
+                    outputs=[selected_season, month_range_input, summer_btn, winter_btn, spring_btn]
+                )
+                winter_btn.click(
+                    toggle_winter,
+                    inputs=[selected_season],
+                    outputs=[selected_season, month_range_input, summer_btn, winter_btn, spring_btn]
+                )
+                spring_btn.click(
+                    toggle_spring,
+                    inputs=[selected_season],
+                    outputs=[selected_season, month_range_input, summer_btn, winter_btn, spring_btn]
+                )
+
+                # Reactive auto-update on filter changes
+                month_range_input.change(
+                    tab1_seasonal_recommend,
+                    inputs=[month_range_input, theme_dd, region_dd, top_n_dd],
+                    outputs=[table_rec, chart_rec, cards_html, info_rec]
+                )
+                theme_dd.change(
+                    tab1_seasonal_recommend,
+                    inputs=[month_range_input, theme_dd, region_dd, top_n_dd],
+                    outputs=[table_rec, chart_rec, cards_html, info_rec]
+                )
+                region_dd.change(
+                    tab1_seasonal_recommend,
+                    inputs=[month_range_input, theme_dd, region_dd, top_n_dd],
+                    outputs=[table_rec, chart_rec, cards_html, info_rec]
+                )
+                top_n_dd.change(
+                    tab1_seasonal_recommend,
+                    inputs=[month_range_input, theme_dd, region_dd, top_n_dd],
+                    outputs=[table_rec, chart_rec, cards_html, info_rec]
+                )
+
+                recommend_btn.click(
+                    tab1_seasonal_recommend,
+                    inputs=[month_range_input, theme_dd, region_dd, top_n_dd],
+                    outputs=[table_rec, chart_rec, cards_html, info_rec]
+                )
+
+            # ══════════════════════════════════════════════
+            # TAB 2: TOP PROVINCES (ORIGINAL FORECAST)
+            # ══════════════════════════════════════════════
+            with gr.Tab("🏆 Forecast Ranking"):
+                with gr.Row():
+                    with gr.Column(scale=1, min_width=280):
+                        gr.HTML('<div class="filter-title">⚙️ Time Range Filters</div>')
+                        with gr.Group(elem_classes="filter-panel"):
+                            start_m = gr.Dropdown(MONTH_CHOICES, value="10/2025", label="Start Month")
+                            end_m   = gr.Dropdown(MONTH_CHOICES, value="09/2026", label="End Month")
+                            region_t2 = gr.Dropdown(list(REGIONS_EN.keys()), value="All Regions", label="Geographical Region")
+                            top_n_t2  = gr.Dropdown(["5", "10", "15", "20", "30"], value="10", label="Show Top N")
+                            sort_t2   = gr.Dropdown(
+                                ["Avg Monthly Reviews", "Avg Growth %"],
+                                value="Avg Monthly Reviews",
+                                label="Sort by"
+                            )
+                            btn2 = gr.Button("📊 Run Ranking", variant="primary", size="lg")
+
+                    with gr.Column(scale=3):
+                        info2 = gr.HTML()
+                        chart2 = gr.Plot()
+                        table2 = gr.Dataframe(
+                            headers=["Rank", "Province", "Region", "Avg Reviews/Month",
+                                     "Total Reviews (12M)", "Avg Growth %", "Peak Month"],
                             wrap=True,
                         )
 
-                btn1.click(tab1_top_provinces,
-                           inputs=[start_m, end_m, region_dd, top_n_dd, sort_dd],
-                           outputs=[table1, chart1, info1])
+                btn2.click(tab2_top_provinces,
+                           inputs=[start_m, end_m, region_t2, top_n_t2, sort_t2],
+                           outputs=[table2, chart2, info2])
 
             # ══════════════════════════════════════════════
-            # TAB 2: PROVINCE COMPARISON
+            # TAB 3: PROVINCE COMPARISON
             # ══════════════════════════════════════════════
-            with gr.Tab("📈 So sánh Tỉnh"):
+            with gr.Tab("📈 Compare Provinces"):
                 with gr.Row():
                     with gr.Column(scale=1, min_width=280):
-                        gr.Markdown("### ⚙️ Chọn tỉnh")
+                        gr.HTML('<div class="filter-title">⚙️ Select Provinces to Compare</div>')
                         with gr.Group(elem_classes="filter-panel"):
                             prov_check = gr.Dropdown(
                                 provinces,
-                                value=["Đà Nẵng", "Hà Nội", "Hồ Chí Minh"] if provinces else [],
+                                value=["Đà Nẵng", "Lâm Đồng", "Khánh Hòa"] if provinces else [],
                                 multiselect=True,
-                                label="Chọn tỉnh (tối đa 8)",
+                                label="Select provinces to compare (Max 8)",
                                 max_choices=8,
                             )
                             metric_dd = gr.Dropdown(
-                                ["Lượt đặt phòng (actual)", "Tăng trưởng % (so tháng trước)"],
-                                value="Lượt đặt phòng (actual)",
-                                label="Chỉ số hiển thị"
+                                ["Forecasted Reviews (Actual)", "Growth % (vs Previous Month)"],
+                                value="Forecasted Reviews (Actual)",
+                                label="Display Metric"
                             )
-                            btn2 = gr.Button("📊 So sánh", variant="primary", size="lg")
+                            btn3 = gr.Button("📊 Compare Trends", variant="primary", size="lg")
 
                     with gr.Column(scale=3):
-                        info2  = gr.HTML()
-                        chart2 = gr.Plot()
+                        info3  = gr.HTML()
+                        chart3 = gr.Plot()
 
-                btn2.click(tab2_compare,
+                btn3.click(tab2_compare,
                            inputs=[prov_check, metric_dd],
-                           outputs=[chart2, info2])
+                           outputs=[chart3, info3])
 
             # ══════════════════════════════════════════════
-            # TAB 3: TRAVELER TYPE ANALYSIS
+            # TAB 4: TRAVELER TYPE ANALYSIS
             # ══════════════════════════════════════════════
-            with gr.Tab("👥 Phân tích Du khách"):
+            with gr.Tab("👥 Traveler Demographics"):
                 with gr.Row():
                     with gr.Column(scale=1, min_width=280):
-                        gr.Markdown("### ⚙️ Chọn tỉnh & Năm")
+                        gr.HTML('<div class="filter-title">⚙️ Select Province</div>')
                         with gr.Group(elem_classes="filter-panel"):
                             feat_prov_dd = gr.Dropdown(
                                 feat_provinces,
                                 value=feat_provinces[0] if feat_provinces else None,
-                                label="Tỉnh/Thành phố"
+                                label="Province/City"
                             )
-                            feat_year_dd = gr.Dropdown(feat_years, value="Tất cả", label="Năm")
-                            btn3 = gr.Button("🔍 Phân tích", variant="primary", size="lg")
+                            feat_year_dd = gr.Dropdown(feat_years, value="All", label="Year")
+                            btn4 = gr.Button("🔍 Analyze Demographics", variant="primary", size="lg")
                         gr.Markdown("""
-**Giải thích:**
-- **Cặp đôi**: Du lịch theo cặp, thường có rating cao
-- **Gia đình**: Mùa hè tăng mạnh, cần tiện ích gia đình
-- **Công tác**: Ổn định cả năm, ít nhạy cảm với mùa vụ
-- **Một mình**: Xu hướng tăng sau 2022 (solo travel)
+**Significance of Traveler Type Segmentation:**
+* **Couple**: Moderate seasonal sensitivity, heavily concentrated in romantic destinations (Da Lat, Sa Pa).
+* **Family**: Surges dramatically during summer (May - August) at coastal/beach destinations.
+* **Business**: Highly stable throughout the year, concentrated in major economic hubs (Ha Noi, HCMC).
+* **Solo**: Emerging trend of independent exploration among youths, focusing on remote mountains or islands.
 """)
 
                     with gr.Column(scale=3):
-                        info3   = gr.HTML()
-                        chart3a = gr.Plot(label="Phân bổ Loại Du khách theo Tháng")
-                        chart3b = gr.Plot(label="Lượt Review & Hotness Score theo Tháng")
+                        info4   = gr.HTML()
+                        chart4a = gr.Plot(label="Traveler Demographics Distribution by Month")
+                        chart4b = gr.Plot(label="Review Volume & Hotness Score by Month")
 
-                btn3.click(tab3_traveler,
+                btn4.click(tab3_traveler,
                            inputs=[feat_prov_dd, feat_year_dd],
-                           outputs=[chart3a, chart3b, info3])
+                           outputs=[chart4a, chart4b, info4])
 
             # ══════════════════════════════════════════════
-            # TAB 4: MODEL INFO
+            # TAB 5: HOTEL CLUSTERING
             # ══════════════════════════════════════════════
-            with gr.Tab("🧠 Thông tin Model"):
+            with gr.Tab("🏨 Hotel Segments"):
+                gr.Markdown("""
+                ### 🏨 Search Hotels by Optimal Customer Segment
+                The system applies **K-Means Clustering (K=3)** on over **6,400 hotels** using 7 key customer characteristics extracted from the Silver layer.
+                """, elem_classes="section-header")
+
                 with gr.Row():
-                    refresh_btn = gr.Button("🔄 Refresh từ MLflow", variant="secondary")
+                    with gr.Column(scale=1, min_width=280):
+                        gr.HTML('<div class="filter-title">⚙️ Hotel Filters</div>')
+                        with gr.Group(elem_classes="filter-panel"):
+                            cluster_selector = gr.Dropdown(
+                                choices=["All Segments", "Balanced Mixed Segment", "International Mixed Hotels", 
+                                         "Vietnamese Domestic Hotels", "Couple & Solo Hotels"],
+                                value="All Segments",
+                                label="Customer Segment",
+                                info="K-Means grouping based on local vs. international & travel habits"
+                            )
+                            province_selector = gr.Dropdown(
+                                choices=["All"] + provinces,
+                                value="All",
+                                label="Province/Location"
+                            )
+                            min_score_slider = gr.Slider(
+                                minimum=0.0, maximum=10.0, value=6.0, step=0.5,
+                                label="Minimum Rating Score",
+                                info="Minimum average review score for filtering"
+                            )
+                            top_n_hotels = gr.Dropdown(
+                                choices=["10", "20", "30", "50"], value="20",
+                                label="Max Hotels to Display"
+                            )
+                            btn5 = gr.Button("🏨 Recommend Best Hotels", variant="primary", size="lg")
+
+                    with gr.Column(scale=3):
+                        info5 = gr.HTML()
+                        chart5 = gr.Plot(label="Hotel distribution by customer segment")
+                        hotels_table = gr.Dataframe(
+                            label="Recommended Hotels list",
+                            wrap=True,
+                            interactive=False
+                        )
+
+                btn5.click(
+                    filter_hotels_by_cluster,
+                    inputs=[cluster_selector, province_selector, min_score_slider, top_n_hotels],
+                    outputs=[hotels_table, chart5, info5]
+                )
+
+            # ══════════════════════════════════════════════
+            # TAB 6: MODEL INFO
+            # ══════════════════════════════════════════════
+            with gr.Tab("🧠 Model Specs"):
+                with gr.Row():
+                    refresh_btn = gr.Button("🔄 Sync Latest Metrics from MLflow", variant="secondary")
                 model_html = gr.HTML(value=tab4_model_info())
                 refresh_btn.click(tab4_model_info, inputs=[], outputs=[model_html])
 
         # Footer
         gr.HTML("""
-        <div style="text-align:center; padding:20px; color:#94a3b8; font-size:0.85em; margin-top:10px;">
-            Tourism Analytics · LSTM Hotel Volume Forecaster v3 · Built with PySpark + Iceberg + MLflow + Gradio
+        <div style="text-align:center; padding:20px; color:#64748b; font-size:0.88em; margin-top:20px; border-top: 1px solid #e2e8f0;">
+            Tourism Analytics Engine · LSTM Hotel Volume Forecaster v3 · Powered by PySpark + Iceberg + MLflow + Gradio
         </div>
         """)
+        # Load default recommendations on startup
+        app.load(
+            tab1_seasonal_recommend,
+            inputs=[month_range_input, theme_dd, region_dd, top_n_dd],
+            outputs=[table_rec, chart_rec, cards_html, info_rec]
+        )
 
     return app
 
