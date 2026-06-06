@@ -24,7 +24,7 @@ import psycopg2
 
 # Import shared DQ utilities (tránh lặp code)
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))  # spark/jobs/dataqualify/
-from dq_utils import ensure_dq_table, write_dq_result
+from dq_utils import ensure_dq_table, write_dq_result, run_eda
 
 # ============================================================================
 # CONFIG
@@ -66,18 +66,21 @@ RUN_TIMESTAMP = datetime.now().isoformat()
 
 def run_dq_checks(spark, conn):
     df = spark.table(TARGET_TABLE)
+    run_eda(df, TARGET_TABLE)
     total = df.count()
     failures = []
 
     print(f"\nTotal records: {total:,}")
 
     # --- 1. Min Records ---
+    print("\n── CHECK 1: Min Records (Số lượng dòng tối thiểu) ──────")
     status = "PASS" if total >= THRESHOLDS["min_records"] else "FAIL"
     write_dq_result(conn, RUN_TIMESTAMP, TARGET_TABLE, "min_records", "Completeness",
                     status, True, total, THRESHOLDS["min_records"])
     if status == "FAIL": failures.append("min_records")
 
     # --- 2. Null Checks ---
+    print("\n── CHECK 2: Null Checks (Kiểm tra giá trị rỗng) ────────")
     for col in REQUIRED_COLUMNS:
         null_count = df.filter(F.col(col).isNull()).count()
         null_pct = (null_count / total * 100) if total > 0 else 0
@@ -87,6 +90,7 @@ def run_dq_checks(spark, conn):
         if status == "FAIL": failures.append(f"null_{col}")
 
     # --- 3. URL Format ---
+    print("\n── CHECK 3: URL Format (Định dạng đường dẫn) ───────────")
     invalid_url = df.filter(~F.col("url").contains("tiktok.com")).count()
     status = "PASS" if invalid_url == 0 else "FAIL"
     write_dq_result(conn, RUN_TIMESTAMP, TARGET_TABLE, "url_format", "Validity",
@@ -94,6 +98,7 @@ def run_dq_checks(spark, conn):
     if status == "FAIL": failures.append("url_format")
 
     # --- 4. Region Consistency ---
+    print("\n── CHECK 4: Region Consistency (Đồng nhất vùng miền) ────")
     invalid_region = df.filter(~F.col("region").isin(VALID_REGIONS)).count()
     status = "PASS" if invalid_region == 0 else "FAIL"
     write_dq_result(conn, RUN_TIMESTAMP, TARGET_TABLE, "region_consistency", "Consistency",
@@ -101,6 +106,7 @@ def run_dq_checks(spark, conn):
     if status == "FAIL": failures.append("region_consistency")
 
     # --- 5. Uniqueness (url) ---
+    print("\n── CHECK 5: Uniqueness (Tính duy nhất của URL) ─────────")
     distinct_urls = df.select("url").distinct().count()
     dup_count = total - distinct_urls
     dup_pct = (dup_count / total * 100) if total > 0 else 0
@@ -110,6 +116,7 @@ def run_dq_checks(spark, conn):
     if status == "FAIL": failures.append("duplicate_url")
 
     # --- 6. Date Validity (posted_date không ở tương lai) ---
+    print("\n── CHECK 6: Date Validity (Tính hợp lệ của ngày đăng) ──")
     future_date = df.filter(F.col("posted_date") > F.current_date()).count()
     status = "PASS" if future_date == 0 else "WARN"
     write_dq_result(conn, RUN_TIMESTAMP, TARGET_TABLE, "future_posted_date", "Validity",

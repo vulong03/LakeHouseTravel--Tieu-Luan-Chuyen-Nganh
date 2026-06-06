@@ -23,7 +23,7 @@ import psycopg2
 
 # Import shared DQ utilities (tránh lặp code)
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))  # spark/jobs/dataqualify/
-from dq_utils import ensure_dq_table, write_dq_result
+from dq_utils import ensure_dq_table, write_dq_result, run_eda
 
 # ============================================================================
 # CONFIG
@@ -59,18 +59,21 @@ RUN_TIMESTAMP = datetime.now().isoformat()
 
 def run_dq_checks(spark, conn):
     df = spark.table(TARGET_TABLE)
+    run_eda(df, TARGET_TABLE)
     total = df.count()
     failures = []
 
     print(f"\nTotal records: {total:,}")
 
     # --- 1. Min Records ---
+    print("\n── CHECK 1: Min Records (Số lượng dòng tối thiểu) ──────")
     status = "PASS" if total >= THRESHOLDS["min_records"] else "FAIL"
     write_dq_result(conn, RUN_TIMESTAMP, TARGET_TABLE, "min_records", "Completeness",
                     status, True, total, THRESHOLDS["min_records"])
     if status == "FAIL": failures.append("min_records")
 
     # --- 2. Null Checks ---
+    print("\n── CHECK 2: Null Checks (Kiểm tra giá trị rỗng) ────────")
     for col in REQUIRED_COLUMNS:
         null_count = df.filter(F.col(col).isNull()).count()
         null_pct = (null_count / total * 100) if total > 0 else 0
@@ -80,12 +83,14 @@ def run_dq_checks(spark, conn):
         if status == "FAIL": failures.append(f"null_{col}")
 
     # --- 3. Comment Length (không được rỗng sau trim) ---
+    print("\n── CHECK 3: Comment Length (Nội dung bình luận rỗng) ──")
     empty_comments = df.filter(F.length(F.trim(F.col("comment"))) == 0).count()
     status = "PASS" if empty_comments == 0 else "WARN"
     write_dq_result(conn, RUN_TIMESTAMP, TARGET_TABLE, "empty_comments", "Validity",
                     status, False, float(empty_comments), 0.0)
 
     # --- 4. Level Enum Validity (Yes / No) ---
+    print("\n── CHECK 4: Level Enum Validity (Tính hợp lệ của Level) ─")
     # FIX: Spark's ~isin() trả về NULL khi cột là NULL → dùng isNull() | ~isin() để bắt cả 2
     invalid_level = df.filter(
         F.col("level_comment").isNull() |
@@ -97,6 +102,7 @@ def run_dq_checks(spark, conn):
     if status == "FAIL": failures.append("level_enum_validity")
 
     # --- 5. Referential Integrity (Orphan comments) ---
+    print("\n── CHECK 5: Referential Integrity (Bình luận mồ côi) ──")
     # Kiểm tra post_url trong comments có tồn tại trong metadata không
     meta_df = spark.table(METADATA_TABLE).select("post_url").distinct()
     orphan_count = df.join(meta_df, "post_url", "left_anti").count()

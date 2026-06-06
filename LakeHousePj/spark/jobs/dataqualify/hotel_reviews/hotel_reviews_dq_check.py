@@ -24,6 +24,7 @@ from datetime import datetime
 sys.path.append('/opt/spark/jobs')
 
 from utils.spark_session import get_spark_session
+from dataqualify.dq_utils import run_eda, get_check_description
 from pyspark.sql import functions as F
 import psycopg2
 import json
@@ -104,7 +105,9 @@ def write_dq_result(conn, check_name, check_category, status, is_critical,
         context = f"  →  value={metric_value:.2f}"
     else:
         context = ""
-    print(f"  {icon} {crit} [{check_category}] {check_name}: {status}{context}")
+    desc = get_check_description(check_name)
+    desc_str = f" ({desc})" if desc else ""
+    print(f"  {icon} {crit} [{check_category}] {check_name}{desc_str}: {status}{context}")
 
 # ============================================================================
 # DQ LOGIC
@@ -114,6 +117,7 @@ def run_dq_checks(spark, conn):
     print(f"\n🚀 Đang chạy DQ checks cho {TARGET_TABLE}...")
     
     df = spark.table(TARGET_TABLE)
+    run_eda(df, TARGET_TABLE)
     failures = []
     
     # 1. Tối ưu: Tính toán metrics cơ bản trong 1 pass
@@ -141,11 +145,13 @@ def run_dq_checks(spark, conn):
         return ["table_empty"]
 
     # --- Check 1: Min Records ---
+    print("\n── CHECK 1: Min Records (Số lượng dòng tối thiểu) ──────")
     status = "PASS" if total >= THRESHOLDS["min_records"] else "FAIL"
     write_dq_result(conn, "min_records", "Completeness", status, True, total, THRESHOLDS["min_records"])
     if status == "FAIL": failures.append("min_records")
 
     # --- Check 2: Null Checks ---
+    print("\n── CHECK 2: Null Checks (Kiểm tra giá trị rỗng) ────────")
     for col in REQUIRED_COLUMNS:
         null_count = metrics[f"null_count_{col}"]
         null_pct = (null_count / total) * 100
@@ -154,24 +160,28 @@ def run_dq_checks(spark, conn):
         if status == "FAIL": failures.append(f"null_{col}")
 
     # --- Check 3: Score Range ---
+    print("\n── CHECK 3: Score Range (Khoảng điểm đánh giá hợp lệ) ──")
     status = "PASS" if (metrics["min_score"] >= THRESHOLDS["rating_min"] and metrics["max_score"] <= THRESHOLDS["rating_max"]) else "FAIL"
     write_dq_result(conn, "score_range", "Validity", status, True, metrics["avg_score"], None, 
                     {"min": metrics["min_score"], "max": metrics["max_score"]})
     if status == "FAIL": failures.append("score_range")
 
     # --- Check 4: Date Validity (Review Date) ---
+    print("\n── CHECK 4: Date Validity (Tính hợp lệ của ngày tháng) ─")
     current_date = datetime.now().date()
     # review_date không được trong tương lai (cho phép sai số 1 ngày do timezone)
     status = "PASS" if metrics["max_review_date"] <= current_date else "WARN"
     write_dq_result(conn, "review_date_validity", "Validity", status, False, details={"max_date": str(metrics["max_review_date"])})
 
     # --- Check 5: Freshness ---
+    print("\n── CHECK 5: Freshness (Độ tươi mới của dữ liệu) ────────")
     if metrics["max_ingestion_ts"]:
         hours_old = (datetime.now() - metrics["max_ingestion_ts"]).total_seconds() / 3600
         status = "PASS" if hours_old <= THRESHOLDS["max_freshness_hours"] else "WARN"
         write_dq_result(conn, "freshness", "Freshness", status, False, hours_old, THRESHOLDS["max_freshness_hours"])
     
     # --- Check 6: Uniqueness (row_checksum) ---
+    print("\n── CHECK 6: Uniqueness (Tính duy nhất của checksum) ────")
     # Vì bảng lớn, check distinct count có thể tốn tài nguyên.
     # Ta sẽ check mẫu hoặc dùng approx_count_distinct nếu cần cực nhanh.
     # Ở đây dùng count + distinct thông thường vì 1.5M vẫn ổn với cluster hiện tại.

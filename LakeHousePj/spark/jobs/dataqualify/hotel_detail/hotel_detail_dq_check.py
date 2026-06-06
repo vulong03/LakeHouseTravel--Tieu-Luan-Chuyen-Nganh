@@ -32,6 +32,7 @@ from datetime import datetime
 sys.path.append('/opt/spark/jobs')
 
 from utils.spark_session import get_spark_session
+from dataqualify.dq_utils import run_eda, get_check_description
 from pyspark.sql import functions as F
 import psycopg2
 import json
@@ -124,7 +125,9 @@ def write_dq_result(conn, check_name, check_category,
         context = f"  →  value={metric_value:.2f}"
     else:
         context = ""
-    print(f"  {icon} {crit} [{check_category}] {check_name}: {status}{context}")
+    desc = get_check_description(check_name)
+    desc_str = f" ({desc})" if desc else ""
+    print(f"  {icon} {crit} [{check_category}] {check_name}{desc_str}: {status}{context}")
 
 
 # ============================================================================
@@ -433,6 +436,7 @@ def main():
         # Đọc bảng
         try:
             df    = spark.table(TARGET_TABLE)
+            run_eda(df, TARGET_TABLE)
             total = df.count()
             print(f"\nTotal records: {total:,}")
         except Exception as e:
