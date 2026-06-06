@@ -308,35 +308,50 @@ def tab1_seasonal_recommend(start_month, end_month, selected_theme, selected_reg
         else:
             df_filtered[c] = 0.5
 
-    # Compute themed recommendation score for each month row
-    theme_col_map = {
-        "🏞️ Scenery": "avg_aspect_scenery",
-        "🍲 Food": "avg_aspect_food",
-        "💰 Price": "avg_aspect_price",
-        "🛎️ Service": "avg_aspect_service",
-        "🏨 Accommodation": "avg_aspect_accommodation",
-        "All": None
-    }
-    aspect_col = theme_col_map.get(selected_theme)
-    if aspect_col:
-        df_filtered["recommendation_score"] = df_filtered["predicted_hotel_volume_actual"] * df_filtered[aspect_col]
-        theme_label = selected_theme
-    else:
-        df_filtered["recommendation_score"] = df_filtered["predicted_hotel_volume_actual"]
-        theme_label = "Overall Demand"
-
-    # Now aggregate across months to get a single row per province
+    # ── Aggregate first to get per-province averages ──
     agg_dict = {
-        "predicted_hotel_volume_actual": "mean",  # Average monthly volume
-        "recommendation_score": "mean"            # Average monthly recommendation score
+        "predicted_hotel_volume_actual": "mean",
     }
     for c in aspect_cols:
         if c in df_filtered.columns:
-            agg_dict[c] = "first" # Aspect sentiments are constant per province anyway
+            agg_dict[c] = "first"
 
     df_m = df_filtered.groupby(["province_sk", "province_name", "region_vi"]).agg(agg_dict).reset_index()
 
-    # Scale scores to 0-100
+    # ── Normalize volume to [0, 1] để tránh bias thành phố lớn ──
+    v_min, v_max = df_m["predicted_hotel_volume_actual"].min(), df_m["predicted_hotel_volume_actual"].max()
+    if v_max > v_min:
+        df_m["volume_norm"] = (df_m["predicted_hotel_volume_actual"] - v_min) / (v_max - v_min)
+    else:
+        df_m["volume_norm"] = 1.0
+
+    # ── Compute recommendation score ──
+    theme_col_map = {
+        "🏞️ Scenery":       "avg_aspect_scenery",
+        "🍲 Food":           "avg_aspect_food",
+        "💰 Price":          "avg_aspect_price",
+        "🛎️ Service":        "avg_aspect_service",
+        "🏨 Accommodation":  "avg_aspect_accommodation",
+        "All": None
+    }
+    aspect_col = theme_col_map.get(selected_theme)
+
+    if aspect_col and aspect_col in df_m.columns:
+        # Normalize aspect về [0,1] (dữ liệu PhoBERT thường đã trong khoảng 0–1, nhưng chuẩn hoá thêm cho chắc)
+        a_min, a_max = df_m[aspect_col].min(), df_m[aspect_col].max()
+        if a_max > a_min:
+            df_m["aspect_norm"] = (df_m[aspect_col] - a_min) / (a_max - a_min)
+        else:
+            df_m["aspect_norm"] = 1.0
+        # Trọng số: 40% volume, 60% aspect → chất lượng trải nghiệm quyết định hơn khối lượng
+        df_m["recommendation_score"] = 0.4 * df_m["volume_norm"] + 0.6 * df_m["aspect_norm"]
+        theme_label = selected_theme
+    else:
+        # "All" → rank thuần theo volume (normalized)
+        df_m["recommendation_score"] = df_m["volume_norm"]
+        theme_label = "Overall Demand"
+
+    # Scale rec_index về 0–100
     max_score = df_m["recommendation_score"].max()
     if max_score > 0:
         df_m["rec_index"] = (df_m["recommendation_score"] / max_score) * 100
@@ -362,9 +377,14 @@ def tab1_seasonal_recommend(start_month, end_month, selected_theme, selected_reg
         hovertemplate="<b>%{x}</b><br>Score: %{y:.1f}/100<br><extra></extra>",
     ))
     
-    months_label_str = ", ".join(selected_months)
+    # Dạng range ngắn gọn: "MM/YYYY → MM/YYYY" thay vì liệt kê từng tháng
+    if len(selected_months) > 1:
+        months_range_str = f"{selected_months[0]} → {selected_months[-1]}"
+    else:
+        months_range_str = selected_months[0] if selected_months else ""
+
     fig.update_layout(
-        title={"text": f"🎯 Top Destination Recommendations — Criteria: {theme_label} ({months_label_str})",
+        title={"text": f"🎯 Top Destination Recommendations — Criteria: {theme_label} ({months_range_str})",
                "x": 0.5, "xanchor": "center", "font": {"size": 18, "color": "#f1f5f9"}},
         xaxis=dict(title="", tickangle=-30, tickfont=dict(color="#94a3b8")),
         yaxis=dict(title="Recommendation Score (0-100)", range=[0, 115], tickfont=dict(color="#94a3b8")),
@@ -378,7 +398,7 @@ def tab1_seasonal_recommend(start_month, end_month, selected_theme, selected_reg
     cards_html = f"""
     <div style="margin-top: 25px; padding-bottom: 5px; border-bottom: 2px solid #1f2937; margin-bottom: 20px;">
         <h3 style="margin: 0; font-size: 1.5em; font-weight: 700; color: #f1f5f9; display: flex; align-items: center; gap: 8px;">
-            🏖️ Special Travel Recommendations for {months_label_str}
+            🏖️ Special Travel Recommendations for {months_range_str}
         </h3>
     </div>
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 24px;">
@@ -467,8 +487,8 @@ def tab1_seasonal_recommend(start_month, end_month, selected_theme, selected_reg
                     <strong style="color: #38bdf8; font-size: 1.1em;">{rec_idx:.1f} / 100</strong>
                 </div>
                 <div style="display: flex; justify-content: space-between; font-size: 0.92em;">
-                    <span style="color: #94a3b8;">Avg Forecasted Reviews:</span>
-                    <strong style="color: #f1f5f9;">{pred_vol:,.0f} reviews/mo</strong>
+                    <span style="color: #94a3b8;">Avg Est. Bookings/Month:</span>
+                    <strong style="color: #f1f5f9;">{pred_vol:,.0f} bookings</strong>
                 </div>
             </div>
             <p style="margin: 0; font-size: 0.88em; color: #94a3b8; line-height: 1.6; font-weight: 450;">{season_desc}</p>
@@ -478,12 +498,12 @@ def tab1_seasonal_recommend(start_month, end_month, selected_theme, selected_reg
     cards_html += "</div>"
 
     info_html = _info_html(
-        f"Travel recommendations for: {months_label_str} · Ranked by: {theme_label} · Showing Top {len(df_m)} best destinations."
+        f"Travel recommendations for: {months_range_str} · Ranked by: {theme_label} · Showing Top {len(df_m)} best destinations."
     )
 
     table_df = df_m[["rank", "province_name", "region_vi", "rec_index", "predicted_hotel_volume_actual"]].copy()
-    table_df.columns = ["Rank", "Province", "Region", "Recommendation Score (100)", "Avg Forecasted Reviews/Month"]
-    table_df["Avg Forecasted Reviews/Month"] = table_df["Avg Forecasted Reviews/Month"].round(0).astype(int)
+    table_df.columns = ["Rank", "Province", "Region", "Recommendation Score (100)", "Avg Est. Bookings/Month"]
+    table_df["Avg Est. Bookings/Month"] = table_df["Avg Est. Bookings/Month"].round(0).astype(int)
     table_df["Recommendation Score (100)"] = table_df["Recommendation Score (100)"].round(1)
 
     return table_df, fig, cards_html, info_html
@@ -519,7 +539,7 @@ def tab2_top_provinces(start_month, end_month, region_vi, top_n, sort_by):
         peak_month=("predicted_hotel_volume_actual", "idxmax"),
     ).reset_index()
 
-    sort_col = "avg_volume" if sort_by == "Avg Monthly Reviews" else "avg_growth"
+    sort_col = "avg_volume" if sort_by == "Avg Est. Bookings/Month" else "avg_growth"
     agg = agg.sort_values(sort_col, ascending=False).head(int(top_n)).reset_index(drop=True)
     agg["rank"] = range(1, len(agg) + 1)
 
@@ -535,9 +555,9 @@ def tab2_top_provinces(start_month, end_month, region_vi, top_n, sort_by):
     result_df = agg[["rank", "province_name", "region_vi",
                       "avg_volume", "total_volume", "avg_growth", "peak_month_label"]].copy()
     result_df.columns = ["Rank", "Province", "Region",
-                         "Avg Reviews/Month", "Total Reviews (12M)", "Avg Growth %", "Peak Month"]
-    result_df["Avg Reviews/Month"] = result_df["Avg Reviews/Month"].round(0).astype(int)
-    result_df["Total Reviews (12M)"] = result_df["Total Reviews (12M)"].round(0).astype(int)
+                         "Avg Est. Bookings/Month", "Total Est. Bookings (Period)", "Avg Growth %", "Peak Month"]
+    result_df["Avg Est. Bookings/Month"] = result_df["Avg Est. Bookings/Month"].round(0).astype(int)
+    result_df["Total Est. Bookings (Period)"] = result_df["Total Est. Bookings (Period)"].round(0).astype(int)
     result_df["Avg Growth %"] = result_df["Avg Growth %"].round(1)
 
     # Bar chart (Dark Theme)
@@ -549,17 +569,17 @@ def tab2_top_provinces(start_month, end_month, region_vi, top_n, sort_by):
             color=agg["avg_volume"],
             colorscale="Teal",
             showscale=True,
-            colorbar=dict(title="Reviews/Month"),
+            colorbar=dict(title="Est. Bookings/Month"),
         ),
         text=agg["avg_volume"].round(0).astype(int),
         textposition="outside",
-        hovertemplate="<b>%{x}</b><br>Avg Reviews: %{y:,.0f}<br><extra></extra>",
+        hovertemplate="<b>%{x}</b><br>Est. Bookings/Month: %{y:,.0f}<br><extra></extra>",
     ))
     fig.update_layout(
-        title={"text": f"🏆 Top {len(agg)} Provinces — Forecasted Reviews ({start_month} to {end_month})",
+        title={"text": f"🏆 Top {len(agg)} Provinces — Forecasted Est. Bookings ({start_month} to {end_month})",
                "x": 0.5, "xanchor": "center", "font": {"size": 18, "color": "#f1f5f9"}},
         xaxis=dict(title="", tickangle=-35, tickfont=dict(color="#94a3b8")),
-        yaxis=dict(title="Forecasted reviews/month", tickfont=dict(color="#94a3b8")),
+        yaxis=dict(title="Est. Bookings / Month (proxy from review count)", tickfont=dict(color="#94a3b8")),
         template="plotly_dark",
         height=450,
         plot_bgcolor="#111827",
@@ -1268,8 +1288,8 @@ def create_app():
                             region_t2 = gr.Dropdown(list(REGIONS_EN.keys()), value="All Regions", label="Geographical Region")
                             top_n_t2  = gr.Dropdown(["5", "10", "15", "20", "30"], value="10", label="Show Top N")
                             sort_t2   = gr.Dropdown(
-                                ["Avg Monthly Reviews", "Avg Growth %"],
-                                value="Avg Monthly Reviews",
+                                ["Avg Est. Bookings/Month", "Avg Growth %"],
+                                value="Avg Est. Bookings/Month",
                                 label="Sort by"
                             )
                             btn2 = gr.Button("📊 Run Ranking", variant="primary", size="lg")
@@ -1278,8 +1298,8 @@ def create_app():
                         info2 = gr.HTML()
                         chart2 = gr.Plot()
                         table2 = gr.Dataframe(
-                            headers=["Rank", "Province", "Region", "Avg Reviews/Month",
-                                     "Total Reviews (12M)", "Avg Growth %", "Peak Month"],
+                            headers=["Rank", "Province", "Region", "Avg Est. Bookings/Month",
+                                     "Total Est. Bookings (Period)", "Avg Growth %", "Peak Month"],
                             wrap=True,
                         )
 
