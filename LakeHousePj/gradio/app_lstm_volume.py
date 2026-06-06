@@ -41,7 +41,6 @@ MINIO_CLIENT = Minio(
 BUCKET_NAME = "gold"
 FORECAST_PREFIX = "ml_forecast/"
 FEATURES_PREFIX = "ml_training/"          # dl_features.parquet (for traveler type & nlp avg)
-CLUSTERING_PREFIX = "ml-outputs/hotel-clustering-v2/results/"  # Hotel clustering
 LSTM_FILE_PATTERN = "province_hotel_volume_forecast_lstm_"
 
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
@@ -50,7 +49,6 @@ LSTM_MODEL_NAME = "province_hotel_volume_forecaster_lstm"
 CACHE_DURATION = 60   # seconds
 _forecast_cache = {"data": None, "timestamp": 0, "run_folder": ""}
 _features_cache = {"data": None, "timestamp": 0}
-_clustering_cache = {"data": None, "timestamp": 0}
 
 REGION_MAP_EN = {
     "Northeast":           "Northeast",
@@ -181,37 +179,6 @@ def load_features_data():
     except Exception as e:
         import traceback; traceback.print_exc()
         return pd.DataFrame(), f"❌ Features loading error: {e}"
-
-
-def load_clustering_data():
-    """Load hotel clustering results from MinIO with caching."""
-    global _clustering_cache
-    now = time.time()
-    if _clustering_cache["data"] is not None and (now - _clustering_cache["timestamp"]) < CACHE_DURATION:
-        return _clustering_cache["data"], None
-
-    try:
-        parquet_objects = list(MINIO_CLIENT.list_objects(BUCKET_NAME, prefix=CLUSTERING_PREFIX, recursive=True))
-        parquet_files = [obj.object_name for obj in parquet_objects if obj.object_name.endswith('.parquet')]
-
-        if not parquet_files:
-            return pd.DataFrame(), "⚠️ Hotel clustering results not found in MinIO!"
-
-        dfs = []
-        for obj_name in parquet_files:
-            response = MINIO_CLIENT.get_object(BUCKET_NAME, obj_name)
-            dfs.append(pd.read_parquet(BytesIO(response.read())))
-
-        df = pd.concat(dfs, ignore_index=True)
-        _clustering_cache.update({"data": df, "timestamp": now})
-        print(f"✅ Loaded {len(df)} hotels from clustering results")
-        return df, None
-
-    except S3Error as e:
-        return pd.DataFrame(), f"❌ MinIO connection error: {e}"
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        return pd.DataFrame(), f"❌ Hotel clustering loading error: {e}"
 
 
 def load_average_aspects():
@@ -516,20 +483,20 @@ def tab1_seasonal_recommend(start_month, end_month, selected_theme, selected_reg
 def tab2_top_provinces(start_month, end_month, region_vi, top_n, sort_by):
     df, err = load_forecast_data()
     if err:
-        return pd.DataFrame(), None, _error_html(err)
+        return pd.DataFrame(), None, None, _error_html(err)
     if df.empty:
-        return pd.DataFrame(), None, _warn_html("No forecast data available.")
+        return pd.DataFrame(), None, None, _warn_html("No forecast data available.")
 
     s_ym, e_ym = _ym_int(start_month), _ym_int(end_month)
     if s_ym > e_ym:
-        return pd.DataFrame(), None, _error_html("Start month must be before or equal to end month!")
+        return pd.DataFrame(), None, None, _error_html("Start month must be before or equal to end month!")
 
     fdf = df[(df["year_month"] >= s_ym) & (df["year_month"] <= e_ym)].copy()
     if region_vi != "Tất cả" and region_vi != "All Regions":
         fdf = fdf[fdf["region_vi"] == region_vi]
 
     if fdf.empty:
-        return pd.DataFrame(), None, _warn_html("No data available for the selected range/region.")
+        return pd.DataFrame(), None, None, _warn_html("No data available for the selected range/region.")
 
     # Aggregate
     agg = fdf.groupby(["province_sk", "province_name", "region_vi"]).agg(
@@ -560,28 +527,56 @@ def tab2_top_provinces(start_month, end_month, region_vi, top_n, sort_by):
     result_df["Total Est. Bookings (Period)"] = result_df["Total Est. Bookings (Period)"].round(0).astype(int)
     result_df["Avg Growth %"] = result_df["Avg Growth %"].round(1)
 
-    # Bar chart (Dark Theme)
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
+    # 1. Booking Volume Bar Chart
+    fig_vol = go.Figure()
+    fig_vol.add_trace(go.Bar(
         x=agg["province_name"],
         y=agg["avg_volume"],
         marker=dict(
             color=agg["avg_volume"],
             colorscale="Teal",
             showscale=True,
-            colorbar=dict(title="Est. Bookings/Month"),
+            colorbar=dict(title="Bookings/Mo", thickness=15),
         ),
         text=agg["avg_volume"].round(0).astype(int),
         textposition="outside",
         hovertemplate="<b>%{x}</b><br>Est. Bookings/Month: %{y:,.0f}<br><extra></extra>",
     ))
-    fig.update_layout(
-        title={"text": f"🏆 Top {len(agg)} Provinces — Forecasted Est. Bookings ({start_month} to {end_month})",
-               "x": 0.5, "xanchor": "center", "font": {"size": 18, "color": "#f1f5f9"}},
+    fig_vol.update_layout(
+        title={"text": f"📊 Est. Bookings/Month ({start_month} to {end_month})",
+               "x": 0.5, "xanchor": "center", "font": {"size": 15, "color": "#f1f5f9"}},
         xaxis=dict(title="", tickangle=-35, tickfont=dict(color="#94a3b8")),
-        yaxis=dict(title="Est. Bookings / Month (proxy from review count)", tickfont=dict(color="#94a3b8")),
+        yaxis=dict(title="Est. Bookings / Month", tickfont=dict(color="#94a3b8")),
         template="plotly_dark",
-        height=450,
+        height=420,
+        margin=dict(t=50, b=80, l=50, r=10),
+        plot_bgcolor="#111827",
+        paper_bgcolor="#111827",
+    )
+
+    # 2. Growth Rate Bar Chart
+    fig_growth = go.Figure()
+    fig_growth.add_trace(go.Bar(
+        x=agg["province_name"],
+        y=agg["avg_growth"],
+        marker=dict(
+            color=agg["avg_growth"],
+            colorscale="Electric",
+            showscale=True,
+            colorbar=dict(title="Growth %", thickness=15),
+        ),
+        text=agg["avg_growth"].round(1).apply(lambda x: f"{x:.1f}%"),
+        textposition="outside",
+        hovertemplate="<b>%{x}</b><br>Avg Growth: %{y:.1f}%<br><extra></extra>",
+    ))
+    fig_growth.update_layout(
+        title={"text": f"📈 Avg Growth % ({start_month} to {end_month})",
+               "x": 0.5, "xanchor": "center", "font": {"size": 15, "color": "#f1f5f9"}},
+        xaxis=dict(title="", tickangle=-35, tickfont=dict(color="#94a3b8")),
+        yaxis=dict(title="Growth Rate %", tickfont=dict(color="#94a3b8")),
+        template="plotly_dark",
+        height=420,
+        margin=dict(t=50, b=80, l=50, r=10),
         plot_bgcolor="#111827",
         paper_bgcolor="#111827",
     )
@@ -589,9 +584,9 @@ def tab2_top_provinces(start_month, end_month, region_vi, top_n, sort_by):
     n_prov = df["province_sk"].nunique()
     info = _info_html(
         f"Filtered {n_prov} provinces · {fdf['year_month'].nunique()} months · "
-        f"Showing Top {len(agg)} ({sort_by})"
+        f"Showing Top {len(agg)} (sorted by {sort_by})"
     )
-    return result_df, fig, info
+    return result_df, fig_vol, fig_growth, info
 
 
 # ============================================================
@@ -671,12 +666,19 @@ def tab3_traveler(province_name, year_filter):
     fdf = fdf.sort_values("year_month")
     fdf["date"] = pd.to_datetime(fdf["year_month"].astype(float).astype(int).astype(str), format="%Y%m")
 
+    # Rescale the 4 traveler ratios so they sum to 100% for each month
+    ratio_cols = ["couple_ratio", "family_ratio", "business_ratio", "solo_ratio"]
+    row_sum = fdf[ratio_cols].sum(axis=1)
+    row_sum = row_sum.replace(0, 1.0) # Avoid division by zero
+    for col in ratio_cols:
+        fdf[col] = fdf[col] / row_sum
+
     # --- Chart 1: Stacked area traveler type (Dark Theme) ---
     fig1 = go.Figure()
     colors_map = {"couple_ratio": "#4ECDC4", "family_ratio": "#FF6B6B",
                   "business_ratio": "#45B7D1", "solo_ratio": "#FFA07A"}
     labels_map = {"couple_ratio": "Couple", "family_ratio": "Family",
-                  "business_ratio": "Business", "solo_ratio": "Solo"}
+                  "business_ratio": "Group", "solo_ratio": "Solo"}
     for col in ["couple_ratio", "family_ratio", "business_ratio", "solo_ratio"]:
         fig1.add_trace(go.Scatter(
             x=fdf["date"],
@@ -701,33 +703,20 @@ def tab3_traveler(province_name, year_filter):
         paper_bgcolor="#111827",
     )
 
-    # --- Chart 2: Hotel review volume bar (Dark Theme) ---
+    # --- Chart 2: Hotel volume bar (Dark Theme) ---
     fig2 = go.Figure()
     fig2.add_trace(go.Bar(
         x=fdf["date"],
         y=fdf["hotel_review_volume"],
         marker=dict(color=fdf["hotel_review_volume"], colorscale="Blues", showscale=False),
-        name="Review Volume",
-        hovertemplate="Month: %{x|%m/%Y}<br>Reviews: %{y:,}<extra></extra>",
+        name="Est. Bookings",
+        hovertemplate="Month: %{x|%m/%Y}<br>Est. Bookings: %{y:,.0f}<extra></extra>",
     ))
-    if "hotness_score" in fdf.columns:
-        fig2.add_trace(go.Scatter(
-            x=fdf["date"],
-            y=fdf["hotness_score"] * fdf["hotel_review_volume"].max(),
-            mode="lines+markers",
-            name="Hotness (scaled)",
-            yaxis="y2",
-            line=dict(color="#FF6B6B", width=2, dash="dot"),
-            marker=dict(size=6),
-            hovertemplate="Hotness Score: %{customdata:.3f}<extra></extra>",
-            customdata=fdf["hotness_score"],
-        ))
 
     fig2.update_layout(
-        title={"text": f"📊 Actual Review Volume & Hotness — {province_name}", "x": 0.5, "xanchor": "center", "font": {"color": "#f1f5f9"}},
+        title={"text": f"📊 Est. Bookings — {province_name}", "x": 0.5, "xanchor": "center", "font": {"color": "#f1f5f9"}},
         xaxis=dict(tickformat="%m/%Y", dtick="M1", tickangle=-40, tickfont=dict(color="#94a3b8")),
-        yaxis=dict(title="Reviews/Month", tickfont=dict(color="#94a3b8")),
-        yaxis2=dict(title="Hotness Score", overlaying="y", side="right", showgrid=False, tickfont=dict(color="#94a3b8")),
+        yaxis=dict(title="Est. Bookings/Month", tickfont=dict(color="#94a3b8")),
         template="plotly_dark",
         height=380,
         legend=dict(orientation="h", y=-0.2),
@@ -736,97 +725,28 @@ def tab3_traveler(province_name, year_filter):
     )
 
     # Summary stats
-    summary = fdf[["couple_ratio", "family_ratio", "business_ratio", "solo_ratio"]].mean() * 100
+    fdf_valid = fdf[fdf[ratio_cols].sum(axis=1) > 0]
+    if not fdf_valid.empty:
+        summary = fdf_valid[ratio_cols].mean() * 100
+    else:
+        summary = fdf[ratio_cols].mean() * 100
     info = f"""
 <div style="background: linear-gradient(135deg, #1e293b, #334155); padding: 18px; border-radius: 12px; color: #f1f5f9; border: 1px solid #475569;">
   <h3 style="margin:0 0 10px; color:#38bdf8;">📍 {province_name} — Summary Stats</h3>
   <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; text-align: center;">
     <div><div style="font-size:1.8em; font-weight:800; color:#4ecdc4;">{summary['couple_ratio']:.1f}%</div><div>Couple</div></div>
     <div><div style="font-size:1.8em; font-weight:800; color:#ff6b6b;">{summary['family_ratio']:.1f}%</div><div>Family</div></div>
-    <div><div style="font-size:1.8em; font-weight:800; color:#45b7d1;">{summary['business_ratio']:.1f}%</div><div>Business</div></div>
+    <div><div style="font-size:1.8em; font-weight:800; color:#45b7d1;">{summary['business_ratio']:.1f}%</div><div>Group</div></div>
     <div><div style="font-size:1.8em; font-weight:800; color:#ffa07a;">{summary['solo_ratio']:.1f}%</div><div>Solo</div></div>
   </div>
-  <p style="margin:10px 0 0; font-size:0.9em; opacity:0.9; color:#94a3b8;">{len(fdf)} months of data | Avg reviews/month: {fdf['hotel_review_volume'].mean():.0f}</p>
+  <p style="margin:10px 0 0; font-size:0.9em; opacity:0.9; color:#94a3b8;">{len(fdf)} months of data | Avg Est. Bookings/month: {fdf['hotel_review_volume'].mean():,.0f}</p>
 </div>
 """
     return fig1, fig2, info
 
 
 # ============================================================
-# Tab 5 — Hotel Clustering V2
-# ============================================================
-
-def filter_hotels_by_cluster(cluster_name, province_filter, min_score, top_n):
-    """Filter hotels by segment/cluster and show recommendations."""
-    df, error = load_clustering_data()
-    if error:
-        return pd.DataFrame(), None, _error_html(error)
-    if df.empty:
-        return pd.DataFrame(), None, _warn_html("No clustering data available.")
-
-    if cluster_name != "Tất cả" and cluster_name != "All Segments":
-        df_filtered = df[df['cluster_name'] == cluster_name]
-    else:
-        df_filtered = df.copy()
-
-    if province_filter != "Tất cả" and province_filter != "All":
-        df_filtered = df_filtered[df_filtered['province_name'] == province_filter]
-
-    df_filtered = df_filtered[df_filtered['review_quality'] >= min_score]
-
-    if df_filtered.empty:
-        return pd.DataFrame(), None, _warn_html("No hotels match the selected filters.")
-
-    # Top best rated hotels in segment
-    df_result = df_filtered.sort_values('review_quality', ascending=False).head(int(top_n))
-
-    result_df = df_result[[
-        'hotel_name', 'province_name', 'cluster_name', 'review_quality', 'total_reviews',
-        'western_dominance', 'vietnamese_dominance', 'family_preference', 'guest_diversity'
-    ]].copy()
-
-    result_df.columns = [
-        'Hotel Name', 'Province', 'Segment', 'Average Rating', 'Total Reviews',
-        'Western Dominance', '% Vietnamese Guest', 'Family Preference', 'Guest Diversity'
-    ]
-
-    result_df['Western Dominance'] = result_df['Western Dominance'].round(2)
-    result_df['% Vietnamese Guest'] = result_df['% Vietnamese Guest'].round(1)
-    result_df['Family Preference'] = result_df['Family Preference'].round(2)
-    result_df['Guest Diversity'] = result_df['Guest Diversity'].round(2)
-    result_df['Average Rating'] = result_df['Average Rating'].round(2)
-
-    # Segment counts bar chart (Dark Theme)
-    cluster_counts = df.groupby('cluster_name').size().reset_index(name='count')
-    fig = px.bar(
-        cluster_counts, x='cluster_name', y='count',
-        title='Hotel Distribution by Customer Segment',
-        labels={'cluster_name': 'Segment', 'count': 'Number of Hotels'},
-        color='cluster_name',
-        color_discrete_sequence=px.colors.qualitative.Safe
-    )
-    fig.update_layout(
-        showlegend=False, 
-        height=360, 
-        template='plotly_dark', 
-        plot_bgcolor="#111827",
-        paper_bgcolor="#111827",
-        title_font=dict(color="#f1f5f9")
-    )
-
-    info_html = f"""
-    <div style="background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); padding: 18px; border-radius: 12px; color: white; border: 1px solid #4f46e5;">
-        <h3 style="margin: 0 0 8px; font-size: 1.1em; font-weight: 700; color: #38bdf8;">🏨 Hotel Clustering K-Means (K=3)</h3>
-        <p style="margin: 4px 0; font-size: 0.95em;">Total hotels in database: <strong>{len(df):,}</strong> | Matched filters: <strong>{len(df_filtered):,}</strong></p>
-        <p style="margin: 4px 0; font-size: 0.95em;">Showing Top <strong>{len(df_result)}</strong> best rated hotels based on review quality.</p>
-    </div>
-    """
-
-    return result_df, fig, info_html
-
-
-# ============================================================
-# Tab 6 — Model Info
+# Tab 5 — Model Info
 # ============================================================
 
 def tab4_model_info():
@@ -877,8 +797,8 @@ def tab4_model_info():
     <h3 style="margin:0 0 14px; color:#38bdf8; font-weight: 700;">⚙️ Model Architecture & Hyperparameters</h3>
     <table style="width:100%; border-collapse:collapse; font-size:0.95em; color:#cbd5e1;">
       <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Model Architecture</td><td style="padding:8px 14px">LSTM + LayerNorm + Temporal Attention + Dense (Multi-features)</td></tr>
-      <tr><td style="padding:8px 14px; font-weight:600">Target Variable (Log-normalized)</td><td style="padding:8px 14px">hotel_review_volume (Log1p scaled, Expm1 output)</td></tr>
-      <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Number of Features</td><td style="padding:8px 14px">{info.get('num_features', '36')} (includes Volume, TikTok engagement, NLP, Lags)</td></tr>
+      <tr><td style="padding:8px 14px; font-weight:600">Target Variable (Log-normalized)</td><td style="padding:8px 14px">hotel_volume (hotel_review_volume, Log1p scaled, Expm1 output)</td></tr>
+      <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Number of Features</td><td style="padding:8px 14px">{info.get('num_features', '38')} (includes Hotel volume, TikTok engagement, NLP, Lags)</td></tr>
       <tr><td style="padding:8px 14px; font-weight:600">Input Sequence Length</td><td style="padding:8px 14px">{info.get('sequence_length', '4')} historical months</td></tr>
       <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Hidden Size</td><td style="padding:8px 14px">{info.get('hidden_size', '32')} units</td></tr>
       <tr><td style="padding:8px 14px; font-weight:600">Loss Function</td><td style="padding:8px 14px">HuberLoss (delta=0.5) — mitigates outlier noise</td></tr>
@@ -889,13 +809,13 @@ def tab4_model_info():
 
   <!-- Top 10 provinces -->
   <div style="background:#111827; border:1px solid #1f2937; border-radius:12px; padding:20px;">
-    <h3 style="margin:0 0 14px; color:#38bdf8; font-weight: 700;">🏆 Top 10 Provinces — Avg Forecasted Reviews/Month</h3>
+    <h3 style="margin:0 0 14px; color:#38bdf8; font-weight: 700;">🏆 Top 10 Provinces — Avg Forecasted Est. Bookings/Month</h3>
     <table style="width:100%; border-collapse:collapse; font-size:0.95em; color:#cbd5e1;">
       <thead>
         <tr style="background:#312e81; color:white; border-bottom: 2px solid #4f46e5;">
           <th style="padding:8px 14px; text-align:left; border-top-left-radius: 8px;">#</th>
           <th style="padding:8px 14px; text-align:left">Province Name</th>
-          <th style="padding:8px 14px; text-align:right; border-top-right-radius: 8px;">Avg Forecasted Reviews/Month</th>
+          <th style="padding:8px 14px; text-align:right; border-top-right-radius: 8px;">Avg Est. Bookings/Month</th>
         </tr>
       </thead>
       <tbody>{forecast_stats}</tbody>
@@ -1296,7 +1216,9 @@ def create_app():
 
                     with gr.Column(scale=3):
                         info2 = gr.HTML()
-                        chart2 = gr.Plot()
+                        with gr.Row():
+                            chart2_vol = gr.Plot(label="Forecasted Est. Bookings Chart")
+                            chart2_growth = gr.Plot(label="Growth Rate Chart")
                         table2 = gr.Dataframe(
                             headers=["Rank", "Province", "Region", "Avg Est. Bookings/Month",
                                      "Total Est. Bookings (Period)", "Avg Growth %", "Peak Month"],
@@ -1305,7 +1227,7 @@ def create_app():
 
                 btn2.click(tab2_top_provinces,
                            inputs=[start_m, end_m, region_t2, top_n_t2, sort_t2],
-                           outputs=[table2, chart2, info2])
+                           outputs=[table2, chart2_vol, chart2_growth, info2])
 
             # ══════════════════════════════════════════════
             # TAB 3: PROVINCE COMPARISON
@@ -1356,73 +1278,22 @@ def create_app():
 **Significance of Traveler Type Segmentation:**
 * **Couple**: Moderate seasonal sensitivity, heavily concentrated in romantic destinations (Da Lat, Sa Pa).
 * **Family**: Surges dramatically during summer (May - August) at coastal/beach destinations.
-* **Business**: Highly stable throughout the year, concentrated in major economic hubs (Ha Noi, HCMC).
+* **Group**: Important customer segment for tourist destinations, highly active during weekends and holiday seasons.
 * **Solo**: Emerging trend of independent exploration among youths, focusing on remote mountains or islands.
 """)
 
                     with gr.Column(scale=3):
                         info4   = gr.HTML()
                         chart4a = gr.Plot(label="Traveler Demographics Distribution by Month")
-                        chart4b = gr.Plot(label="Review Volume & Hotness Score by Month")
+                        chart4b = gr.Plot(label="Est. Bookings by Month")
 
                 btn4.click(tab3_traveler,
                            inputs=[feat_prov_dd, feat_year_dd],
                            outputs=[chart4a, chart4b, info4])
 
-            # ══════════════════════════════════════════════
-            # TAB 5: HOTEL CLUSTERING
-            # ══════════════════════════════════════════════
-            with gr.Tab("🏨 Hotel Segments"):
-                gr.Markdown("""
-                ### 🏨 Search Hotels by Optimal Customer Segment
-                The system applies **K-Means Clustering (K=3)** on over **6,400 hotels** using 7 key customer characteristics extracted from the Silver layer.
-                """, elem_classes="section-header")
-
-                with gr.Row():
-                    with gr.Column(scale=1, min_width=280):
-                        gr.HTML('<div class="filter-title">⚙️ Hotel Filters</div>')
-                        with gr.Group(elem_classes="filter-panel"):
-                            cluster_selector = gr.Dropdown(
-                                choices=["All Segments", "Balanced Mixed Segment", "International Mixed Hotels", 
-                                         "Vietnamese Domestic Hotels", "Couple & Solo Hotels"],
-                                value="All Segments",
-                                label="Customer Segment",
-                                info="K-Means grouping based on local vs. international & travel habits"
-                            )
-                            province_selector = gr.Dropdown(
-                                choices=["All"] + provinces,
-                                value="All",
-                                label="Province/Location"
-                            )
-                            min_score_slider = gr.Slider(
-                                minimum=0.0, maximum=10.0, value=6.0, step=0.5,
-                                label="Minimum Rating Score",
-                                info="Minimum average review score for filtering"
-                            )
-                            top_n_hotels = gr.Dropdown(
-                                choices=["10", "20", "30", "50"], value="20",
-                                label="Max Hotels to Display"
-                            )
-                            btn5 = gr.Button("🏨 Recommend Best Hotels", variant="primary", size="lg")
-
-                    with gr.Column(scale=3):
-                        info5 = gr.HTML()
-                        chart5 = gr.Plot(label="Hotel distribution by customer segment")
-                        hotels_table = gr.Dataframe(
-                            label="Recommended Hotels list",
-                            wrap=True,
-                            interactive=False
-                        )
-
-                btn5.click(
-                    filter_hotels_by_cluster,
-                    inputs=[cluster_selector, province_selector, min_score_slider, top_n_hotels],
-                    outputs=[hotels_table, chart5, info5]
-                )
-
-            # ══════════════════════════════════════════════
-            # TAB 6: MODEL INFO
-            # ══════════════════════════════════════════════
+             # ══════════════════════════════════════════════
+             # TAB 5: MODEL INFO
+             # ══════════════════════════════════════════════
             with gr.Tab("🧠 Model Specs"):
                 with gr.Row():
                     refresh_btn = gr.Button("🔄 Sync Latest Metrics from MLflow", variant="secondary")

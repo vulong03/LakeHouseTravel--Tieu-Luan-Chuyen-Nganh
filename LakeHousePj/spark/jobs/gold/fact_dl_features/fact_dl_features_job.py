@@ -384,9 +384,9 @@ def aggregate_hotel_reviews(spark: SparkSession) -> DataFrame:
          / total_col).alias("couple_ratio"),
         (F.sum(F.when(F.col("traveler_type_name").contains("Gia đình"), 1).otherwise(0))
          / total_col).alias("family_ratio"),
-        (F.sum(F.when(F.col("traveler_type_name").contains("Công tác"), 1).otherwise(0))
+        (F.sum(F.when(F.col("traveler_type_name").contains("Nhóm"), 1).otherwise(0))
          / total_col).alias("business_ratio"),
-        (F.sum(F.when(F.col("traveler_type_name").contains("Một mình"), 1).otherwise(0))
+        (F.sum(F.when(F.col("traveler_type_name").contains("Khách lẻ"), 1).otherwise(0))
          / total_col).alias("solo_ratio"),
     )
 
