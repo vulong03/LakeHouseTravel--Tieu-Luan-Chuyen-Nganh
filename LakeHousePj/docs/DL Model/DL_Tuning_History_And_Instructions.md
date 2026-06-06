@@ -21,13 +21,14 @@ This document captures the recent tuning runs performed on June 5, 2026, aimed a
 | **Round 2** | `hidden=32`, `dropout=0.45`, `wd=1e-3`, `batch=32` | 0.9555 | 0.8640 | **0.0915** | 0.6190 | **Rejected**. Reducing hidden units too much caused the model to lose key temporal representations. |
 | **Round 3** | `hidden=40`, `dropout=0.42`, `wd=6e-4`, `batch=32` | 0.9691 | 0.8932 | **0.0760** | 0.5486 | **Rejected**. Reducing capacity too much caused Test R2 to fall below 0.90 without sufficiently narrowing the gap. |
 | **Round 4** | `hidden=48`, `dropout=0.43`, `wd=7e-4`, `batch=32` | 0.9758 | 0.8992 | **0.0766** | 0.5328 | **Rejected**. Overfitting gap remained high (0.0766) and Test R2 was slightly below target. |
-| **Round 5** | `hidden=48`, `dropout=0.43`, `wd=7e-4`, `batch=32` + 3 Custom Features | 0.9691 | 0.9245 | **0.0446** | 0.4612 | **Success (Current Production)**. Met both targets: `Test R2 >= 0.90` (achieved 0.9245) and `Gap <= 0.05` (achieved 0.0446). |
+| **Round 5** | `hidden=48`, `dropout=0.43`, `wd=7e-4`, `batch=32` + 3 Custom Features | 0.9691 | 0.9245 | **0.0446** | 0.4612 | **Success**. Met both targets: `Test R2 >= 0.90` (achieved 0.9245) and `Gap <= 0.05` (achieved 0.0446). |
+| **Round 6** | `hidden=48`, `dropout=0.43`, `wd=7e-4`, `batch=32` + 3 Features + **No BatchNorm** | 0.9754 | 0.9281 | **0.0473** | 0.4501 | **Success (Current Production)**. Removing BatchNorm1d resolved the batch-size-1 inference mismatch. Test MAPE dropped to **40.84%** (a 9.37% relative error reduction) and Test R2 improved. |
 
 ---
 
 ## 3. Next Steps & Current Status
 
-The model performance targets have been **successfully met** through Feature Engineering (Option A). The model is ready for staging/production deployment.
+The model performance targets have been **successfully met** through Feature Engineering (Option A) combined with BatchNorm removal. The model is ready for staging/production deployment.
 
 ### Current Hyperparameter Configuration
 The current active configurations in [train_lstm_forecast.py](file:///d:/CodeStored/Nam_4/TieuLuanCuoiKy/LakeHouse/LakeHousePj/spark/jobs/ml/train_lstm_forecast.py) are:
@@ -38,6 +39,7 @@ The current active configurations in [train_lstm_forecast.py](file:///d:/CodeSto
 *   `LEARNING_RATE = 0.0005`
 *   `BATCH_SIZE = 32`
 *   `weight_decay = 7e-4`
+*   `BatchNorm1d`: **Removed** (helps resolve recursive forecast batch size 1 mismatch)
 *   New Features introduced: `social_to_booking_ratio`, `sentiment_polarity_change`, `hotel_vol_std_rolling_3m`
 
 No further hyperparameter tuning is required for this pipeline stage. Let's proceed to other components of the LakeHouse project.

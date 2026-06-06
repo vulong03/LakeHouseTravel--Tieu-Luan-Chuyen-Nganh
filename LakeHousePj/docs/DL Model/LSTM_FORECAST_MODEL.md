@@ -1,4 +1,4 @@
-# Deep Learning Model — Province Hotel Review Volume Forecasting (v3.0)
+# Deep Learning Model — Province Hotel Review Volume Forecasting (v4.0)
 ========================================================================
 
 ## Tổng quan
@@ -9,15 +9,15 @@ Model LSTM + Attention dự báo lượng đặt phòng khách sạn (thông qua
 
 ### v3.0 Fixes & Upgrades (so với v2.0/v1.0)
 
-| # | Vấn đề trước đây | Cải tiến v3.0 |
+| # | Vấn đề trước đây | Cải tiến v4.0 |
 |---|---|---|
 | 1 | **Target Variable mơ hồ**: dùng `hotness_score` tự định nghĩa | Target cụ thể: **`hotel_review_volume`** (đại diện lượng đặt phòng thực) |
 | 2 | **Data leakage**: current features chứa thông tin target | Khắc phục: Current metrics **LAG 1 tháng** (`prev_*`) |
-| 3 | **Scaler leak**: MinMaxScaler fit trên cả test | Scaler **fit trên train only** |
-| 4 | **Forecast scale sai**: lag dùng unscaled predicted | Tất cả giá trị **scale đúng** qua `_scale_single_value()` |
+| 3 | **Scaler leak**: MinMaxScaler fit trên cả test | Scaler **RobustScaler fit trên train only** |
+| 4 | **Forecast scale sai**: lag dùng unscaled predicted | Tất cả giá trị **scale đúng** qua `_scale_value()` |
 | 5 | **rolling_avg/lag_12 không update**: giữ giá trị cũ suốt 12 bước | **Update động** sau mỗi bước forecast đệ quy |
 | 6 | **Biến động volume lớn**: volume thực tế lệch lớn giữa các tỉnh | Áp dụng **Log-normalization (`log1p`)** cho target, dự báo xong dùng **`expm1`** để trả về scale thực tế |
-| 7 | **Loss function**: MSE nhạy outliers | **HuberLoss** (delta=0.5) cho robustness |
+| 7 | **Loss function**: MSE nhạy outliers | **Hybrid Loss** (70% HuberLoss + 30% SMAPELoss) |
 | 8 | **Chưa tích hợp Gradio**: MODELS dict cũ | **Tạo riêng dashboard mới** [app_lstm_volume.py](file:///d:/CodeStored/Nam_4/TieuLuanCuoiKy/LakeHouse/LakeHousePj/gradio/app_lstm_volume.py) kết nối MinIO và MLflow |
 
 ---
@@ -39,17 +39,17 @@ Bronze (Raw CSV)
 
 ## So sánh 3 models
 
-| Tiêu chí | XGBoost Reduced | Random Forest | LSTM Deep Learning (v3.0) |
+| Tiêu chí | XGBoost Reduced | Random Forest | LSTM Deep Learning (v4.0) |
 |---|---|---|---|
 | File | `train_and_forecast.py` | `train_random_forest_model.py` | `train_lstm_forecast.py` |
 | Loại | Tree-based (Boosting) | Tree-based (Bagging) | **Deep Learning (Sequence)** |
-| Số features | 8 | 8 | **30** |
+| Số features | 8 | 8 | **38** |
 | Target | `hotness_score` | `hotness_score` | **`hotel_review_volume`** (log-scale) |
 | Temporal features | 3 (month, sin, cos) | 3 | 2 (sin, cos only) |
 | Lag features | 5 (lag_1/2/3/12, rolling) | 5 | 6 (hotel vol lags) |
 | Current metrics | **Không dùng** | **Không dùng** | **engagement + NLP features** |
 | Cross-source | Chỉ TikTok | Chỉ TikTok | **TikTok + Booking** |
-| Input format | Tabular (1 row) | Tabular (1 row) | **Sequence (4 tháng)** |
+| Input format | Tabular (1 row) | Tabular (1 row) | **Sequence (3 tháng)** |
 | Output table | `forecast_reduced_next12` | `forecast_rf_next12` | `province_month_forecast_lstm_next12` |
 
 ---
@@ -94,24 +94,24 @@ Join với `dim_hotel`, `dim_date`, và `dim_travel_type` để tính:
 ## Kiến trúc Model
 
 ```
-Input: (batch_size, sequence_length=4, num_features=30)
+Input: (batch_size, sequence_length=3, num_features=38)
   │
   ▼
-LSTM Layer (input=30, hidden=32, 1 layer, batch_first=True)
+LSTM Layer (input=38, hidden=48, 2 layers, batch_first=True, dropout=0.43)
   │
   ▼
-LayerNorm(32)
+LayerNorm(48)
   │
   ▼
 Temporal Attention
-  │  scores = Linear(32 → 1) per timestep
+  │  scores = Linear(48 → 1) per timestep
   │  weights = softmax(scores)
   │  context = weighted sum of LSTM outputs
   ▼
-Context Vector: (batch_size, 32)
+Context Vector: (batch_size, 48)
   │
   ▼
-Dense(32 → 16) → ReLU → Dropout(0.3)
+Dense(48 → 48) → GELU → Dropout(0.43) → Dense(48 → 16) → ReLU
   │
   ▼
 Dense(16 → 1)
@@ -125,7 +125,7 @@ Output: predicted log-volume (scalar)
 ## Chiến lược Dự báo Tịnh tiến (Recursive Forecasting)
 
 Dự báo 12 tháng kế tiếp sử dụng mô hình tự hồi quy đệ quy:
-1. Lấy chuỗi 4 tháng cuối cùng làm context (đã scaled).
+1. Lấy chuỗi 3 tháng cuối cùng làm context (đã scaled).
 2. Dự báo giá trị log-volume tháng tiếp theo.
 3. Thực hiện tịnh tiến cửa sổ (shift window): bỏ tháng cũ nhất, đẩy giá trị dự báo mới vào cuối.
 4. Cập nhật các biến lag động cho bước kế tiếp:
@@ -167,4 +167,4 @@ docker exec lakehouse_spark_master /opt/spark/bin/spark-submit \
     /opt/spark/jobs/ml/train_lstm_forecast.py
 ```
 
-**Last Updated**: June 3, 2026 (v3.0)
+**Last Updated**: June 6, 2026 (v4.0)

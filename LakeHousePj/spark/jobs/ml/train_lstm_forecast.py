@@ -271,10 +271,9 @@ class LSTMForecaster(nn.Module):
         lstm_out, _ = self.lstm(x)
         lstm_out = self.layer_norm(lstm_out)
         context, _ = self.attention(lstm_out)
-        # During evaluation (model.eval()), batch norm is always valid since it uses running stats.
-        # During training, we require batch_size > 1.
-        if not self.training or context.shape[0] > 1:
-            context = self.bn(context)
+        # Commented out BatchNorm1d to test model performance without it
+        # if not self.training or context.shape[0] > 1:
+        #     context = self.bn(context)
         return self.fc(context).squeeze(-1)
 
 

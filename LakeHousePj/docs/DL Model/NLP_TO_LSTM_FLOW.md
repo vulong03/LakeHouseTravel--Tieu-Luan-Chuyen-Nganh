@@ -82,8 +82,8 @@ Xuất ra bảng **`gold.gold.fact_province_month_dl_features`**.
 Không cần tính toán lại bất kỳ feature nào trong Pipeline này, toàn bộ ở dạng sẵn sàng để train.
 
 ### 2. Quá trình xử lý
-1. **Prepare Sequences:** Tạo cửa sổ trượt (Sequence Window), ví dụ `SEQUENCE_LENGTH = 4` tháng liên tục để dự đoán tháng thứ 5.
-2. **Scaling:** Chuẩn hóa dữ liệu bằng `MinMaxScaler` dựa trên tập Training.
+1. **Prepare Sequences:** Tạo cửa sổ trượt (Sequence Window), ví dụ `SEQUENCE_LENGTH = 3` tháng liên tục để dự đoán tháng thứ 4.
+2. **Scaling:** Chuẩn hóa dữ liệu bằng `RobustScaler` (sử dụng Median và IQR để tăng tính chống nhiễu từ các tỉnh có tương tác cực lớn/outliers) dựa trên tập Training.
 3. **Training:** Đưa vào kiến trúc mạng `LSTM + Lớp Attention`.
 4. **Forecasting (Dự báo 12 tháng):** Dự báo cuốn chiếu (Autoregressive). Nó dùng mô hình để đoán Tháng T+1. Sau đó lấy kết quả T+1 nhét vào chuỗi đầu vào để dự đoán tiếp T+2, T+3,... và tính toán lại động các thuộc tính lag (như `rolling_avg` và `lag_12` từ quá khứ).
 5. **Inverse Transform:** Sử dụng `expm1` đưa kết quả từ log-scale về định dạng volume thực tế.

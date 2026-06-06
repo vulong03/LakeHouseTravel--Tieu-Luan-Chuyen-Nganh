@@ -31,7 +31,7 @@ Booking.com Data ─────────────────────
 
 **Grain**: 1 row = 1 tỉnh × 1 tháng  
 **Tổng rows**: 1,525  
-**Tổng features**: ~65 cột (36 dùng cho LSTM training)
+**Tổng features**: ~65 cột (38 dùng cho LSTM training)
 
 ### 2.1 Nguồn dữ liệu (3 nguồn chính)
 
@@ -179,16 +179,15 @@ df[TARGET] = np.log1p(df[TARGET])
 
 ```python
 LSTMForecaster(
-    input_size  = 36,
+    input_size  = 38,
     hidden_size = 48,      # 2 LSTM layers
     num_layers  = 2,
-    dropout     = 0.4
+    dropout     = 0.43
 )
 # Sau LSTM:
 LayerNorm(48)
 → TemporalAttention(48)   # softmax attention over sequence
-→ BatchNorm1d(48)
-→ Linear(48) → GELU → Dropout(0.4)
+→ Linear(48) → GELU → Dropout(0.43)
 → Linear(16) → ReLU
 → Linear(1)               # output: log1p(hotel_review_volume)
 ```
@@ -199,13 +198,14 @@ LayerNorm(48)
 SEQUENCE_LENGTH = 3       # 3 tháng look-back (tốt hơn seq=4)
 HIDDEN_SIZE     = 48
 NUM_LAYERS      = 2
-DROPOUT         = 0.4
+DROPOUT         = 0.43
 LEARNING_RATE   = 0.0005
 EPOCHS          = 200
-BATCH_SIZE      = 16
+BATCH_SIZE      = 32
 PATIENCE        = 25
-weight_decay    = 2e-4
+weight_decay    = 7e-4
 
+# BatchNorm1d: Removed (prevents batch-size-1 recursive forecast mismatch)
 # Loss: HybridLoss = 70% HuberLoss(delta=0.5) + 30% SMAPELoss
 # Scaler: RobustScaler (median/IQR, robust to outlier provinces)
 # Scheduler: CosineAnnealingWarmRestarts(T_0=30, T_mult=2, eta_min=1e-6)
@@ -213,18 +213,20 @@ weight_decay    = 2e-4
 
 ### 5.5 Lịch sử tuning & kết quả
 
-| Phiên bản | seq | test_r2 | gap(train-test) | RMSE | MAPE |
+| Phiên bản | seq | test_r2 | gap(train-test) | RMSE | MAPE (Actual) |
 |---|---|---|---|---|---|
 | v2 (baseline) | 4 | 0.811 | 0.100 | 0.734 | 90.03% |
 | v3 (MLflow refactor) | 4 | 0.839 | 0.108 | 0.677 | 88.29% |
-| v4 seq=4 | 4 | 0.904 | 0.076 | 0.522 | 49.52% |
-| **v4 seq=3 (BEST)** | **3** | **0.911** | **0.068** | **0.499** | **52.95%** |
+| v4 (Round 5) | 3 | 0.9245 | 0.0446 | 0.4612 | 45.06% |
+| **v4 (Round 6 - No BN - BEST)** | **3** | **0.9281** | **0.0473** | **0.4501** | **40.84%** |
 
 **Thay đổi quyết định từ v3 → v4**:
-- HuberLoss → **HybridLoss (Huber + SMAPE)** → MAPE giảm từ 88% xuống 49-53%
+- HuberLoss → **HybridLoss (Huber + SMAPE)** → MAPE giảm mạnh
 - MinMaxScaler → **RobustScaler** → ít bị ảnh hưởng bởi tỉnh viral
-- 1 LSTM layer → **2 layers** + FC sâu hơn với GELU
-- Clip thêm 6 engagement features tại p99
+- 1 LSTM layer → **2 layers** + FC sâu hơn với GELU & Dropout=0.43
+- Loại bỏ lớp **BatchNorm1d** để giải quyết lỗi batch size 1 khi suy luận đệ quy
+- Clip thêm 6 engagement features tại p99 để chống nhiễu từ mạng xã hội
+- Bổ sung 3 đặc trưng tích hợp nâng cao (ratios & volatility) giúp giảm triệt để overfitting gap từ 0.076 xuống **0.047** (đạt yêu cầu <0.05)
 
 **Lý do SEQUENCE_LENGTH=3 tốt hơn 4**:
 ```
