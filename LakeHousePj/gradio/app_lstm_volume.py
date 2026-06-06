@@ -89,201 +89,21 @@ def _ym_label(ym_int: int) -> str:
     return f"{ym_int % 100:02d}/{ym_int // 100}"
 
 
-def _get_months_from_range(range_str: str) -> list:
-    """Parse range string 'MM/YYYY - MM/YYYY' and return all months in between from MONTH_CHOICES."""
-    if not range_str:
-        return ["05/2026", "06/2026", "07/2026", "08/2026"]  # Fallback to Summer
+def _get_months_from_start_end(start_month: str, end_month: str) -> list:
+    """Return all months between start_month and end_month (inclusive) from MONTH_CHOICES."""
+    if not start_month or not end_month:
+        return ["05/2026", "06/2026", "07/2026", "08/2026"]
     try:
-        # Strip optional "season|" prefix
-        if "|" in range_str:
-            range_str = range_str.split("|")[1]
-            
-        if " - " not in range_str:
+        if start_month not in MONTH_CHOICES or end_month not in MONTH_CHOICES:
             return ["05/2026", "06/2026", "07/2026", "08/2026"]
-            
-        parts = range_str.split(" - ")
-        if len(parts) != 2:
-            return ["05/2026", "06/2026", "07/2026", "08/2026"]
-        start_m, end_m = parts[0].strip(), parts[1].strip()
-        if start_m not in MONTH_CHOICES or end_m not in MONTH_CHOICES:
-            return ["05/2026", "06/2026", "07/2026", "08/2026"]
-        idx_start = MONTH_CHOICES.index(start_m)
-        idx_end = MONTH_CHOICES.index(end_m)
+        idx_start = MONTH_CHOICES.index(start_month)
+        idx_end   = MONTH_CHOICES.index(end_month)
         if idx_start > idx_end:
             idx_start, idx_end = idx_end, idx_start
         return MONTH_CHOICES[idx_start : idx_end + 1]
     except Exception as e:
-        print(f"Error parsing range: {e}")
+        print(f"Error parsing month range: {e}")
         return ["05/2026", "06/2026", "07/2026", "08/2026"]
-
-
-def create_slider_html() -> str:
-    return """
-<div class="double-slider-wrapper">
-  <div class="slider-header">
-    <span class="slider-title-label">Selected Month Range:</span>
-    <span id="range-val-display" class="slider-range-val">05/2026 - 08/2026</span>
-  </div>
-  <div class="range-slider-container">
-    <div class="slider-track" id="slider-track-id"></div>
-    <input type="range" min="0" max="3" value="0" id="slider-1" class="slider-thumb-input">
-    <input type="range" min="0" max="3" value="3" id="slider-2" class="slider-thumb-input">
-  </div>
-  <div class="slider-ticks">
-    <span>05/2026</span>
-    <span>06/2026</span>
-    <span>07/2026</span>
-    <span>08/2026</span>
-  </div>
-</div>
-<script>
-(function() {
-  const SEASONS = {
-    "summer": ["05/2026", "06/2026", "07/2026", "08/2026"],
-    "winter": ["11/2025", "12/2025", "01/2026"],
-    "spring": ["02/2026", "03/2026", "04/2026"],
-    "none": [
-      "10/2025", "11/2025", "12/2025",
-      "01/2026", "02/2026", "03/2026",
-      "04/2026", "05/2026", "06/2026",
-      "07/2026", "08/2026", "09/2026"
-    ]
-  };
-
-  let active_season = "summer";
-  let active_choices = SEASONS["summer"];
-
-  function initSlider() {
-    const slider1 = document.getElementById("slider-1");
-    const slider2 = document.getElementById("slider-2");
-    const track = document.getElementById("slider-track-id");
-    const display = document.getElementById("range-val-display");
-
-    if (!slider1 || !slider2 || !track || !display) {
-      setTimeout(initSlider, 100);
-      return;
-    }
-
-    const minGap = 0;
-
-    function updateTrack() {
-      let val1 = parseInt(slider1.value);
-      let val2 = parseInt(slider2.value);
-      let maxVal = active_choices.length - 1;
-      let p1 = maxVal > 0 ? (val1 / maxVal) * 100 : 0;
-      let p2 = maxVal > 0 ? (val2 / maxVal) * 100 : 100;
-      track.style.background = `linear-gradient(to right, #374151 0%, #374151 ${p1}%, #4f46e5 ${p1}%, #4f46e5 ${p2}%, #374151 ${p2}%, #374151 100%)`;
-      display.textContent = `${active_choices[val1]} - ${active_choices[val2]}`;
-    }
-
-    function syncToGradio() {
-      let val1 = parseInt(slider1.value);
-      let val2 = parseInt(slider2.value);
-      let rangeStr = `${active_choices[val1]} - ${active_choices[val2]}`;
-      let fullVal = `${active_season}|${rangeStr}`;
-      const textarea = document.querySelector("#month-range-hidden-input textarea") || document.querySelector("#month-range-hidden-input input");
-      if (textarea && textarea.value !== fullVal) {
-        textarea.value = fullVal;
-        textarea.dispatchEvent(new Event('input', { bubbles: true }));
-      }
-    }
-
-    slider1.oninput = function() {
-      let val1 = parseInt(slider1.value);
-      let val2 = parseInt(slider2.value);
-      if (val2 - val1 < minGap) {
-        slider1.value = val2 - minGap;
-      }
-      updateTrack();
-      syncToGradio();
-    };
-
-    slider2.oninput = function() {
-      let val1 = parseInt(slider1.value);
-      let val2 = parseInt(slider2.value);
-      if (val2 - val1 < minGap) {
-        slider2.value = val1 + minGap;
-      }
-      updateTrack();
-      syncToGradio();
-    };
-
-    // Set up a listener for changes in the hidden textarea (from python side)
-    let lastValue = "";
-    setInterval(function() {
-      const textarea = document.querySelector("#month-range-hidden-input textarea") || document.querySelector("#month-range-hidden-input input");
-      if (textarea && textarea.value !== lastValue) {
-        lastValue = textarea.value;
-        
-        let parts = lastValue.split("|");
-        let new_season = "none";
-        let range_str = lastValue;
-        if (parts.length === 2) {
-          new_season = parts[0].trim();
-          range_str = parts[1].trim();
-        } else {
-          if (lastValue === "05/2026 - 08/2026") new_season = "summer";
-          else if (lastValue === "11/2025 - 01/2026") new_season = "winter";
-          else if (lastValue === "02/2026 - 04/2026") new_season = "spring";
-        }
-
-        active_season = new_season;
-        active_choices = SEASONS[active_season] || SEASONS["none"];
-
-        // Update slider min/max limits
-        let maxIdx = active_choices.length - 1;
-        slider1.max = maxIdx;
-        slider2.max = maxIdx;
-
-        // Rebuild tick marks
-        const ticksContainer = document.querySelector(".slider-ticks");
-        if (ticksContainer) {
-          ticksContainer.innerHTML = "";
-          active_choices.forEach(function(month) {
-            let span = document.createElement("span");
-            if (active_choices.length > 4) {
-              let m_y = month.split("/");
-              span.textContent = `${m_y[0]}/${m_y[1].substring(2)}`;
-            } else {
-              span.textContent = month;
-            }
-            ticksContainer.appendChild(span);
-          });
-        }
-
-        // Parse range to set values
-        let range_parts = range_str.split(" - ");
-        if (range_parts.length === 2) {
-          let idx1 = active_choices.indexOf(range_parts[0].trim());
-          let idx2 = active_choices.indexOf(range_parts[1].trim());
-          if (idx1 !== -1 && idx2 !== -1) {
-            slider1.value = idx1;
-            slider2.value = idx2;
-          } else {
-            slider1.value = 0;
-            slider2.value = maxIdx;
-          }
-        } else {
-          slider1.value = 0;
-          slider2.value = maxIdx;
-        }
-
-        updateTrack();
-      }
-    }, 150);
-
-    // Initial load sync
-    updateTrack();
-  }
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initSlider);
-  } else {
-    initSlider();
-  }
-})();
-</script>
-"""
 
 # ============================================================================
 # Data Loading
@@ -447,7 +267,7 @@ def get_model_info():
 # Tab 1 — Seasonal & Themed Recommendations
 # ============================================================
 
-def tab1_seasonal_recommend(selected_months, selected_theme, selected_region, top_n):
+def tab1_seasonal_recommend(start_month, end_month, selected_theme, selected_region, top_n):
     """Generate recommendations based on predicted volume and PhoBERT aspect scores over multiple months."""
     df_forecast, err = load_forecast_data()
     if err:
@@ -455,13 +275,10 @@ def tab1_seasonal_recommend(selected_months, selected_theme, selected_region, to
     if df_forecast.empty:
         return pd.DataFrame(), None, _warn_html("No forecast data available."), _warn_html("No data.")
 
-    # Convert selected_months (list or string) to a list of YYYYMM integers
+    # Build list of months from start/end dropdowns
+    selected_months = _get_months_from_start_end(start_month, end_month)
     if not selected_months:
         return pd.DataFrame(), None, _warn_html("Please select at least one month."), _warn_html("No month selected.")
-    if isinstance(selected_months, str):
-        selected_months = _get_months_from_range(selected_months)
-    elif not isinstance(selected_months, list):
-        selected_months = [selected_months]
 
     month_ints = [_ym_int(m) for m in selected_months if m]
     if not month_ints:
@@ -1121,24 +938,52 @@ def create_app():
     feat_provinces = _get_feature_provinces()
     feat_years = _get_feature_years()
 
+    SEASON_MONTHS = {
+        "summer": ["05/2026", "06/2026", "07/2026", "08/2026"],
+        "winter": ["11/2025", "12/2025", "01/2026"],
+        "spring": ["02/2026", "03/2026", "04/2026"],
+    }
+
     # ─── Season button toggle callbacks ───
     def toggle_summer(current_season):
         if current_season == "summer":
-            return "none", "10/2025 - 09/2026", gr.Button(variant="secondary"), gr.Button(variant="secondary"), gr.Button(variant="secondary")
+            # Bỏ chọn → reset về all months
+            return ("none",
+                    gr.update(choices=MONTH_CHOICES, value="10/2025"),
+                    gr.update(choices=MONTH_CHOICES, value="09/2026"),
+                    gr.update(variant="secondary"), gr.update(variant="secondary"), gr.update(variant="secondary"))
         else:
-            return "summer", "05/2026 - 08/2026", gr.Button(variant="primary"), gr.Button(variant="secondary"), gr.Button(variant="secondary")
+            months = SEASON_MONTHS["summer"]
+            return ("summer",
+                    gr.update(choices=months, value=months[0]),
+                    gr.update(choices=months, value=months[-1]),
+                    gr.update(variant="primary"), gr.update(variant="secondary"), gr.update(variant="secondary"))
 
     def toggle_winter(current_season):
         if current_season == "winter":
-            return "none", "10/2025 - 09/2026", gr.Button(variant="secondary"), gr.Button(variant="secondary"), gr.Button(variant="secondary")
+            return ("none",
+                    gr.update(choices=MONTH_CHOICES, value="10/2025"),
+                    gr.update(choices=MONTH_CHOICES, value="09/2026"),
+                    gr.update(variant="secondary"), gr.update(variant="secondary"), gr.update(variant="secondary"))
         else:
-            return "winter", "11/2025 - 01/2026", gr.Button(variant="secondary"), gr.Button(variant="primary"), gr.Button(variant="secondary")
+            months = SEASON_MONTHS["winter"]
+            return ("winter",
+                    gr.update(choices=months, value=months[0]),
+                    gr.update(choices=months, value=months[-1]),
+                    gr.update(variant="secondary"), gr.update(variant="primary"), gr.update(variant="secondary"))
 
     def toggle_spring(current_season):
         if current_season == "spring":
-            return "none", "10/2025 - 09/2026", gr.Button(variant="secondary"), gr.Button(variant="secondary"), gr.Button(variant="secondary")
+            return ("none",
+                    gr.update(choices=MONTH_CHOICES, value="10/2025"),
+                    gr.update(choices=MONTH_CHOICES, value="09/2026"),
+                    gr.update(variant="secondary"), gr.update(variant="secondary"), gr.update(variant="secondary"))
         else:
-            return "spring", "02/2026 - 04/2026", gr.Button(variant="secondary"), gr.Button(variant="secondary"), gr.Button(variant="primary")
+            months = SEASON_MONTHS["spring"]
+            return ("spring",
+                    gr.update(choices=months, value=months[0]),
+                    gr.update(choices=months, value=months[-1]),
+                    gr.update(variant="secondary"), gr.update(variant="secondary"), gr.update(variant="primary"))
 
     # High-fidelity Slate-Dark Theme CSS
     css = """
@@ -1289,121 +1134,8 @@ def create_app():
     .dataframe td {
         border-bottom: 1px solid #1f2937 !important;
     }
-    
-    /* Custom Range Slider Styles */
-    .double-slider-wrapper {
-        background: #111827;
-        border: 1px solid #1f2937;
-        border-radius: 12px;
-        padding: 16px;
-        margin-top: 10px;
-        margin-bottom: 20px;
-    }
-    .slider-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 12px;
-    }
-    .slider-title-label {
-        font-size: 0.9em;
-        font-weight: 600;
-        color: #94a3b8;
-    }
-    .slider-range-val {
-        font-size: 1.05em;
-        font-weight: 700;
-        color: #38bdf8;
-        background: rgba(56, 189, 248, 0.1);
-        padding: 2px 8px;
-        border-radius: 6px;
-        border: 1px solid rgba(56, 189, 248, 0.2);
-    }
-    .range-slider-container {
-        position: relative;
-        width: 100%;
-        height: 20px;
-        margin-top: 10px;
-    }
-    .range-slider-container input[type="range"] {
-        -webkit-appearance: none;
-        -moz-appearance: none;
-        appearance: none;
-        width: 100%;
-        outline: none;
-        position: absolute;
-        margin: auto;
-        top: 0;
-        bottom: 0;
-        background: transparent;
-        pointer-events: none;
-    }
-    .slider-track {
-        width: 100%;
-        height: 6px;
-        position: absolute;
-        margin: auto;
-        top: 0;
-        bottom: 0;
-        border-radius: 3px;
-        background: #374151;
-    }
-    .range-slider-container input[type="range"]::-webkit-slider-runnable-track {
-        -webkit-appearance: none;
-        height: 6px;
-    }
-    .range-slider-container input[type="range"]::-moz-range-track {
-        -moz-appearance: none;
-        height: 6px;
-    }
-    .range-slider-container input[type="range"]::-webkit-slider-thumb {
-        -webkit-appearance: none;
-        height: 18px;
-        width: 18px;
-        border-radius: 50%;
-        background-color: #6366f1;
-        cursor: pointer;
-        margin-top: -6px;
-        pointer-events: auto;
-        box-shadow: 0 0 10px rgba(99, 102, 241, 0.8);
-        transition: transform 0.1s, background-color 0.1s;
-    }
-    .range-slider-container input[type="range"]::-webkit-slider-thumb:hover {
-        transform: scale(1.2);
-        background-color: #818cf8;
-    }
-    .range-slider-container input[type="range"]::-moz-range-thumb {
-        -moz-appearance: none;
-        height: 18px;
-        width: 18px;
-        border-radius: 50%;
-        background-color: #6366f1;
-        cursor: pointer;
-        pointer-events: auto;
-        border: none;
-        box-shadow: 0 0 10px rgba(99, 102, 241, 0.8);
-        transition: transform 0.1s, background-color 0.1s;
-    }
-    .range-slider-container input[type="range"]::-moz-range-thumb:hover {
-        transform: scale(1.2);
-        background-color: #818cf8;
-    }
-    .slider-ticks {
-        display: flex;
-        justify-content: space-between;
-        margin-top: 12px;
-        color: #64748b;
-        font-size: 0.72em;
-        font-weight: 500;
-    }
-    .slider-ticks span {
-        width: 32px;
-        text-align: center;
-    }
-    #month-range-hidden-input {
-        display: none !important;
-    }
     """
+
 
     with gr.Blocks(title="🏖️ LSTM Tourism Forecast — Vietnam", theme=gr.themes.Soft(), css=css, js="() => document.documentElement.classList.add('dark')") as app:
         # Force dark mode immediately using JS inside layout
@@ -1443,14 +1175,17 @@ def create_app():
                                 winter_btn = gr.Button("❄️ Winter", variant="secondary", size="sm")
                                 spring_btn = gr.Button("🌸 Spring", variant="secondary", size="sm")
 
-                            month_range_input = gr.Textbox(
-                                value="summer|05/2026 - 08/2026",
-                                label="Hidden Month Range",
-                                elem_id="month-range-hidden-input",
-                                visible=True
-                            )
-                            
-                            slider_html = gr.HTML(value=create_slider_html())
+                            # ── Hai dropdown Start/End Month ──
+                            _SUMMER_MONTHS = ["05/2026", "06/2026", "07/2026", "08/2026"]
+                            with gr.Row():
+                                t1_start_m = gr.Dropdown(
+                                    _SUMMER_MONTHS, value="05/2026",
+                                    label="Start Month"
+                                )
+                                t1_end_m = gr.Dropdown(
+                                    _SUMMER_MONTHS, value="08/2026",
+                                    label="End Month"
+                                )
                             
                             theme_dd = gr.Dropdown(
                                 choices=[
@@ -1494,50 +1229,31 @@ def create_app():
                                     interactive=False
                                 )
 
-                # Season selection button clicks
+                # Season preset buttons → update 2 dropdowns
                 summer_btn.click(
                     toggle_summer,
                     inputs=[selected_season],
-                    outputs=[selected_season, month_range_input, summer_btn, winter_btn, spring_btn]
+                    outputs=[selected_season, t1_start_m, t1_end_m, summer_btn, winter_btn, spring_btn]
                 )
                 winter_btn.click(
                     toggle_winter,
                     inputs=[selected_season],
-                    outputs=[selected_season, month_range_input, summer_btn, winter_btn, spring_btn]
+                    outputs=[selected_season, t1_start_m, t1_end_m, summer_btn, winter_btn, spring_btn]
                 )
                 spring_btn.click(
                     toggle_spring,
                     inputs=[selected_season],
-                    outputs=[selected_season, month_range_input, summer_btn, winter_btn, spring_btn]
+                    outputs=[selected_season, t1_start_m, t1_end_m, summer_btn, winter_btn, spring_btn]
                 )
 
-                # Reactive auto-update on filter changes
-                month_range_input.change(
-                    tab1_seasonal_recommend,
-                    inputs=[month_range_input, theme_dd, region_dd, top_n_dd],
-                    outputs=[table_rec, chart_rec, cards_html, info_rec]
-                )
-                theme_dd.change(
-                    tab1_seasonal_recommend,
-                    inputs=[month_range_input, theme_dd, region_dd, top_n_dd],
-                    outputs=[table_rec, chart_rec, cards_html, info_rec]
-                )
-                region_dd.change(
-                    tab1_seasonal_recommend,
-                    inputs=[month_range_input, theme_dd, region_dd, top_n_dd],
-                    outputs=[table_rec, chart_rec, cards_html, info_rec]
-                )
-                top_n_dd.change(
-                    tab1_seasonal_recommend,
-                    inputs=[month_range_input, theme_dd, region_dd, top_n_dd],
-                    outputs=[table_rec, chart_rec, cards_html, info_rec]
-                )
-
+                # Nút Lọc chính
                 recommend_btn.click(
                     tab1_seasonal_recommend,
-                    inputs=[month_range_input, theme_dd, region_dd, top_n_dd],
+                    inputs=[t1_start_m, t1_end_m, theme_dd, region_dd, top_n_dd],
                     outputs=[table_rec, chart_rec, cards_html, info_rec]
                 )
+
+
 
             # ══════════════════════════════════════════════
             # TAB 2: TOP PROVINCES (ORIGINAL FORECAST)
@@ -1702,9 +1418,10 @@ def create_app():
         # Load default recommendations on startup
         app.load(
             tab1_seasonal_recommend,
-            inputs=[month_range_input, theme_dd, region_dd, top_n_dd],
+            inputs=[t1_start_m, t1_end_m, theme_dd, region_dd, top_n_dd],
             outputs=[table_rec, chart_rec, cards_html, info_rec]
         )
+
 
     return app
 
