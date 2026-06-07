@@ -37,7 +37,12 @@ RUN pip install --no-cache-dir \
     pandas \
     pyarrow \
     underthesea \
-    emoji
+    emoji \
+    mlflow==2.17.2 \
+    torch \
+    transformers \
+    boto3 \
+    scikit-learn
 
 # Install MinIO client for UTF-8 file uploads
 RUN wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O /usr/local/bin/mc && \
