@@ -270,9 +270,18 @@ with DAG(
                 resource_level=GOLD_JOBS['fact_comment_nlp_engagement']['resource_level']
             )
         )
+
+        # fact_comment_nlp_v2 (PhoBERT Inference)
+        fact_comment_nlp_v2 = BashOperator(
+            task_id='fact_comment_nlp_v2',
+            bash_command=build_spark_command(
+                GOLD_JOBS['fact_comment_nlp_v2']['job_path'],
+                resource_level=GOLD_JOBS['fact_comment_nlp_v2']['resource_level']
+            )
+        )
         
-        # Sequential: content → hotel → comment_nlp (avoid resource exhaustion)
-        fact_content >> fact_hotel >> fact_comment_nlp
+        # Sequential: content → hotel → comment_nlp → comment_nlp_v2 (avoid resource exhaustion)
+        fact_content >> fact_hotel >> fact_comment_nlp >> fact_comment_nlp_v2
     
     # Phase 3 complete barrier
     wait_phase3 = EmptyOperator(
@@ -300,8 +309,8 @@ with DAG(
     # ============================================
     
     trigger_ml_training = TriggerDagRunOperator(
-        task_id='trigger_ml_lstm_training',
-        trigger_dag_id='ml_lstm_training_dag',
+        task_id='trigger_dl_lstm_training',
+        trigger_dag_id='dl_lstm_training_dag',
         wait_for_completion=False,
     )
     

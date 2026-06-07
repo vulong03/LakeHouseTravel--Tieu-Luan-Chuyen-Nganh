@@ -1,6 +1,6 @@
 """
-ML Layer DAG Configuration
-Decoupled from Gold ETL DAG, manages ML model training pipelines.
+DL Layer DAG Configuration
+Manages DL model training pipelines and decoupled LSTM training.
 """
 
 from datetime import datetime, timedelta
@@ -9,15 +9,19 @@ from datetime import datetime, timedelta
 # DAG METADATA
 # ============================================
 
-DAG_ID = 'ml_lstm_training_dag'
-DESCRIPTION = 'ML Pipeline: Train LSTM model to forecast province hotel review volume'
-TAGS = ['ml', 'training', 'lstm', 'forecasting']
+DAG_ID_PHOBERT_PIPELINE = 'dl_phobert_training_pipeline'
+DESCRIPTION_PHOBERT_PIPELINE = 'PhoBERT Training Pipeline: Weak Labeling -> Train PhoBERT -> PhoBERT Inference'
+TAGS_PHOBERT_PIPELINE = ['dl', 'training', 'phobert', 'pipeline']
+
+DAG_ID_LSTM = 'dl_lstm_training_dag'
+DESCRIPTION_LSTM = 'DL Pipeline: Train LSTM model to forecast province hotel review volume'
+TAGS_LSTM = ['dl', 'training', 'lstm', 'forecasting']
 
 # ============================================
 # SCHEDULE
 # ============================================
 
-SCHEDULE_INTERVAL = None  # Manual trigger or triggered by gold_layer_aggregation DAG
+SCHEDULE_INTERVAL = None  # Manual trigger only
 START_DATE = datetime(2025, 1, 1)
 CATCHUP = False
 
@@ -26,13 +30,13 @@ CATCHUP = False
 # ============================================
 
 DEFAULT_ARGS = {
-    'owner': 'mlops-engineering',
+    'owner': 'dlops-engineering',
     'depends_on_past': False,
     'email_on_failure': False,
     'email_on_retry': False,
     'retries': 1,
     'retry_delay': timedelta(minutes=5),
-    'execution_timeout': timedelta(hours=2),
+    'execution_timeout': timedelta(hours=3),
 }
 
 # Required containers for health check
@@ -45,10 +49,25 @@ REQUIRED_CONTAINERS = [
 ]
 
 # ============================================
-# ML JOBS CONFIGURATION
+# DL JOBS CONFIGURATION
 # ============================================
 
-ML_JOBS = {
+DL_JOBS = {
+    'weak_labeling': {
+        'job_path': '/opt/spark/jobs/dl/nlp/weak_labeling.py',
+        'resource_level': 'heavy',
+        'description': 'Apply rule-based signals to weakly label TikTok comments'
+    },
+    'train_phobert': {
+        'job_path': '/opt/spark/jobs/dl/nlp/train_phobert.py',
+        'resource_level': 'heavy',
+        'description': 'Fine-tune multi-task PhoBERT on weakly labeled comments'
+    },
+    'inference_phobert': {
+        'job_path': '/opt/spark/jobs/dl/nlp/inference_phobert.py',
+        'resource_level': 'heavy',
+        'description': 'Run PhoBERT inference on all comments and save to Iceberg'
+    },
     'train_lstm_forecast': {
         'job_path': '/opt/spark/jobs/dl/train_lstm_forecast.py',
         'resource_level': 'heavy',

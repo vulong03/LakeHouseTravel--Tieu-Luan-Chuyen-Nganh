@@ -185,6 +185,14 @@ GOLD_JOBS = {
         'depends_on': ['dim_comment', 'dim_post', 'fact_hotel_review'],  # Sequential: run last to avoid resource conflict
         'description': 'ML feature engineering: comment NLP + engagement metrics'
     },
+
+    'fact_comment_nlp_v2': {
+        'job_path': '../dl/nlp/inference_phobert.py',
+        'phase': 3,
+        'resource_level': 'heavy',  # PhoBERT inference is CPU/GPU intensive
+        'depends_on': ['dim_comment', 'dim_post', 'fact_hotel_review', 'fact_comment_nlp_engagement'],
+        'description': 'DL feature engineering: comment NLP v2 (PhoBERT) features'
+    },
     
     # ===================================
     # PHASE 3b: DL Feature Aggregation (After all 3 facts)
@@ -194,7 +202,7 @@ GOLD_JOBS = {
         'job_path': 'fact_dl_features/fact_dl_features_job.py',
         'phase': 3,
         'resource_level': 'heavy',
-        'depends_on': ['fact_province_content_engagement', 'fact_comment_nlp_engagement', 'fact_hotel_review'],
+        'depends_on': ['fact_province_content_engagement', 'fact_comment_nlp_engagement', 'fact_comment_nlp_v2', 'fact_hotel_review'],
         'description': 'Aggregate 3 fact tables into ~40 ML-optimized features at province-month grain'
     },
 }
