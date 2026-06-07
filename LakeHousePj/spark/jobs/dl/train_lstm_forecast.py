@@ -797,7 +797,7 @@ def forecast_12_months(spark, model, scaler, df_pd, device):
     forecast_df.write.format("iceberg").mode("overwrite") \
         .save("gold.gold.province_month_forecast_lstm_next12")
 
-    export_path = f"s3a://gold/ml_forecast/province_hotel_volume_forecast_lstm_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    export_path = f"s3a://gold/dl_forecast/province_hotel_volume_forecast_lstm_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     forecast_df.coalesce(1).write.mode("overwrite").parquet(export_path)
     print(f"  Exported: {export_path}")
 

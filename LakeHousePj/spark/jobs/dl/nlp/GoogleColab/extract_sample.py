@@ -20,7 +20,7 @@ def main():
 
     try:
         # 1. Đọc dữ liệu từ MinIO
-        df = spark.read.parquet("s3a://gold/ml_training/nlp_weak_labeled.parquet")
+        df = spark.read.parquet("s3a://gold/dl_training/nlp_weak_labeled.parquet")
         pdf = df.toPandas()
         print(f"  Loaded {len(pdf):,} raw samples from MinIO")
 

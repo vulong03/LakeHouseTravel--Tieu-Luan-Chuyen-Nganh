@@ -39,8 +39,8 @@ MINIO_CLIENT = Minio(
     secure=False
 )
 BUCKET_NAME = "gold"
-FORECAST_PREFIX = "ml_forecast/"
-FEATURES_PREFIX = "ml_training/"          # dl_features.parquet (for traveler type & nlp avg)
+FORECAST_PREFIX = "dl_forecast/"
+FEATURES_PREFIX = "dl_training/"          # dl_features.parquet (for traveler type & nlp avg)
 LSTM_FILE_PATTERN = "province_hotel_volume_forecast_lstm_"
 
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")

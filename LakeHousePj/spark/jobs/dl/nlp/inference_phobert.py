@@ -176,8 +176,8 @@ def create_inference_udf():
         _os.environ['MLFLOW_S3_ENDPOINT_URL'] = 'http://minio:9000'
 
         import sys as _sys
-        if '/opt/spark/jobs/ml/nlp' not in _sys.path:
-            _sys.path.append('/opt/spark/jobs/ml/nlp')
+        if '/opt/spark/jobs/dl/nlp' not in _sys.path:
+            _sys.path.append('/opt/spark/jobs/dl/nlp')
 
         import torch as _torch
         import re as _re

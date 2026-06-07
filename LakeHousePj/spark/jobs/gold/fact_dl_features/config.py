@@ -28,7 +28,7 @@ GOLD_DATABASE = "gold"
 GOLD_TABLE = "fact_province_month_dl_features"
 GOLD_TABLE_FULL = f"{GOLD_CATALOG}.{GOLD_DATABASE}.{GOLD_TABLE}"
 
-PARQUET_EXPORT_PATH = "s3a://gold/ml_training/dl_features.parquet"
+PARQUET_EXPORT_PATH = "s3a://gold/dl_training/dl_features.parquet"
 
 # ============================================================
 # Description

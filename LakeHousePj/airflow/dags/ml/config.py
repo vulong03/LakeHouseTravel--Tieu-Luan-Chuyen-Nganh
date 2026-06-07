@@ -50,7 +50,7 @@ REQUIRED_CONTAINERS = [
 
 ML_JOBS = {
     'train_lstm_forecast': {
-        'job_path': '/opt/spark/jobs/ml/train_lstm_forecast.py',
+        'job_path': '/opt/spark/jobs/dl/train_lstm_forecast.py',
         'resource_level': 'heavy',
         'description': 'Train LSTM model on Gold features to forecast hotel review volume'
     }

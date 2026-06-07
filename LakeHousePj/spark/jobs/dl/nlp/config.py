@@ -12,7 +12,7 @@ SILVER_COMMENTS_TABLE = "silver.silver.tiktok_post_comments"
 # ============================================================
 # Weak Labeling Output
 # ============================================================
-LABELED_PARQUET_PATH = "s3a://gold/ml_training/nlp_weak_labeled.parquet"
+LABELED_PARQUET_PATH = "s3a://gold/dl_training/nlp_weak_labeled.parquet"
 
 # ============================================================
 # PhoBERT Model

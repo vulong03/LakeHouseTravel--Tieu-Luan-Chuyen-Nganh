@@ -8,7 +8,7 @@ writes it to Iceberg, and registers success in the gold job logger.
 
 import sys
 sys.path.append('/opt/spark/jobs')
-sys.path.append('/opt/spark/jobs/ml/nlp')
+sys.path.append('/opt/spark/jobs/dl/nlp')
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F

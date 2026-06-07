@@ -505,3 +505,41 @@ services:
       - hive-metastore
       - minio
     restart: unless-stopped
+     # ============================================
+  # Apache Superset - Data Visualization
+  # ============================================
+  # Apache Superset - Data Visualization
+  # ============================================
+  superset:
+    build:
+      context: ./superset
+      dockerfile: Dockerfile
+    container_name: lakehouse_superset
+    hostname: superset
+    networks:
+      - lakehouse_network
+    ports:
+      - "8088:8088"  # Superset UI
+    environment:
+      SUPERSET_SECRET_KEY: "lakehouse-superset-secret-key-change-in-prod"
+      SUPERSET_CONFIG_PATH: "/app/superset_config.py"
+      FLASK_APP: "superset.app:create_app"
+      PYTHONPATH: "/app"
+      SUPERSET_SQLALCHEMY_DATABASE_URI: postgresql://lakehouse_user:lakehouse_pass@postgres:5432/superset_db
+    volumes:
+      - ./superset/superset_config.py:/app/superset_config.py
+      - ./superset/entrypoint.sh:/app/entrypoint.sh
+    depends_on:
+      postgres:
+        condition: service_healthy
+      hive-metastore:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
