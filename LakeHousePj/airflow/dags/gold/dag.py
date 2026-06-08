@@ -313,6 +313,12 @@ with DAG(
         trigger_dag_id='dl_lstm_training_dag',
         wait_for_completion=False,
     )
+
+    trigger_gru_training = TriggerDagRunOperator(
+        task_id='trigger_dl_gru_training',
+        trigger_dag_id='dl_gru_training_dag',
+        wait_for_completion=False,
+    )
     
     # ============================================
     # Completion Task
@@ -344,8 +350,8 @@ with DAG(
     # Phase 3b: DL Feature aggregation (after all 3 fact tables)
     wait_phase3 >> fact_dl_features >> wait_dl_features
     
-    # Phase 4: Trigger ML training DAG
-    wait_dl_features >> trigger_ml_training
+    # Phase 4: Trigger ML training DAGs (run LSTM and GRU in parallel)
+    wait_dl_features >> [trigger_ml_training, trigger_gru_training]
     
     # Complete
-    trigger_ml_training >> complete
+    [trigger_ml_training, trigger_gru_training] >> complete

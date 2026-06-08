@@ -17,6 +17,10 @@ DAG_ID_LSTM = 'dl_lstm_training_dag'
 DESCRIPTION_LSTM = 'DL Pipeline: Train LSTM model to forecast province hotel review volume'
 TAGS_LSTM = ['dl', 'training', 'lstm', 'forecasting']
 
+DAG_ID_GRU = 'dl_gru_training_dag'
+DESCRIPTION_GRU = 'DL Pipeline: Train GRU model to forecast province hotel review volume'
+TAGS_GRU = ['dl', 'training', 'gru', 'forecasting']
+
 # ============================================
 # SCHEDULE
 # ============================================
@@ -72,6 +76,11 @@ DL_JOBS = {
         'job_path': '/opt/spark/jobs/dl/train_lstm_forecast.py',
         'resource_level': 'heavy',
         'description': 'Train LSTM model on Gold features to forecast hotel review volume'
+    },
+    'train_gru_forecast': {
+        'job_path': '/opt/spark/jobs/dl/train_gru_forecast.py',
+        'resource_level': 'heavy',
+        'description': 'Train GRU model on Gold features to forecast hotel review volume'
     }
 }
 

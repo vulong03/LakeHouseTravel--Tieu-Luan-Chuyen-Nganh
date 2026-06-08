@@ -17,8 +17,9 @@ from common.spark_operators import SparkSubmitCommand
 from common.health_checks import check_docker_health
 from common.notifications import log_dag_start, log_dag_complete
 from dl.config import (
-    DAG_ID_PHOBERT_PIPELINE, DAG_ID_LSTM, DESCRIPTION_PHOBERT_PIPELINE, DESCRIPTION_LSTM,
-    TAGS_PHOBERT_PIPELINE, TAGS_LSTM, SCHEDULE_INTERVAL,
+    DAG_ID_PHOBERT_PIPELINE, DAG_ID_LSTM, DAG_ID_GRU,
+    DESCRIPTION_PHOBERT_PIPELINE, DESCRIPTION_LSTM, DESCRIPTION_GRU,
+    TAGS_PHOBERT_PIPELINE, TAGS_LSTM, TAGS_GRU, SCHEDULE_INTERVAL,
     START_DATE, CATCHUP, DEFAULT_ARGS, DL_JOBS,
     RESOURCE_PRESETS
 )
@@ -159,3 +160,50 @@ with DAG(
     
     # LSTM only dependency flow
     health_check_lstm >> start_lstm >> train_lstm_model >> complete_lstm
+
+
+# ============================================
+# DAG 3: Decoupled GRU Training Only
+# ============================================
+
+with DAG(
+    dag_id=DAG_ID_GRU,
+    default_args=DEFAULT_ARGS,
+    description=DESCRIPTION_GRU,
+    schedule_interval=SCHEDULE_INTERVAL,
+    start_date=START_DATE,
+    catchup=CATCHUP,
+    tags=TAGS_GRU,
+) as dag_gru:
+    
+    # Pre-flight
+    health_check_gru = ShortCircuitOperator(
+        task_id='check_docker_health',
+        python_callable=check_docker_health,
+        provide_context=True
+    )
+    
+    start_gru = PythonOperator(
+        task_id='start_dag',
+        python_callable=log_dag_start,
+        provide_context=True
+    )
+    
+    # Train GRU Model (Only)
+    train_gru_model = BashOperator(
+        task_id='train_gru_forecast',
+        bash_command=build_spark_command(
+            DL_JOBS['train_gru_forecast']['job_path'],
+            resource_level=DL_JOBS['train_gru_forecast']['resource_level']
+        )
+    )
+    
+    # Completion
+    complete_gru = PythonOperator(
+        task_id='complete_dag',
+        python_callable=log_dag_complete,
+        provide_context=True
+    )
+    
+    # GRU only dependency flow
+    health_check_gru >> start_gru >> train_gru_model >> complete_gru

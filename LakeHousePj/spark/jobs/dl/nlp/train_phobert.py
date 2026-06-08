@@ -20,7 +20,13 @@ Output: Fine-tuned PhoBERT model registered in MLflow
 
 import sys
 import os
+
+# Set Hugging Face cache directories to a writable location
+os.environ['HF_HOME'] = '/tmp/huggingface'
+os.environ['TRANSFORMERS_CACHE'] = '/tmp/huggingface'
+
 sys.path.append('/opt/spark/jobs')
+
 
 import numpy as np
 import pandas as pd
