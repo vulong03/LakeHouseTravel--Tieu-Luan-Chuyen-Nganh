@@ -15,7 +15,14 @@ Output columns per comment:
 """
 
 import sys
+import os
+
+# Set Hugging Face cache directories to a writable location
+os.environ['HF_HOME'] = '/tmp/huggingface'
+os.environ['TRANSFORMERS_CACHE'] = '/tmp/huggingface'
+
 sys.path.append('/opt/spark/jobs')
+
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
