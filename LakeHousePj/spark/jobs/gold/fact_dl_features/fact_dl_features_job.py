@@ -261,9 +261,15 @@ def aggregate_nlp_comments(spark: SparkSession) -> DataFrame:
 
             F.avg("word_count").alias("avg_word_count"),
             F.stddev(F.col("word_count").cast("double")).alias("word_count_std"),
-            F.lit(0.0).alias("avg_unique_word_ratio"),
+            F.avg("unique_word_ratio").alias("avg_unique_word_ratio"),
 
-            F.lit(0.0).alias("emoji_sentiment_ratio"),
+            F.avg(
+                F.when(
+                    F.col("emoji_count") > 0,
+                    (F.col("positive_emoji_count") - F.col("negative_emoji_count"))
+                    / F.col("emoji_count")
+                ).otherwise(0)
+            ).alias("emoji_sentiment_ratio"),
 
             (F.sum(F.when(F.col("comment_level") == 2, 1).otherwise(0))
              / total_col).alias("reply_ratio"),

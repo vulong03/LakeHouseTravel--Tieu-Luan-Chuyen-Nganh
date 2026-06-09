@@ -34,10 +34,28 @@ import emoji as emoji_lib
 PHOBERT_MODEL_NAME = "vinai/phobert-base-v2"
 MAX_SEQ_LENGTH = 128
 BATCH_SIZE = 128  # High batch size for fast GPU inference
+ASPECT_THRESHOLD = 0.5
 
 SENTIMENT_LABELS = ["negative", "neutral", "positive"]
 ASPECT_LABELS = ["scenery", "food", "price", "service", "transport", "accommodation"]
 INTENT_LABELS = ["recommend", "complain", "question", "share"]
+
+# Emoji sets for sentiment evaluation (Vietnam tourism comments context)
+POSITIVE_EMOJIS = {
+    '😍','❤️','💕','🥰','😘','😊','😃','😄','🤩','😎','🙂','😇','😁','😌','🤗','☺️',
+    '👍','👏','🙌','💪','🔥','✨','🌟','⭐','💯','🎉','🥳','🤝','👌','🫶','💖','💗','💘',
+    '😂','🤣','😹','🥹','😺','😆','😝','😜','🤪',
+    '🏖️','🌊','🏝️','🌅','🌄','🗻','🏔️','🌈','🍃','🌸','🌺','🌼','🌻','💐','🌷',
+    '🤍','💙','💚','💛','🩵','🩷','💫',
+}
+
+NEGATIVE_EMOJIS = {
+    '😢','😭','😞','😔','😟','😕','🙁','☹️','😣','😖','😫','😩','🥺',
+    '😡','😠','🤬','😤','💢','👿','😾',
+    '🤮','😷','🤢','🤧','🥵','🥶',
+    '💔','👎','🙅','😒','😑','😐','🫤',
+    '😨','😰','😱','😳','😵',
+}
 
 # ============================================================
 # Model Class
@@ -134,9 +152,40 @@ def main():
     print(f"\n[3/4] Pre-processing comments and extracting basic stats...")
     texts_list = df['comment_text'].tolist()
     
-    print("  Calculating word counts and emoji counts...")
-    word_counts = [len(str(t).split()) if t else 0 for t in texts_list]
-    emoji_counts = [sum(1 for c in str(t) if c in emoji_lib.EMOJI_DATA) if t else 0 for t in texts_list]
+    print("  Calculating word counts, emoji counts, and unique word ratios...")
+    word_counts = []
+    unique_word_ratios = []
+    emoji_counts = []
+    positive_emoji_counts = []
+    negative_emoji_counts = []
+    
+    for t in texts_list:
+        if not t or pd.isna(t):
+            word_counts.append(0)
+            unique_word_ratios.append(0.0)
+            emoji_counts.append(0)
+            positive_emoji_counts.append(0)
+            negative_emoji_counts.append(0)
+            continue
+        
+        text_str = str(t)
+        text_lower = text_str.lower()
+        words = text_lower.split()
+        wc = len(words)
+        unique_wc = len(set(words))
+        ratio = float(unique_wc) / wc if wc > 0 else 0.0
+        
+        # Extract emoji counts
+        emojis = [c for c in text_str if c in emoji_lib.EMOJI_DATA]
+        ec = len(emojis)
+        pos_ec = sum(1 for e in emojis if e in POSITIVE_EMOJIS)
+        neg_ec = sum(1 for e in emojis if e in NEGATIVE_EMOJIS)
+        
+        word_counts.append(wc)
+        unique_word_ratios.append(round(ratio, 4))
+        emoji_counts.append(ec)
+        positive_emoji_counts.append(pos_ec)
+        negative_emoji_counts.append(neg_ec)
     
     print("  Cleaning texts...")
     cleaned_texts = [clean_text(t) for t in texts_list]
@@ -189,15 +238,29 @@ def main():
                 ip = intent_probs[j]
                 intent_idx = int(ip.argmax())
                 
+                aspect_labels = [
+                    ASPECT_LABELS[k]
+                    for k, v in enumerate(ap)
+                    if v >= ASPECT_THRESHOLD
+                ]
+
                 res = {
-                    "sentiment_score": round(float(sp[0]*0.0 + sp[1]*0.5 + sp[2]*1.0), 4),
+                    # FIX ISSUE-08: Use bipolar formula for intuitive sentiment score
+                    "sentiment_score": round(float((sp[2] - sp[0] + 1) / 2), 4),
                     "sentiment_label": SENTIMENT_LABELS[int(sp.argmax())],
+                    "sentiment_confidence": round(float(sp.max()), 4),
+                    "sentiment_negative_prob": round(float(sp[0]), 4),
+                    "sentiment_neutral_prob": round(float(sp[1]), 4),
+                    "sentiment_positive_prob": round(float(sp[2]), 4),
+
                     "aspect_scenery":       round(float(ap[0]), 4),
                     "aspect_food":          round(float(ap[1]), 4),
                     "aspect_price":         round(float(ap[2]), 4),
                     "aspect_service":       round(float(ap[3]), 4),
                     "aspect_transport":     round(float(ap[4]), 4),
                     "aspect_accommodation": round(float(ap[5]), 4),
+                    "aspect_labels": ",".join(aspect_labels),
+
                     "intent_label":      INTENT_LABELS[intent_idx],
                     "intent_confidence": round(float(ip[intent_idx]), 4),
                 }
@@ -220,9 +283,12 @@ def main():
     print("\nAssembling final DataFrame...")
     results_df = pd.DataFrame(results)
     
-    # Add pre-computed counts
+    # Add pre-computed counts and ratios
     results_df["word_count"] = word_counts
+    results_df["unique_word_ratio"] = unique_word_ratios
     results_df["emoji_count"] = emoji_counts
+    results_df["positive_emoji_count"] = positive_emoji_counts
+    results_df["negative_emoji_count"] = negative_emoji_counts
 
     # Join results with original keys
     df_out = pd.concat([df.reset_index(drop=True), results_df], axis=1)

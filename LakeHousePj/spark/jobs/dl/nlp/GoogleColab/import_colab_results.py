@@ -55,6 +55,10 @@ def create_nlp_v2_table(spark):
         # Sentiment (continuous)
         StructField("sentiment_score", DoubleType(), True),
         StructField("sentiment_label", StringType(), True),
+        StructField("sentiment_confidence", DoubleType(), True),
+        StructField("sentiment_negative_prob", DoubleType(), True),
+        StructField("sentiment_neutral_prob", DoubleType(), True),
+        StructField("sentiment_positive_prob", DoubleType(), True),
 
         # Aspects (multi-label probabilities)
         StructField("aspect_scenery", DoubleType(), True),
@@ -63,6 +67,7 @@ def create_nlp_v2_table(spark):
         StructField("aspect_service", DoubleType(), True),
         StructField("aspect_transport", DoubleType(), True),
         StructField("aspect_accommodation", DoubleType(), True),
+        StructField("aspect_labels", StringType(), True),
 
         # Intent
         StructField("intent_label", StringType(), True),
@@ -70,7 +75,10 @@ def create_nlp_v2_table(spark):
 
         # Basic text stats (kept from v1)
         StructField("word_count", IntegerType(), True),
+        StructField("unique_word_ratio", DoubleType(), True),
         StructField("emoji_count", IntegerType(), True),
+        StructField("positive_emoji_count", LongType(), True),
+        StructField("negative_emoji_count", LongType(), True),
         StructField("comment_likes", LongType(), True),
         StructField("comment_level", IntegerType(), True),
 
@@ -88,6 +96,35 @@ def create_nlp_v2_table(spark):
         },
         catalog=GOLD_CATALOG,
     )
+
+    # Check if new columns exist, and if not, add them via ALTER TABLE
+    try:
+        if spark.catalog.tableExists(GOLD_TABLE_FULL):
+            existing_cols = [c.name for c in spark.catalog.listColumns(GOLD_TABLE_FULL)]
+            new_cols = []
+            if "sentiment_confidence" not in existing_cols:
+                new_cols.append("sentiment_confidence DOUBLE")
+            if "sentiment_negative_prob" not in existing_cols:
+                new_cols.append("sentiment_negative_prob DOUBLE")
+            if "sentiment_neutral_prob" not in existing_cols:
+                new_cols.append("sentiment_neutral_prob DOUBLE")
+            if "sentiment_positive_prob" not in existing_cols:
+                new_cols.append("sentiment_positive_prob DOUBLE")
+            if "aspect_labels" not in existing_cols:
+                new_cols.append("aspect_labels STRING")
+            if "unique_word_ratio" not in existing_cols:
+                new_cols.append("unique_word_ratio DOUBLE")
+            if "positive_emoji_count" not in existing_cols:
+                new_cols.append("positive_emoji_count BIGINT")
+            if "negative_emoji_count" not in existing_cols:
+                new_cols.append("negative_emoji_count BIGINT")
+            
+            if new_cols:
+                print(f"   Adding new columns to existing Iceberg table: {new_cols}")
+                for col_def in new_cols:
+                    spark.sql(f"ALTER TABLE {GOLD_TABLE_FULL} ADD COLUMN {col_def}")
+    except Exception as e:
+        print(f"⚠️ Warning checking/altering table: {e}")
 
 
 def main():
@@ -113,16 +150,24 @@ def main():
             F.col("comment_date_sk").cast("int"),
             F.col("sentiment_score").cast("double"),
             F.col("sentiment_label").cast("string"),
+            F.col("sentiment_confidence").cast("double"),
+            F.col("sentiment_negative_prob").cast("double"),
+            F.col("sentiment_neutral_prob").cast("double"),
+            F.col("sentiment_positive_prob").cast("double"),
             F.col("aspect_scenery").cast("double"),
             F.col("aspect_food").cast("double"),
             F.col("aspect_price").cast("double"),
             F.col("aspect_service").cast("double"),
             F.col("aspect_transport").cast("double"),
             F.col("aspect_accommodation").cast("double"),
+            F.col("aspect_labels").cast("string"),
             F.col("intent_label").cast("string"),
             F.col("intent_confidence").cast("double"),
             F.col("word_count").cast("int"),
+            F.col("unique_word_ratio").cast("double"),
             F.col("emoji_count").cast("int"),
+            F.col("positive_emoji_count").cast("long"),
+            F.col("negative_emoji_count").cast("long"),
             F.coalesce(F.col("comment_likes"), F.lit(0)).cast("long").alias("comment_likes"),
             F.col("comment_level").cast("int"),
             F.current_timestamp().alias("created_at"),
@@ -131,6 +176,10 @@ def main():
 
         # Ensure the table is created
         create_nlp_v2_table(spark)
+
+        # Align column order with the existing Iceberg table to avoid position incompatibility
+        table_cols = spark.table(GOLD_TABLE_FULL).columns
+        df_final = df_final.select(*table_cols)
 
         # 3. Write to Iceberg
         print(f"\n[3/3] Overwriting Iceberg Table: {GOLD_TABLE_FULL}...")

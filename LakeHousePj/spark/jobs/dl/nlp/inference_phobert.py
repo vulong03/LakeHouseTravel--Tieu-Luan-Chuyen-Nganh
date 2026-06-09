@@ -1,7 +1,7 @@
 """
 NLP Pipeline Step 3: Inference — Re-score all comments with fine-tuned PhoBERT
 ===============================================================================
-Reads 465K comments from dim_comment, runs PhoBERT inference in batches,
+Reads 861K comments from dim_comment, runs PhoBERT inference in batches,
 writes results to gold.gold.fact_comment_nlp_v2
 
 Output columns per comment:
@@ -50,6 +50,8 @@ from config import (
 from utils.iceberg_utils import create_iceberg_table_if_not_exists
 from utils.gold_job_logger import get_gold_logger
 
+ASPECT_THRESHOLD = 0.5
+
 GOLD_CATALOG = "gold"
 GOLD_DATABASE = "gold"
 GOLD_TABLE = "fact_comment_nlp_v2"
@@ -90,6 +92,10 @@ def create_nlp_v2_table(spark):
         # Sentiment (continuous)
         StructField("sentiment_score", DoubleType(), True),
         StructField("sentiment_label", StringType(), True),
+        StructField("sentiment_confidence", DoubleType(), True),
+        StructField("sentiment_negative_prob", DoubleType(), True),
+        StructField("sentiment_neutral_prob", DoubleType(), True),
+        StructField("sentiment_positive_prob", DoubleType(), True),
 
         # Aspects (multi-label probabilities)
         StructField("aspect_scenery", DoubleType(), True),
@@ -98,6 +104,7 @@ def create_nlp_v2_table(spark):
         StructField("aspect_service", DoubleType(), True),
         StructField("aspect_transport", DoubleType(), True),
         StructField("aspect_accommodation", DoubleType(), True),
+        StructField("aspect_labels", StringType(), True),
 
         # Intent
         StructField("intent_label", StringType(), True),
@@ -105,7 +112,10 @@ def create_nlp_v2_table(spark):
 
         # Basic text stats (kept from v1)
         StructField("word_count", IntegerType(), True),
+        StructField("unique_word_ratio", DoubleType(), True),
         StructField("emoji_count", IntegerType(), True),
+        StructField("positive_emoji_count", LongType(), True),
+        StructField("negative_emoji_count", LongType(), True),
         StructField("comment_likes", LongType(), True),
         StructField("comment_level", IntegerType(), True),
 
@@ -123,6 +133,25 @@ def create_nlp_v2_table(spark):
         },
         catalog=GOLD_CATALOG,
     )
+
+    # Check if new columns exist, and if not, add them via ALTER TABLE
+    try:
+        if spark.catalog.tableExists(GOLD_TABLE_FULL):
+            existing_cols = [c.name for c in spark.catalog.listColumns(GOLD_TABLE_FULL)]
+            new_cols = []
+            if "unique_word_ratio" not in existing_cols:
+                new_cols.append("unique_word_ratio DOUBLE")
+            if "positive_emoji_count" not in existing_cols:
+                new_cols.append("positive_emoji_count BIGINT")
+            if "negative_emoji_count" not in existing_cols:
+                new_cols.append("negative_emoji_count BIGINT")
+            
+            if new_cols:
+                print(f"   Adding new columns to existing Iceberg table: {new_cols}")
+                for col_def in new_cols:
+                    spark.sql(f"ALTER TABLE {GOLD_TABLE_FULL} ADD COLUMN {col_def}")
+    except Exception as e:
+        print(f"⚠️ Warning checking/altering table: {e}")
 
 
 def load_comments(spark):
@@ -162,16 +191,24 @@ def create_inference_udf():
     output_schema = StructType([
         StructField("sentiment_score", DoubleType(), True),
         StructField("sentiment_label", StringType(), True),
+        StructField("sentiment_confidence", DoubleType(), True),
+        StructField("sentiment_negative_prob", DoubleType(), True),
+        StructField("sentiment_neutral_prob", DoubleType(), True),
+        StructField("sentiment_positive_prob", DoubleType(), True),
         StructField("aspect_scenery", DoubleType(), True),
         StructField("aspect_food", DoubleType(), True),
         StructField("aspect_price", DoubleType(), True),
         StructField("aspect_service", DoubleType(), True),
         StructField("aspect_transport", DoubleType(), True),
         StructField("aspect_accommodation", DoubleType(), True),
+        StructField("aspect_labels", StringType(), True),
         StructField("intent_label", StringType(), True),
         StructField("intent_confidence", DoubleType(), True),
         StructField("word_count", IntegerType(), True),
+        StructField("unique_word_ratio", DoubleType(), True),
         StructField("emoji_count", IntegerType(), True),
+        StructField("positive_emoji_count", LongType(), True),
+        StructField("negative_emoji_count", LongType(), True),
     ])
 
     @pandas_udf(output_schema)
@@ -186,6 +223,7 @@ def create_inference_udf():
         if '/opt/spark/jobs/dl/nlp' not in _sys.path:
             _sys.path.append('/opt/spark/jobs/dl/nlp')
 
+        from config import POSITIVE_EMOJIS as _POS_EMOJIS, NEGATIVE_EMOJIS as _NEG_EMOJIS
         import torch as _torch
         import re as _re
         import emoji as _emoji_lib
@@ -217,8 +255,39 @@ def create_inference_udf():
 
         # ── Pre-compute basic stats ──────────────────────────────────────────
         texts_list = texts.tolist()
-        word_counts = [len(str(t).split()) if t else 0 for t in texts_list]
-        emoji_counts = [sum(1 for c in str(t) if c in _emoji_lib.EMOJI_DATA) if t else 0 for t in texts_list]
+        
+        word_counts = []
+        unique_word_ratios = []
+        emoji_counts = []
+        positive_emoji_counts = []
+        negative_emoji_counts = []
+        
+        for t in texts_list:
+            if not t:
+                word_counts.append(0)
+                unique_word_ratios.append(0.0)
+                emoji_counts.append(0)
+                positive_emoji_counts.append(0)
+                negative_emoji_counts.append(0)
+                continue
+            
+            text_str = str(t)
+            text_lower = text_str.lower()
+            words = text_lower.split()
+            wc = len(words)
+            unique_wc = len(set(words))
+            ratio = float(unique_wc) / wc if wc > 0 else 0.0
+            
+            emojis = [c for c in text_str if c in _emoji_lib.EMOJI_DATA]
+            ec = len(emojis)
+            pos_ec = sum(1 for e in emojis if e in _POS_EMOJIS)
+            neg_ec = sum(1 for e in emojis if e in _NEG_EMOJIS)
+            
+            word_counts.append(wc)
+            unique_word_ratios.append(round(ratio, 4))
+            emoji_counts.append(ec)
+            positive_emoji_counts.append(pos_ec)
+            negative_emoji_counts.append(neg_ec)
 
         # Clean texts
         def _clean(t):
@@ -229,14 +298,21 @@ def create_inference_udf():
         cleaned = [_clean(t) for t in texts_list]
 
         # ── Default results for empty / model-not-loaded rows ────────────────
-        def _default(wc, ec):
+        def _default(wc, uwr, ec, pec, nec):
             return {
                 "sentiment_score": 0.5, "sentiment_label": "neutral",
+                "sentiment_confidence": 0.0,
+                "sentiment_negative_prob": 0.0,
+                "sentiment_neutral_prob": 1.0,
+                "sentiment_positive_prob": 0.0,
                 "aspect_scenery": 0.0, "aspect_food": 0.0,
                 "aspect_price": 0.0, "aspect_service": 0.0,
                 "aspect_transport": 0.0, "aspect_accommodation": 0.0,
+                "aspect_labels": "",
                 "intent_label": "share", "intent_confidence": 0.5,
-                "word_count": wc, "emoji_count": ec,
+                "word_count": wc, "unique_word_ratio": uwr,
+                "emoji_count": ec, "positive_emoji_count": pec,
+                "negative_emoji_count": nec,
             }
 
         results = [None] * len(texts_list)
@@ -246,7 +322,7 @@ def create_inference_udf():
         skip_idx  = [i for i in range(len(texts_list)) if i not in valid_idx]
 
         for i in skip_idx:
-            results[i] = _default(word_counts[i], emoji_counts[i])
+            results[i] = _default(word_counts[i], unique_word_ratios[i], emoji_counts[i], positive_emoji_counts[i], negative_emoji_counts[i])
 
         # ── Batch inference ──────────────────────────────────────────────────
         MINI_BATCH = 32
@@ -276,19 +352,35 @@ def create_inference_udf():
                 ap = aspect_probs[j]
                 ip = intent_probs[j]
                 intent_idx = int(ip.argmax())
+                
+                aspect_labels_list = [
+                    ASPECT_LABELS[k]
+                    for k, v in enumerate(ap)
+                    if v >= ASPECT_THRESHOLD
+                ]
+
                 results[i] = {
-                    "sentiment_score": round(float(sp[0]*0.0 + sp[1]*0.5 + sp[2]*1.0), 4),
+                    # FIX ISSUE-08: Use bipolar formula for intuitive sentiment score
+                    "sentiment_score": round(float((sp[2] - sp[0] + 1) / 2), 4),
                     "sentiment_label": SENTIMENT_LABELS[int(sp.argmax())],
+                    "sentiment_confidence": round(float(sp.max()), 4),
+                    "sentiment_negative_prob": round(float(sp[0]), 4),
+                    "sentiment_neutral_prob": round(float(sp[1]), 4),
+                    "sentiment_positive_prob": round(float(sp[2]), 4),
                     "aspect_scenery":       round(float(ap[0]), 4),
                     "aspect_food":          round(float(ap[1]), 4),
                     "aspect_price":         round(float(ap[2]), 4),
                     "aspect_service":       round(float(ap[3]), 4),
                     "aspect_transport":     round(float(ap[4]), 4),
                     "aspect_accommodation": round(float(ap[5]), 4),
+                    "aspect_labels":        ",".join(aspect_labels_list),
                     "intent_label":      INTENT_LABELS[intent_idx],
                     "intent_confidence": round(float(ip[intent_idx]), 4),
                     "word_count":  word_counts[i],
+                    "unique_word_ratio": unique_word_ratios[i],
                     "emoji_count": emoji_counts[i],
+                    "positive_emoji_count": positive_emoji_counts[i],
+                    "negative_emoji_count": negative_emoji_counts[i],
                 }
 
             # Free memory after each mini-batch
@@ -311,16 +403,24 @@ def run_inference(spark, df):
         "comment_sk", "post_sk", "province_sk", "comment_date_sk",
         F.col("nlp.sentiment_score"),
         F.col("nlp.sentiment_label"),
+        F.col("nlp.sentiment_confidence"),
+        F.col("nlp.sentiment_negative_prob"),
+        F.col("nlp.sentiment_neutral_prob"),
+        F.col("nlp.sentiment_positive_prob"),
         F.col("nlp.aspect_scenery"),
         F.col("nlp.aspect_food"),
         F.col("nlp.aspect_price"),
         F.col("nlp.aspect_service"),
         F.col("nlp.aspect_transport"),
         F.col("nlp.aspect_accommodation"),
+        F.col("nlp.aspect_labels"),
         F.col("nlp.intent_label"),
         F.col("nlp.intent_confidence"),
         F.col("nlp.word_count"),
+        F.col("nlp.unique_word_ratio"),
         F.col("nlp.emoji_count"),
+        F.col("nlp.positive_emoji_count"),
+        F.col("nlp.negative_emoji_count"),
         F.coalesce(F.col("comment_likes"), F.lit(0)).cast("long").alias("comment_likes"),
         F.col("comment_level"),
         F.current_timestamp().alias("created_at"),

@@ -131,11 +131,14 @@ def apply_layer_freezing(model, n=FREEZE_N_LAYERS):
 # ============================================================
 
 class CommentDataset(Dataset):
-    def __init__(self, texts, sentiment_ids, aspect_vectors, intent_ids, tokenizer, max_len):
+    def __init__(self, texts, sentiment_ids, aspect_vectors, intent_ids, use_sent, use_int, is_weak, tokenizer, max_len):
         self.texts = texts
         self.sentiment_ids = sentiment_ids
         self.aspect_vectors = aspect_vectors
         self.intent_ids = intent_ids
+        self.use_sent = use_sent
+        self.use_int = use_int
+        self.is_weak = is_weak
         self.tokenizer = tokenizer
         self.max_len = max_len
 
@@ -156,6 +159,9 @@ class CommentDataset(Dataset):
             'sentiment':      torch.tensor(self.sentiment_ids[idx], dtype=torch.long),
             'aspects':        torch.tensor(self.aspect_vectors[idx], dtype=torch.float),
             'intent':         torch.tensor(self.intent_ids[idx], dtype=torch.long),
+            'use_sent':       torch.tensor(self.use_sent[idx], dtype=torch.bool),
+            'use_int':        torch.tensor(self.use_int[idx], dtype=torch.bool),
+            'is_weak':        torch.tensor(self.is_weak[idx], dtype=torch.bool),
         }
 
 
@@ -184,6 +190,14 @@ def load_and_prepare_data():
     pdf['sentiment_id']  = pdf['sentiment_label'].map(SENTIMENT_TO_ID).fillna(1).astype(int)
     pdf['intent_id']     = pdf['intent_label'].map(INTENT_TO_ID).fillna(3).astype(int)
 
+    # Handle missing columns if running on old parquet
+    if 'use_for_sentiment' not in pdf.columns:
+        pdf['use_for_sentiment'] = True
+    if 'use_for_intent' not in pdf.columns:
+        pdf['use_for_intent'] = True
+    if 'is_weak_label' not in pdf.columns:
+        pdf['is_weak_label'] = False
+
     def aspects_to_vector(s):
         vec = [0] * len(ASPECT_LABELS)
         for a in (s or "").split(','):
@@ -205,6 +219,11 @@ def load_and_prepare_data():
         parts.append(sub.sample(n=n, random_state=42) if len(sub) > n else sub)
 
     pdf_out = pd.concat(parts, ignore_index=True).sample(frac=1, random_state=42)
+    
+    # FIX ISSUE-07: Log intent distribution after stratified sampling
+    print("\n  Intent distribution after stratified sampling:")
+    print(pdf_out.groupby(['sentiment_label', 'intent_label']).size().unstack(fill_value=0))
+    
     print(f"\n  After stratified sampling: {len(pdf_out):,}")
     print(pdf_out['sentiment_label'].value_counts())
     return pdf_out
@@ -225,6 +244,9 @@ def create_dataloaders(pdf, tokenizer):
     sentiment_ids = pdf['sentiment_id'].tolist()
     aspect_vecs   = pdf['aspect_vector'].tolist()
     intent_ids    = pdf['intent_id'].tolist()
+    use_sent      = pdf['use_for_sentiment'].tolist()
+    use_int       = pdf['use_for_intent'].tolist()
+    is_weak       = pdf['is_weak_label'].tolist()
     n             = len(texts)
 
     # Step 1: tách Test set (15% của tổng)
@@ -245,6 +267,8 @@ def create_dataloaders(pdf, tokenizer):
         return CommentDataset(
             [texts[i] for i in idx], [sentiment_ids[i] for i in idx],
             [aspect_vecs[i] for i in idx], [intent_ids[i] for i in idx],
+            [use_sent[i] for i in idx], [use_int[i] for i in idx],
+            [is_weak[i] for i in idx],
             tokenizer, MAX_SEQ_LENGTH,
         )
 
@@ -328,7 +352,7 @@ def train_model(model, train_loader, val_loader, test_loader, train_eval_loader,
             "test_size":           len(test_loader.dataset),
         })
 
-        best_f1          = 0.0
+        best_composite   = 0.0
         best_state       = None
         no_improve       = 0
         train_losses     = []
@@ -346,14 +370,30 @@ def train_model(model, train_loader, val_loader, test_loader, train_eval_loader,
                 s_lbl = batch['sentiment'].to(device)
                 a_lbl = batch['aspects'].to(device)
                 i_lbl = batch['intent'].to(device)
+                u_sent = batch['use_sent'].to(device)
+                u_int  = batch['use_int'].to(device)
+                is_weak = batch['is_weak'].to(device)
 
                 # FP16 forward
                 with torch.autocast(device_type=device.type, enabled=USE_AMP):
                     s_logits, a_logits, i_logits = model(ids, mask)
+                    
+                    # FIX ISSUE-04: Apply label smoothing for weak labels
+                    loss_s_unreduced = nn.CrossEntropyLoss(reduction='none')(s_logits, s_lbl)
+                    loss_s_smooth = nn.CrossEntropyLoss(reduction='none', label_smoothing=0.1)(s_logits, s_lbl)
+                    loss_s = torch.where(is_weak, loss_s_smooth, loss_s_unreduced)
+                    
+                    loss_i = nn.CrossEntropyLoss(reduction='none')(i_logits, i_lbl)
+                    
+                    # FIX ISSUE-02: Mask loss per-task
+                    loss_s = (loss_s * u_sent).sum() / max(u_sent.sum(), 1)
+                    loss_i = (loss_i * u_int).sum() / max(u_int.sum(), 1)
+
+                    # FIX ISSUE-05: Lower aspect loss weight to reduce noise
                     loss = (
-                        loss_sent_fn(s_logits, s_lbl) * 0.4
-                        + loss_asp_fn(a_logits, a_lbl) * 0.3
-                        + loss_int_fn(i_logits, i_lbl) * 0.3
+                        loss_s * 0.5
+                        + loss_asp_fn(a_logits, a_lbl) * 0.1
+                        + loss_i * 0.4
                     ) / GRAD_ACCUM_STEPS
 
                 amp_scaler.scale(loss).backward()
@@ -375,6 +415,9 @@ def train_model(model, train_loader, val_loader, test_loader, train_eval_loader,
             val_metrics = evaluate(model, val_loader, device)
             val_f1      = val_metrics['sentiment_f1']
             val_f1_history.append(val_f1)
+            
+            # FIX ISSUE-06: Use composite metric for early stopping
+            val_composite = 0.6 * val_metrics['sentiment_f1'] + 0.4 * val_metrics['intent_f1']
 
             # --- Evaluate: Train subset (monitor overfit gap) ---
             train_metrics = evaluate(model, train_eval_loader, device)
@@ -393,20 +436,22 @@ def train_model(model, train_loader, val_loader, test_loader, train_eval_loader,
                 "val_sentiment_f1":    val_f1,
                 "val_intent_f1":       val_metrics['intent_f1'],
                 "val_sent_accuracy":   val_metrics['sentiment_accuracy'],
+                "val_composite_f1":    val_composite,
                 "overfit_gap":         overfit_gap,
             }, step=epoch + 1)
 
             # --- Early Stopping (theo Val F1, không theo Train F1) ---
-            if val_f1 > best_f1:
-                best_f1    = val_f1
+            # FIX ISSUE-06: Check composite score for early stopping
+            if val_composite > best_composite:
+                best_composite = val_composite
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
                 no_improve = 0
-                print(f"  ✓ New best Val F1: {best_f1:.4f}")
+                print(f"  ✓ New best Val Composite F1: {best_composite:.4f}")
             else:
                 no_improve += 1
                 print(f"  No improve {no_improve}/{EARLY_STOP_PATIENCE}")
                 if no_improve >= EARLY_STOP_PATIENCE:
-                    print(f"\n  ⚑ Early stopping at epoch {epoch+1} (best Val F1={best_f1:.4f})")
+                    print(f"\n  ⚑ Early stopping at epoch {epoch+1} (best Val Composite F1={best_composite:.4f})")
                     break
 
         # Restore best checkpoint
@@ -417,7 +462,7 @@ def train_model(model, train_loader, val_loader, test_loader, train_eval_loader,
         print("\n  === Final Evaluation on TEST SET (unbiased) ===")
         final = evaluate(model, test_loader, device, verbose=True)
         mlflow.log_metrics({
-            "best_val_f1":        best_f1,
+            "best_val_composite_f1": best_composite,
             "test_sentiment_f1":  final['sentiment_f1'],
             "test_sentiment_acc": final['sentiment_accuracy'],
             "test_intent_f1":     final['intent_f1'],
@@ -437,7 +482,7 @@ def train_model(model, train_loader, val_loader, test_loader, train_eval_loader,
         if len(val_f1_history) > 1:
             ax2.fill_between(epochs_x, val_f1_history, train_f1_history,
                              alpha=0.20, color='orange', label='Overfit Gap')
-        ax2.axhline(best_f1, color='red', linestyle='--', label=f'Best Val F1={best_f1:.4f}')
+        ax2.axhline(best_composite, color='red', linestyle='--', label=f'Best Val Composite F1={best_composite:.4f}')
         ax2.set(xlabel='Epoch', ylabel='Sentiment F1 (macro)',
                 title='Train vs Val F1 — Overfit Monitor')
         ax2.legend()
@@ -451,7 +496,7 @@ def train_model(model, train_loader, val_loader, test_loader, train_eval_loader,
         mlflow.register_model(model_uri, FINE_TUNED_MODEL_NAME)
 
         print(f"\n  Model registered: {FINE_TUNED_MODEL_NAME}")
-        print(f"  Best Sentiment F1 : {best_f1:.4f}")
+        print(f"  Best Val Composite F1 : {best_composite:.4f}")
         print(f"  Epochs trained     : {len(train_losses)}")
 
     return model

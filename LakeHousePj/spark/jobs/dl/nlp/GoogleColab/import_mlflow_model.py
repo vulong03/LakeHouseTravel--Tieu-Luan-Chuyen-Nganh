@@ -47,6 +47,15 @@ def main():
     mlflow.set_experiment(MLFLOW_EXPERIMENT)
 
     with mlflow.start_run(run_name="colab_phobert_import"):
+        
+        mlflow.log_param("model_name", PHOBERT_MODEL_NAME)
+        mlflow.log_param("fine_tuned_model_name", FINE_TUNED_MODEL_NAME)
+        mlflow.log_param("num_sentiment_labels", len(SENTIMENT_LABELS))
+        mlflow.log_param("num_aspect_labels", len(ASPECT_LABELS))
+        mlflow.log_param("num_intent_labels", len(INTENT_LABELS))
+        mlflow.log_param("weights_path", weights_path)
+        mlflow.log_param("import_source", "google_colab")
+        mlflow.log_param("device", str(device))        
         # Log model
         mlflow.pytorch.log_model(model, "model")
         

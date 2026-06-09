@@ -104,6 +104,13 @@ def create_weak_labeling_udf():
     def weak_label_batch(texts: pd.Series) -> pd.DataFrame:
         import re as _re
         import emoji as _emoji_lib
+        
+        # FIX ISSUE-03: Move underthesea import outside loop for performance
+        try:
+            from underthesea import sentiment as _uts_sentiment
+            HAS_UTS = True
+        except Exception:
+            HAS_UTS = False
 
         results = []
 
@@ -156,21 +163,21 @@ def create_weak_labeling_udf():
                 total_signals += 1
 
             # Signal 4: underthesea (if available)
-            try:
-                from underthesea import sentiment as _sentiment
-                import os, tempfile
-                if 'HOME' not in os.environ or not os.access(os.environ.get('HOME', ''), os.W_OK):
-                    os.environ['HOME'] = tempfile.mkdtemp()
-                uts_result = _sentiment(text_clean)
-                if uts_result == 'positive':
-                    pos_signals += 2
-                    total_signals += 2
-                elif uts_result == 'negative':
-                    neg_signals += 2
-                    total_signals += 2
-                else:
+            # FIX ISSUE-03: Use pre-imported underthesea module
+            if HAS_UTS:
+                try:
+                    uts_result = _uts_sentiment(text_clean)
+                    if uts_result == 'positive':
+                        pos_signals += 2
+                        total_signals += 2
+                    elif uts_result == 'negative':
+                        neg_signals += 2
+                        total_signals += 2
+                    else:
+                        total_signals += 1
+                except Exception:
                     total_signals += 1
-            except Exception:
+            else:
                 total_signals += 1
 
             # Determine sentiment
@@ -179,10 +186,16 @@ def create_weak_labeling_udf():
                 sent_conf = 0.4
             elif pos_signals > neg_signals:
                 sent_label = "positive"
-                sent_conf = min(0.95, 0.4 + (pos_signals / max(total_signals, 1)) * 0.55)
+                # FIX ISSUE-01: Scale confidence by signal strength
+                signal_strength = min(total_signals / 5.0, 1.0)
+                ratio = pos_signals / max(total_signals, 1)
+                sent_conf = min(0.95, 0.4 + ratio * 0.55 * signal_strength)
             elif neg_signals > pos_signals:
                 sent_label = "negative"
-                sent_conf = min(0.95, 0.4 + (neg_signals / max(total_signals, 1)) * 0.55)
+                # FIX ISSUE-01: Scale confidence by signal strength
+                signal_strength = min(total_signals / 5.0, 1.0)
+                ratio = neg_signals / max(total_signals, 1)
+                sent_conf = min(0.95, 0.4 + ratio * 0.55 * signal_strength)
             else:
                 sent_label = "neutral"
                 sent_conf = 0.5
@@ -283,10 +296,25 @@ def filter_confident_samples(df):
     min_sentiment_conf = 0.6
     min_intent_conf = 0.5
 
-    df_filtered = df.filter(
-        (F.col("sentiment_confidence") >= min_sentiment_conf) |
-        (F.col("intent_confidence") >= min_intent_conf)
+    # FIX ISSUE-02: Filter per-task independently using flags
+    df_annotated = df.withColumn(
+        "use_for_sentiment", F.col("sentiment_confidence") >= min_sentiment_conf
+    ).withColumn(
+        "use_for_intent", F.col("intent_confidence") >= min_intent_conf
     )
+
+    df_high_conf = df_annotated.filter(
+        F.col("use_for_sentiment") | F.col("use_for_intent")
+    ).withColumn("is_weak_label", F.lit(False))
+
+    # FIX ISSUE-04: Preserve neutral samples with weak labels
+    df_neutral_weak = df_annotated.filter(
+        (F.col("sentiment_label") == "neutral") &
+        (F.col("sentiment_confidence") >= 0.35) &
+        (F.col("sentiment_confidence") < min_sentiment_conf)
+    ).withColumn("use_for_sentiment", F.lit(True)).withColumn("is_weak_label", F.lit(True)).limit(30_000)
+
+    df_filtered = df_high_conf.unionByName(df_neutral_weak)
 
     kept = df_filtered.count()
     total = df.count()

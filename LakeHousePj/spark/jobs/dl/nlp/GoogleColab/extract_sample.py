@@ -1,5 +1,6 @@
 import sys
 sys.path.append('/opt/spark/jobs')
+sys.path.append('/opt/spark/jobs/dl/nlp')
 
 import pandas as pd
 from pyspark.sql import SparkSession
