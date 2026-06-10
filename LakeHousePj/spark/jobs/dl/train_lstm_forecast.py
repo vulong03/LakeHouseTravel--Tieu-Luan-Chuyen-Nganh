@@ -83,7 +83,8 @@ MODEL_NAME = "province_hotel_volume_forecaster_lstm"
 DL_FEATURES_TABLE = "gold.gold.fact_province_month_dl_features"
 
 FORECAST_MONTHS = 12
-TRAIN_TEST_SPLIT = 0.7
+TRAIN_RATIO = 0.75
+VAL_RATIO   = 0.125
 
 # ------------------------------------------------------------
 # Hyperparameter tuning history (2026-06-05)
@@ -374,13 +375,79 @@ def prepare_sequences(df_pd, features, target, seq_length):
     return np.array(X_all), np.array(y_all), meta_all
 
 
+def clip_and_scale_entire(df_pd, train_end, features):
+    """
+    Fit clip thresholds and RobustScaler on Train period only,
+    apply consistently to the entire dataset (no time-boundary sequence loss).
+    """
+    df = df_pd.copy()
+
+    # --- Outlier clipping (applied to entire df first) ---
+    GROWTH_MIN, GROWTH_MAX = -1.0, 5.0
+    df["hotel_vol_growth"] = df["hotel_vol_growth"].clip(GROWTH_MIN, GROWTH_MAX)
+    df["engagement_score"] = np.log1p(df["engagement_score"])
+
+    # Create temporary train subset to compute train-only statistics
+    train_mask = df["year_month"] <= train_end
+    train_raw = df[train_mask].copy()
+
+    # p99 clipping computed on train only
+    clip_cols = ["total_posts", "total_comments", "avg_likes_per_post",
+                 "avg_saves_per_post", "engagement_score"]
+    clip_thresholds = {}
+    for col in clip_cols:
+        if col in features:
+            p99 = train_raw[col].quantile(0.99)
+            if p99 > 0:
+                clip_thresholds[col] = p99
+
+    # Apply clipping thresholds to the entire df and the train subset
+    for col, threshold in clip_thresholds.items():
+        df[col] = df[col].clip(upper=threshold)
+        train_raw[col] = train_raw[col].clip(upper=threshold)
+
+    print(f"  Clip thresholds (train p99): { {k: f'{v:.2f}' for k,v in clip_thresholds.items()} }")
+
+    # --- RobustScaler: fit on train only ---
+    scaler = RobustScaler()
+    scaler.fit(train_raw[features])
+    df[features] = scaler.transform(df[features])
+
+    return df, scaler, clip_thresholds
+
+
+def compute_metrics(y_true, y_pred, prefix=""):
+    """Compute all metrics on log scale, plus MAPE/SMAPE on actual scale."""
+    y_true_actual = np.expm1(y_true)
+    y_pred_actual = np.expm1(np.clip(y_pred, 0.0, None))
+
+    mask      = y_true_actual > 0
+    mape      = float(np.mean(np.abs(
+        (y_true_actual[mask] - y_pred_actual[mask]) / y_true_actual[mask]
+    )) * 100) if np.sum(mask) > 0 else 0.0
+
+    smape_log = float(
+        2 * np.mean(np.abs(y_true - y_pred) /
+                    (np.abs(y_true) + np.abs(y_pred) + 1e-8)) * 100
+    )
+
+    return {
+        f"{prefix}rmse":        float(np.sqrt(mean_squared_error(y_true, y_pred))),
+        f"{prefix}mae":         float(mean_absolute_error(y_true, y_pred)),
+        f"{prefix}r2":          float(r2_score(y_true, y_pred)),
+        f"{prefix}mape_actual": mape,
+        f"{prefix}smape_log":   smape_log,
+    }
+
+
+
 # ============================================================
 # Step 3: Train LSTM
 # ============================================================
 
 def train_model(df):
     print("\n" + "=" * 80)
-    print("STEP 3: TRAINING LSTM MODEL (v4)")
+    print("STEP 3: TRAINING LSTM MODEL (v4 with Val)")
     print("=" * 80)
 
     select_cols = ALL_FEATURES + [TARGET, "year_month", "province_sk", "province_name", "region"]
@@ -388,64 +455,55 @@ def train_model(df):
     df_pd = df_pd.sort_values(["province_sk", "year_month"])
     df_pd[ALL_FEATURES] = df_pd[ALL_FEATURES].fillna(0)
 
-    # --- Outlier Clipping (before scaling) ---
-    # hotel_vol_growth: extreme outliers distort scaler (e.g. +4900%)
-    df_pd["hotel_vol_growth"] = df_pd["hotel_vol_growth"].clip(-1.0, 5.0)
-
-    # Engagement features: viral TikTok posts create extreme outliers.
-    # DQ findings (2026-06-05):
-    #   avg_likes_per_post: min=6, max=395,750 — clip at 99th percentile
-    #   engagement_score: log1p first (sum of likes+comments+saves+shares)
-    #   avg_shares_per_post: REMOVED from feature set — metric không đồng nhất:
-    #     TikTok "Số lượt share" = total cross-platform distribution (Messenger/Zalo/story)
-    #     khác với nút Share visible; 63.6% NULL trong silver; không đáng tin.
-    df_pd["engagement_score"] = np.log1p(df_pd["engagement_score"])
-
-    for col in ["total_posts", "total_comments", "avg_likes_per_post",
-                "avg_saves_per_post", "engagement_score"]:
-        p99 = df_pd[col].quantile(0.99)
-        if p99 > 0:
-            df_pd[col] = df_pd[col].clip(upper=p99)
-
     # Log transform the target variable
     df_pd[TARGET] = np.log1p(df_pd[TARGET].astype(float))
 
-    # Time-based split BEFORE scaling (no data leakage)
-    split_ym = int(df_pd["year_month"].quantile(TRAIN_TEST_SPLIT))
-    train_raw = df_pd[df_pd["year_month"] <= split_ym].copy()
-    test_raw = df_pd[df_pd["year_month"] > split_ym].copy()
+    # Time-based split boundaries
+    ym_sorted = sorted(df_pd["year_month"].unique())
+    n         = len(ym_sorted)
+    train_end = ym_sorted[int(n * TRAIN_RATIO) - 1]
+    val_end   = ym_sorted[int(n * (TRAIN_RATIO + VAL_RATIO)) - 1]
 
-    print(f"  Train: {len(train_raw)} rows (up to {split_ym})")
-    print(f"  Test:  {len(test_raw)} rows (from {split_ym + 1})")
+    print(f"  Split boundaries: train≤{train_end} | val {train_end+1}–{val_end} | test>{val_end}")
 
-    # RobustScaler: uses median + IQR → robust to outlier provinces
-    # Fit on TRAIN only to prevent leakage
-    scaler = RobustScaler()
-    train_raw[ALL_FEATURES] = scaler.fit_transform(train_raw[ALL_FEATURES])
-    test_raw[ALL_FEATURES] = scaler.transform(test_raw[ALL_FEATURES])
+    # Clip and scale using train-only statistics
+    df_pd_scaled, scaler, clip_thresholds = clip_and_scale_entire(
+        df_pd, train_end, ALL_FEATURES
+    )
 
-    # Full scaled dataset for forecast step
-    df_pd_scaled = df_pd.copy()
-    df_pd_scaled[ALL_FEATURES] = scaler.transform(df_pd_scaled[ALL_FEATURES])
+    # Build sequences on the entire continuous dataset (no boundary loss)
+    X_all, y_all, meta_all = prepare_sequences(df_pd_scaled, ALL_FEATURES, TARGET, SEQUENCE_LENGTH)
 
-    X_train, y_train, _ = prepare_sequences(train_raw, ALL_FEATURES, TARGET, SEQUENCE_LENGTH)
-    X_test, y_test, meta_test = prepare_sequences(test_raw, ALL_FEATURES, TARGET, SEQUENCE_LENGTH)
+    # Chronologically split sequences based on the target year_month
+    X_train, y_train = [], []
+    X_val,   y_val   = [], []
+    X_test,  y_test  = [], []
+    meta_test        = []
 
-    if len(X_train) == 0 or len(X_test) == 0:
-        print("  WARNING: Not enough data for proper split, using index split.")
-        X_all, y_all, meta_all = prepare_sequences(df_pd_scaled, ALL_FEATURES, TARGET, SEQUENCE_LENGTH)
-        split_idx = int(len(X_all) * TRAIN_TEST_SPLIT)
-        X_train, y_train = X_all[:split_idx], y_all[:split_idx]
-        X_test, y_test = X_all[split_idx:], y_all[split_idx:]
-        meta_test = meta_all[split_idx:]
+    for i in range(len(X_all)):
+        ym = meta_all[i]["year_month"]
+        if ym <= train_end:
+            X_train.append(X_all[i])
+            y_train.append(y_all[i])
+        elif ym <= val_end:
+            X_val.append(X_all[i])
+            y_val.append(y_all[i])
+        else:
+            X_test.append(X_all[i])
+            y_test.append(y_all[i])
+            meta_test.append(meta_all[i])
 
-    print(f"  Train sequences: {len(X_train)}, Test sequences: {len(X_test)}")
+    X_train, y_train = np.array(X_train), np.array(y_train)
+    X_val,   y_val   = np.array(X_val),   np.array(y_val)
+    X_test,  y_test  = np.array(X_test),  np.array(y_test)
+
+    print(f"  Sequences — Train: {len(X_train)} | Val: {len(X_val)} | Test: {len(X_test)}")
 
     train_loader = DataLoader(
         TimeSeriesDataset(X_train, y_train), batch_size=BATCH_SIZE, shuffle=True
     )
-    test_loader = DataLoader(
-        TimeSeriesDataset(X_test, y_test), batch_size=BATCH_SIZE, shuffle=False
+    val_loader = DataLoader(
+        TimeSeriesDataset(X_val, y_val), batch_size=BATCH_SIZE, shuffle=False
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -459,12 +517,10 @@ def train_model(df):
     print(f"  Device: {device}, Parameters: {total_params:,}")
 
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=LEARNING_RATE, weight_decay=7e-4  # 7e-4 anti-overfit
+        model.parameters(), lr=LEARNING_RATE, weight_decay=7e-4
     )
     criterion = HybridLoss(delta=0.5, smape_weight=0.3)
 
-    # CosineAnnealingWarmRestarts: better exploration than ReduceLROnPlateau
-    # T_0=30: first restart at epoch 30, T_mult=2: each cycle doubles in length
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, T_0=30, T_mult=2, eta_min=1e-6
     )
@@ -473,9 +529,9 @@ def train_model(df):
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment(EXPERIMENT_NAME)
 
-    with mlflow.start_run(run_name=f"lstm_v4_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
+    with mlflow.start_run(run_name=f"lstm_v4_val_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
         mlflow.log_params({
-            "model_type": "LSTM_v4_Attention",
+            "model_type": "LSTM_v4_Attention_with_Val",
             "source_table": DL_FEATURES_TABLE,
             "sequence_length": SEQUENCE_LENGTH,
             "hidden_size": HIDDEN_SIZE,
@@ -490,8 +546,8 @@ def train_model(df):
             "weight_decay": "7e-4",
             "scheduler": "CosineAnnealingWarmRestarts_T0=30",
             "num_features": len(ALL_FEATURES),
-            "features": json.dumps(ALL_FEATURES),
             "train_size": len(X_train),
+            "val_size": len(X_val),
             "test_size": len(X_test),
             "total_params": total_params,
         })
@@ -519,14 +575,14 @@ def train_model(df):
             model.eval()
             val_loss = 0
             with torch.no_grad():
-                for xb, yb in test_loader:
+                for xb, yb in val_loader:
                     xb, yb = xb.to(device), yb.to(device)
                     val_loss += criterion(model(xb), yb).item() * len(xb)
-            avg_val = val_loss / max(len(X_test), 1)
+            avg_val = val_loss / max(len(X_val), 1)
             val_losses.append(avg_val)
 
-            # CosineAnnealing: step every epoch
-            scheduler.step(epoch + avg_val / 100)
+            # CosineAnnealing: step every epoch (Correct API call)
+            scheduler.step(epoch)
 
             if (epoch + 1) % 10 == 0:
                 lr = optimizer.param_groups[0]['lr']
@@ -548,45 +604,32 @@ def train_model(df):
         # Evaluate
         model.eval()
         with torch.no_grad():
-            y_pred = model(torch.FloatTensor(X_test).to(device)).cpu().numpy()
-            y_pred = np.clip(y_pred, 0.0, None)
-            y_train_pred = model(torch.FloatTensor(X_train).to(device)).cpu().numpy()
-            y_train_pred = np.clip(y_train_pred, 0.0, None)
+            y_pred_train = model(torch.FloatTensor(X_train).to(device)).cpu().numpy()
+            y_pred_val   = model(torch.FloatTensor(X_val).to(device)).cpu().numpy()
+            y_pred_test  = model(torch.FloatTensor(X_test).to(device)).cpu().numpy()
 
-        y_test_actual = np.expm1(y_test)
-        y_pred_actual = np.expm1(y_pred)
+        y_pred_train = np.clip(y_pred_train, 0.0, None)
+        y_pred_val   = np.clip(y_pred_val,   0.0, None)
+        y_pred_test  = np.clip(y_pred_test,  0.0, None)
 
-        # MAPE (actual scale, mask zero targets)
-        mask = y_test_actual > 0
-        test_mape = float(
-            np.mean(np.abs((y_test_actual[mask] - y_pred_actual[mask]) / y_test_actual[mask])) * 100
-        ) if np.sum(mask) > 0 else 0.0
+        train_metrics = compute_metrics(y_train, y_pred_train, "train_")
+        val_metrics   = compute_metrics(y_val,   y_pred_val,   "val_")
+        test_metrics  = compute_metrics(y_test,  y_pred_test,  "test_")
 
-        # SMAPE (log scale) — less biased metric for reporting
-        test_smape = float(
-            2 * np.mean(
-                np.abs(y_test - y_pred) / (np.abs(y_test) + np.abs(y_pred) + 1e-8)
-            ) * 100
-        )
-
-        metrics = {
-            "train_rmse": float(np.sqrt(mean_squared_error(y_train, y_train_pred))),
-            "train_mae": float(mean_absolute_error(y_train, y_train_pred)),
-            "train_r2": float(r2_score(y_train, y_train_pred)),
-            "test_rmse": float(np.sqrt(mean_squared_error(y_test, y_pred))),
-            "test_mae": float(mean_absolute_error(y_test, y_pred)),
-            "test_r2": float(r2_score(y_test, y_pred)),
-            "test_mape_actual": test_mape,
-            "test_smape_log": test_smape,
-            "best_val_loss": float(best_val_loss),
+        all_metrics = {
+            **train_metrics, **val_metrics, **test_metrics,
+            "best_val_loss":  float(best_val_loss),
             "epochs_trained": len(train_losses),
         }
-        mlflow.log_metrics(metrics)
+        mlflow.log_metrics(all_metrics)
 
-        print(f"\n  Train: RMSE={metrics['train_rmse']:.4f} MAE={metrics['train_mae']:.4f} R2={metrics['train_r2']:.4f}")
-        print(f"  Test:  RMSE={metrics['test_rmse']:.4f} MAE={metrics['test_mae']:.4f} R2={metrics['test_r2']:.4f}")
-        print(f"  MAPE(actual)={metrics['test_mape_actual']:.2f}%  SMAPE(log)={metrics['test_smape_log']:.2f}%")
-        print(f"  Train-Test R2 gap: {metrics['train_r2'] - metrics['test_r2']:.4f}")
+        print(f"\n  MAIN MODEL RESULTS:")
+        print(f"  Train: RMSE={all_metrics['train_rmse']:.4f}  MAE={all_metrics['train_mae']:.4f}  R²={all_metrics['train_r2']:.4f}")
+        print(f"  Val:   RMSE={all_metrics['val_rmse']:.4f}    MAE={all_metrics['val_mae']:.4f}    R²={all_metrics['val_r2']:.4f}")
+        print(f"  Test:  RMSE={all_metrics['test_rmse']:.4f}   MAE={all_metrics['test_mae']:.4f}   R²={all_metrics['test_r2']:.4f}")
+        print(f"  MAPE(actual)={all_metrics['test_mape_actual']:.2f}%  SMAPE(log)={all_metrics['test_smape_log']:.2f}%")
+        print(f"  Train-Val R² gap:  {all_metrics['train_r2'] - all_metrics['val_r2']:.4f}")
+        print(f"  Val-Test R² gap:   {all_metrics['val_r2']   - all_metrics['test_r2']:.4f}")
 
         # Plots
         fig, ax = plt.subplots(figsize=(10, 6))
@@ -596,15 +639,16 @@ def train_model(df):
         mlflow.log_figure(fig, "loss_curve.png"); plt.close()
 
         fig, ax = plt.subplots(figsize=(10, 6))
-        ax.scatter(y_test, y_pred, alpha=0.5, s=15)
-        max_val = float(max(y_test.max(), y_pred.max()))
+        ax.scatter(y_test, y_pred_test, alpha=0.5, s=15)
+        max_val = float(max(y_test.max(), y_pred_test.max()))
         ax.plot([0, max_val], [0, max_val], 'r--')
         ax.set_xlabel('Actual (log1p)'); ax.set_ylabel('Predicted (log1p)')
-        ax.set_title(f'LSTM v4: Actual vs Predicted (R2={metrics["test_r2"]:.3f})')
+        ax.set_title(f'LSTM v4: Actual vs Predicted (R2={all_metrics["test_r2"]:.3f})')
         mlflow.log_figure(fig, "actual_vs_predicted.png"); plt.close()
 
         fig, ax = plt.subplots(figsize=(10, 6))
-        ax.scatter(y_pred, y_test - y_pred, alpha=0.5, s=15)
+        residuals = y_test - y_pred_test
+        ax.scatter(y_pred_test, residuals, alpha=0.5, s=15)
         ax.axhline(0, color='r', linestyle='--')
         ax.set_xlabel('Predicted'); ax.set_ylabel('Residual'); ax.set_title('Residuals v4')
         mlflow.log_figure(fig, "residuals.png"); plt.close()
@@ -617,7 +661,7 @@ def train_model(df):
                 ax.plot([meta_test[i]['year_month'] for i in idx],
                         [y_test[i] for i in idx], label='Actual', marker='o')
                 ax.plot([meta_test[i]['year_month'] for i in idx],
-                        [y_pred[i] for i in idx], label='Predicted', marker='x')
+                        [y_pred_test[i] for i in idx], label='Predicted', marker='x')
                 ax.set_title(f"Sample: {meta_test[0]['province_name']}")
                 ax.legend(); plt.xticks(rotation=45)
             mlflow.log_figure(fig, "time_series_sample.png"); plt.close()

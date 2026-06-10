@@ -2,7 +2,7 @@
 Tourism Trend Forecasting — LSTM Hotel Volume Dashboard
 ========================================================
 
-Gradio interface for the LSTM v3 model predicting reservation volume (hotel_review_volume).
+Gradio interface for the LSTM v5 model predicting reservation volume (hotel_review_volume).
 Target: hotel_review_volume (log-normalized, expm1 used for actual display scaling)
 
 Tabs:
@@ -44,7 +44,7 @@ FEATURES_PREFIX = "dl_training/"          # dl_features.parquet (for traveler ty
 LSTM_FILE_PATTERN = "province_hotel_volume_forecast_lstm_"
 
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
-LSTM_MODEL_NAME = "province_hotel_volume_forecaster_lstm"
+LSTM_MODEL_NAME = "province_hotel_volume_forecaster_lstm_v5"
 
 CACHE_DURATION = 60   # seconds
 _forecast_cache = {"data": None, "timestamp": 0, "run_folder": ""}
@@ -641,7 +641,7 @@ def tab2_compare(province_list, metric):
     fig.update_xaxes(showgrid=True, gridcolor="rgba(51,65,85,0.4)")
     fig.update_yaxes(showgrid=True, gridcolor="rgba(51,65,85,0.4)")
 
-    info = _info_html(f"Comparing {len(province_list)} provinces · 12-Month Forecast · LSTM Model v3")
+    info = _info_html(f"Comparing {len(province_list)} provinces · 12-Month Forecast · LSTM Model v5")
     return fig, info
 
 
@@ -773,7 +773,7 @@ def tab4_model_info():
 
   <!-- Model Header -->
   <div style="background: linear-gradient(135deg, #0f172a, #1e293b); border-radius: 16px; padding: 28px; color: white; margin-bottom: 20px; box-shadow: 0 8px 30px rgba(0,0,0,0.3); border: 1px solid #312e81;">
-    <h2 style="margin: 0 0 8px; font-weight: 800; color: #38bdf8;">🧠 LSTM Deep Learning Model (v3)</h2>
+    <h2 style="margin: 0 0 8px; font-weight: 800; color: #38bdf8;">🧠 LSTM Deep Learning Model (v5)</h2>
     <p style="margin:0; opacity:0.9; font-size:1.1em">Forecast Model Name: {LSTM_MODEL_NAME} · Version {info['version']}</p>
     <p style="margin:8px 0 0; opacity:0.75; font-size:0.9em">Trained: {info['trained_at']} · Run ID: {info['run_id'][:12]}…</p>
   </div>
@@ -786,7 +786,7 @@ def tab4_model_info():
       <div style="color:#a7f3d0; margin-top:4px; font-size:0.9em;">RMSE = {_fmt(info['train_rmse'])}</div>
     </div>
     <div style="background:rgba(59, 130, 246, 0.1); border-left:4px solid #3b82f6; border-radius:10px; padding:18px; border-top:1px solid rgba(59,130,246,0.15); border-right:1px solid rgba(59,130,246,0.15); border-bottom:1px solid rgba(59,130,246,0.15);">
-      <div style="font-size:0.85em; color:#3b82f6; font-weight:700; margin-bottom:6px;">TEST SET (hold-out 30%)</div>
+      <div style="font-size:0.85em; color:#3b82f6; font-weight:700; margin-bottom:6px;">TEST SET (hold-out 12.5%)</div>
       <div style="font-size:1.4em; font-weight:700; color:#60a5fa">R² = {_fmt(info['test_r2'])}</div>
       <div style="color:#bfdbfe; margin-top:4px; font-size:0.9em;">RMSE = {_fmt(info['test_rmse'])} · MAE = {_fmt(info['test_mae'])}</div>
     </div>
@@ -798,11 +798,11 @@ def tab4_model_info():
     <table style="width:100%; border-collapse:collapse; font-size:0.95em; color:#cbd5e1;">
       <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Model Architecture</td><td style="padding:8px 14px">LSTM + LayerNorm + Temporal Attention + Dense (Multi-features)</td></tr>
       <tr><td style="padding:8px 14px; font-weight:600">Target Variable (Log-normalized)</td><td style="padding:8px 14px">hotel_volume (hotel_review_volume, Log1p scaled, Expm1 output)</td></tr>
-      <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Number of Features</td><td style="padding:8px 14px">{info.get('num_features', '38')} (includes Hotel volume, TikTok engagement, NLP, Lags)</td></tr>
-      <tr><td style="padding:8px 14px; font-weight:600">Input Sequence Length</td><td style="padding:8px 14px">{info.get('sequence_length', '4')} historical months</td></tr>
-      <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Hidden Size</td><td style="padding:8px 14px">{info.get('hidden_size', '32')} units</td></tr>
-      <tr><td style="padding:8px 14px; font-weight:600">Loss Function</td><td style="padding:8px 14px">HuberLoss (delta=0.5) — mitigates outlier noise</td></tr>
-      <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Actual Epochs Run</td><td style="padding:8px 14px">{info.get('epochs_trained', '—')} (Early Stopping patience=20)</td></tr>
+      <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Number of Features</td><td style="padding:8px 14px">{info.get('num_features', '50')} (includes Hotel & Hotness volume/lags, TikTok engagement, NLP & PhoBERT aspects)</td></tr>
+      <tr><td style="padding:8px 14px; font-weight:600">Input Sequence Length</td><td style="padding:8px 14px">{info.get('sequence_length', '3')} historical months</td></tr>
+      <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Hidden Size</td><td style="padding:8px 14px">{info.get('hidden_size', '48')} units</td></tr>
+      <tr><td style="padding:8px 14px; font-weight:600">Loss Function</td><td style="padding:8px 14px">HybridLoss (70% Huber + 30% SMAPE) — directly optimizes for MAPE reduction</td></tr>
+      <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Actual Epochs Run</td><td style="padding:8px 14px">{info.get('epochs_trained', '—')} (Early Stopping patience=25)</td></tr>
       <tr><td style="padding:8px 14px; font-weight:600">Best Validation Loss</td><td style="padding:8px 14px">{_fmt(info.get('best_val_loss'))}</td></tr>
     </table>
   </div>
@@ -1087,7 +1087,7 @@ def create_app():
             <h1>🏖️ VIETNAM TOURISM RECOMMENDATION SYSTEM</h1>
             <p class="sub">Intelligent seasonal recommendation & tourism volume forecasting using LSTM Deep Learning</p>
             <div class="badges">
-                <span class="badge">🧠 LSTM v3 + Attention</span>
+                <span class="badge">🧠 LSTM v5 + Attention</span>
                 <span class="badge">💬 PhoBERT Multi-task Sentiment</span>
                 <span class="badge">🏖️ Seasonal Destination Tips</span>
                 <span class="badge">🏨 Hotel Customer Segments</span>
@@ -1303,7 +1303,7 @@ def create_app():
         # Footer
         gr.HTML("""
         <div style="text-align:center; padding:20px; color:#64748b; font-size:0.88em; margin-top:20px; border-top: 1px solid #e2e8f0;">
-            Tourism Analytics Engine · LSTM Hotel Volume Forecaster v3 · Powered by PySpark + Iceberg + MLflow + Gradio
+            Tourism Analytics Engine · LSTM Hotel Volume Forecaster v5 · Powered by PySpark + Iceberg + MLflow + Gradio
         </div>
         """)
         # Load default recommendations on startup
