@@ -174,15 +174,28 @@ def load_and_prepare_data(csv_path):
     if 'is_weak_label' not in pdf.columns:
         pdf['is_weak_label'] = False
 
-    def aspects_to_vector(s):
-        vec = [0] * len(ASPECT_LABELS)
-        for a in (str(s) if pd.notna(s) else "").split(','):
+    def aspects_to_vector(row):
+        vec = [0.0] * (len(ASPECT_LABELS) * 3)
+        aspects_str = str(row['aspects']) if pd.notna(row['aspects']) else ""
+        if not aspects_str:
+            return vec
+        
+        for a in aspects_str.split(','):
             a = a.strip()
             if a in ASPECT_LABELS:
-                vec[ASPECT_LABELS.index(a)] = 1
+                idx = ASPECT_LABELS.index(a)
+                pos_col = f"aspect_{a}_pos"
+                neg_col = f"aspect_{a}_neg"
+                pos_val = float(row[pos_col]) if pos_col in row and pd.notna(row[pos_col]) else 0.0
+                neg_val = float(row[neg_col]) if neg_col in row and pd.notna(row[neg_col]) else 0.0
+                neu_val = 1.0 if (pos_val == 0.0 and neg_val == 0.0) else 0.0
+                
+                vec[idx * 3 + 0] = neg_val
+                vec[idx * 3 + 1] = neu_val
+                vec[idx * 3 + 2] = pos_val
         return vec
 
-    pdf['aspect_vector'] = pdf['aspects'].apply(aspects_to_vector)
+    pdf['aspect_vector'] = pdf.apply(aspects_to_vector, axis=1)
     return pdf
 
 def create_dataloaders(pdf, tokenizer):
@@ -438,7 +451,7 @@ def main():
     model = PhoBERTMultiTask(
         model_name=PHOBERT_MODEL_NAME,
         num_sentiments=len(SENTIMENT_LABELS),
-        num_aspects=len(ASPECT_LABELS),
+        num_aspects=len(ASPECT_LABELS) * 3,
         num_intents=len(INTENT_LABELS),
     ).to(device)
 

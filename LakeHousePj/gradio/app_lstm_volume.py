@@ -40,7 +40,7 @@ MINIO_CLIENT = Minio(
 )
 BUCKET_NAME = "gold"
 FORECAST_PREFIX = "dl_forecast/"
-FEATURES_PREFIX = "dl_training/"          # dl_features.parquet (for traveler type & nlp avg)
+FEATURES_PREFIX = "dl_training/dl_features.parquet"          # dl_features.parquet (for traveler type & nlp avg)
 LSTM_FILE_PATTERN = "province_hotel_volume_forecast_lstm_"
 
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
@@ -432,7 +432,16 @@ def tab1_seasonal_recommend(start_month, end_month, selected_theme, selected_reg
         aspect_info = ""
         if selected_theme != "Tất cả" and selected_theme != "All":
             val = row[theme_col_map[selected_theme]]
-            aspect_info = f'<span style="background:#10b981; color:white; padding:3px 8px; border-radius:12px; font-size:0.8em; font-weight:600; margin-left:6px;">Aspect: {val:.2f}</span>'
+            if val > 0.05:
+                badge_color = "#10b981"  # Emerald Green for positive
+                val_str = f"+{val:.2f}"
+            elif val < -0.05:
+                badge_color = "#f43f5e"  # Rose Red for negative
+                val_str = f"{val:.2f}"
+            else:
+                badge_color = "#64748b"  # Slate Gray for neutral
+                val_str = f"{val:.2f}"
+            aspect_info = f'<span style="background:{badge_color}; color:white; padding:3px 8px; border-radius:12px; font-size:0.8em; font-weight:600; margin-left:6px;">Net Sentiment: {val_str}</span>'
 
         cards_html += f"""
         <div style="background: {card_bg}; border-radius: 18px; border: 1px solid #1f2937; box-shadow: 0 4px 20px rgba(0,0,0,0.15); padding: 24px; position: relative; overflow: hidden;">

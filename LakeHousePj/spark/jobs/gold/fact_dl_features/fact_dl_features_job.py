@@ -276,13 +276,28 @@ def aggregate_nlp_comments(spark: SparkSession) -> DataFrame:
 
             F.sum("comment_likes").alias("_total_comment_likes"),
 
-            # Aspect scores (v2 only)
-            F.avg("aspect_scenery").alias("avg_aspect_scenery"),
-            F.avg("aspect_food").alias("avg_aspect_food"),
-            F.avg("aspect_price").alias("avg_aspect_price"),
-            F.avg("aspect_service").alias("avg_aspect_service"),
-            F.avg("aspect_transport").alias("avg_aspect_transport"),
-            F.avg("aspect_accommodation").alias("avg_aspect_accommodation"),
+            # Aspect scores (v2 only) - Weighted Net Sentiment
+            # Formula: sum(pos - neg) / sum(mention_prob)
+            # Only computed when sum(mention_prob) >= 0.5 (≈ at least 1 meaningful mention).
+            # Returns NULL otherwise to avoid ghost values (dividing by 1.0 when no aspect mentioned).
+            # NULL is then safely filled with 0.0 downstream via fillna().
+            *[
+                F.when(
+                    F.sum(asp) >= F.lit(0.5),
+                    (F.sum(F.coalesce(F.col(f"{asp}_pos"), F.lit(0.0)))
+                     - F.sum(F.coalesce(F.col(f"{asp}_neg"), F.lit(0.0))))
+                    / F.sum(asp)
+                ).otherwise(F.lit(None).cast("double"))
+                .alias(f"avg_aspect_{name}")
+                for asp, name in [
+                    ("aspect_scenery",       "scenery"),
+                    ("aspect_food",          "food"),
+                    ("aspect_price",         "price"),
+                    ("aspect_service",       "service"),
+                    ("aspect_transport",     "transport"),
+                    ("aspect_accommodation", "accommodation"),
+                ]
+            ],
         )
     else:
         print("   Using NLP v1 (underthesea: 3-level sentiment, no aspects)")

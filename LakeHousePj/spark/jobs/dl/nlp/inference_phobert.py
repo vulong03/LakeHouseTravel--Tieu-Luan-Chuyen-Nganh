@@ -97,7 +97,7 @@ def create_nlp_v2_table(spark):
         StructField("sentiment_neutral_prob", DoubleType(), True),
         StructField("sentiment_positive_prob", DoubleType(), True),
 
-        # Aspects (multi-label probabilities)
+        # Aspects (multi-label probabilities) — mention prob = max(neg, neu, pos)
         StructField("aspect_scenery", DoubleType(), True),
         StructField("aspect_food", DoubleType(), True),
         StructField("aspect_price", DoubleType(), True),
@@ -105,6 +105,20 @@ def create_nlp_v2_table(spark):
         StructField("aspect_transport", DoubleType(), True),
         StructField("aspect_accommodation", DoubleType(), True),
         StructField("aspect_labels", StringType(), True),
+
+        # Aspect sentiment pairs (pos/neg probs per aspect — for ABSA in Gold layer)
+        StructField("aspect_scenery_pos", DoubleType(), True),
+        StructField("aspect_scenery_neg", DoubleType(), True),
+        StructField("aspect_food_pos", DoubleType(), True),
+        StructField("aspect_food_neg", DoubleType(), True),
+        StructField("aspect_price_pos", DoubleType(), True),
+        StructField("aspect_price_neg", DoubleType(), True),
+        StructField("aspect_service_pos", DoubleType(), True),
+        StructField("aspect_service_neg", DoubleType(), True),
+        StructField("aspect_transport_pos", DoubleType(), True),
+        StructField("aspect_transport_neg", DoubleType(), True),
+        StructField("aspect_accommodation_pos", DoubleType(), True),
+        StructField("aspect_accommodation_neg", DoubleType(), True),
 
         # Intent
         StructField("intent_label", StringType(), True),
@@ -135,21 +149,33 @@ def create_nlp_v2_table(spark):
     )
 
     # Check if new columns exist, and if not, add them via ALTER TABLE
+    EXPECTED_NEW_COLS = [
+        ("unique_word_ratio",          "DOUBLE"),
+        ("positive_emoji_count",       "BIGINT"),
+        ("negative_emoji_count",       "BIGINT"),
+        # Aspect sentiment pairs (synced with Colab inference)
+        ("aspect_scenery_pos",         "DOUBLE"),
+        ("aspect_scenery_neg",         "DOUBLE"),
+        ("aspect_food_pos",            "DOUBLE"),
+        ("aspect_food_neg",            "DOUBLE"),
+        ("aspect_price_pos",           "DOUBLE"),
+        ("aspect_price_neg",           "DOUBLE"),
+        ("aspect_service_pos",         "DOUBLE"),
+        ("aspect_service_neg",         "DOUBLE"),
+        ("aspect_transport_pos",       "DOUBLE"),
+        ("aspect_transport_neg",       "DOUBLE"),
+        ("aspect_accommodation_pos",   "DOUBLE"),
+        ("aspect_accommodation_neg",   "DOUBLE"),
+    ]
     try:
         if spark.catalog.tableExists(GOLD_TABLE_FULL):
             existing_cols = [c.name for c in spark.catalog.listColumns(GOLD_TABLE_FULL)]
-            new_cols = []
-            if "unique_word_ratio" not in existing_cols:
-                new_cols.append("unique_word_ratio DOUBLE")
-            if "positive_emoji_count" not in existing_cols:
-                new_cols.append("positive_emoji_count BIGINT")
-            if "negative_emoji_count" not in existing_cols:
-                new_cols.append("negative_emoji_count BIGINT")
-            
+            new_cols = [(name, dtype) for name, dtype in EXPECTED_NEW_COLS if name not in existing_cols]
             if new_cols:
-                print(f"   Adding new columns to existing Iceberg table: {new_cols}")
-                for col_def in new_cols:
-                    spark.sql(f"ALTER TABLE {GOLD_TABLE_FULL} ADD COLUMN {col_def}")
+                print(f"   Adding {len(new_cols)} new columns to existing Iceberg table...")
+                for col_name, col_type in new_cols:
+                    spark.sql(f"ALTER TABLE {GOLD_TABLE_FULL} ADD COLUMN {col_name} {col_type}")
+                    print(f"   + {col_name} {col_type}")
     except Exception as e:
         print(f"⚠️ Warning checking/altering table: {e}")
 
@@ -195,6 +221,7 @@ def create_inference_udf():
         StructField("sentiment_negative_prob", DoubleType(), True),
         StructField("sentiment_neutral_prob", DoubleType(), True),
         StructField("sentiment_positive_prob", DoubleType(), True),
+        # mention prob = max(neg, neu, pos) per aspect
         StructField("aspect_scenery", DoubleType(), True),
         StructField("aspect_food", DoubleType(), True),
         StructField("aspect_price", DoubleType(), True),
@@ -202,6 +229,19 @@ def create_inference_udf():
         StructField("aspect_transport", DoubleType(), True),
         StructField("aspect_accommodation", DoubleType(), True),
         StructField("aspect_labels", StringType(), True),
+        # aspect pos/neg sentiment pairs
+        StructField("aspect_scenery_pos", DoubleType(), True),
+        StructField("aspect_scenery_neg", DoubleType(), True),
+        StructField("aspect_food_pos", DoubleType(), True),
+        StructField("aspect_food_neg", DoubleType(), True),
+        StructField("aspect_price_pos", DoubleType(), True),
+        StructField("aspect_price_neg", DoubleType(), True),
+        StructField("aspect_service_pos", DoubleType(), True),
+        StructField("aspect_service_neg", DoubleType(), True),
+        StructField("aspect_transport_pos", DoubleType(), True),
+        StructField("aspect_transport_neg", DoubleType(), True),
+        StructField("aspect_accommodation_pos", DoubleType(), True),
+        StructField("aspect_accommodation_neg", DoubleType(), True),
         StructField("intent_label", StringType(), True),
         StructField("intent_confidence", DoubleType(), True),
         StructField("word_count", IntegerType(), True),
@@ -309,6 +349,12 @@ def create_inference_udf():
                 "aspect_price": 0.0, "aspect_service": 0.0,
                 "aspect_transport": 0.0, "aspect_accommodation": 0.0,
                 "aspect_labels": "",
+                "aspect_scenery_pos": 0.0,   "aspect_scenery_neg": 0.0,
+                "aspect_food_pos": 0.0,       "aspect_food_neg": 0.0,
+                "aspect_price_pos": 0.0,      "aspect_price_neg": 0.0,
+                "aspect_service_pos": 0.0,    "aspect_service_neg": 0.0,
+                "aspect_transport_pos": 0.0,  "aspect_transport_neg": 0.0,
+                "aspect_accommodation_pos": 0.0, "aspect_accommodation_neg": 0.0,
                 "intent_label": "share", "intent_confidence": 0.5,
                 "word_count": wc, "unique_word_ratio": uwr,
                 "emoji_count": ec, "positive_emoji_count": pec,
@@ -349,31 +395,46 @@ def create_inference_udf():
 
             for j, i in enumerate(batch_ids):
                 sp = sent_probs[j]
-                ap = aspect_probs[j]
+                ap = aspect_probs[j]  # 18 values: [neg, neu, pos] × 6 aspects
                 ip = intent_probs[j]
                 intent_idx = int(ip.argmax())
-                
-                aspect_labels_list = [
-                    ASPECT_LABELS[k]
-                    for k, v in enumerate(ap)
-                    if v >= ASPECT_THRESHOLD
-                ]
+
+                # Each aspect has 3 outputs: ap[k*3+0]=neg, ap[k*3+1]=neu, ap[k*3+2]=pos
+                # mention score = max of the 3 components (same as Colab)
+                aspect_labels_list = []
+                for k, aspect_name in enumerate(ASPECT_LABELS):
+                    score = max(ap[k * 3 + 0], ap[k * 3 + 1], ap[k * 3 + 2])
+                    if score >= ASPECT_THRESHOLD:
+                        aspect_labels_list.append(aspect_name)
 
                 results[i] = {
-                    # FIX ISSUE-08: Use bipolar formula for intuitive sentiment score
                     "sentiment_score": round(float((sp[2] - sp[0] + 1) / 2), 4),
                     "sentiment_label": SENTIMENT_LABELS[int(sp.argmax())],
                     "sentiment_confidence": round(float(sp.max()), 4),
                     "sentiment_negative_prob": round(float(sp[0]), 4),
                     "sentiment_neutral_prob": round(float(sp[1]), 4),
                     "sentiment_positive_prob": round(float(sp[2]), 4),
-                    "aspect_scenery":       round(float(ap[0]), 4),
-                    "aspect_food":          round(float(ap[1]), 4),
-                    "aspect_price":         round(float(ap[2]), 4),
-                    "aspect_service":       round(float(ap[3]), 4),
-                    "aspect_transport":     round(float(ap[4]), 4),
-                    "aspect_accommodation": round(float(ap[5]), 4),
+                    # mention prob = max(neg, neu, pos) — synced with Colab
+                    "aspect_scenery":       round(float(max(ap[0],  ap[1],  ap[2])),  4),
+                    "aspect_food":          round(float(max(ap[3],  ap[4],  ap[5])),  4),
+                    "aspect_price":         round(float(max(ap[6],  ap[7],  ap[8])),  4),
+                    "aspect_service":       round(float(max(ap[9],  ap[10], ap[11])), 4),
+                    "aspect_transport":     round(float(max(ap[12], ap[13], ap[14])), 4),
+                    "aspect_accommodation": round(float(max(ap[15], ap[16], ap[17])), 4),
                     "aspect_labels":        ",".join(aspect_labels_list),
+                    # pos/neg pairs for ABSA Gold formula
+                    "aspect_scenery_pos":       round(float(ap[2]),  4),
+                    "aspect_scenery_neg":       round(float(ap[0]),  4),
+                    "aspect_food_pos":          round(float(ap[5]),  4),
+                    "aspect_food_neg":          round(float(ap[3]),  4),
+                    "aspect_price_pos":         round(float(ap[8]),  4),
+                    "aspect_price_neg":         round(float(ap[6]),  4),
+                    "aspect_service_pos":       round(float(ap[11]), 4),
+                    "aspect_service_neg":       round(float(ap[9]),  4),
+                    "aspect_transport_pos":     round(float(ap[14]), 4),
+                    "aspect_transport_neg":     round(float(ap[12]), 4),
+                    "aspect_accommodation_pos": round(float(ap[17]), 4),
+                    "aspect_accommodation_neg": round(float(ap[15]), 4),
                     "intent_label":      INTENT_LABELS[intent_idx],
                     "intent_confidence": round(float(ip[intent_idx]), 4),
                     "word_count":  word_counts[i],
@@ -414,6 +475,18 @@ def run_inference(spark, df):
         F.col("nlp.aspect_transport"),
         F.col("nlp.aspect_accommodation"),
         F.col("nlp.aspect_labels"),
+        F.col("nlp.aspect_scenery_pos"),
+        F.col("nlp.aspect_scenery_neg"),
+        F.col("nlp.aspect_food_pos"),
+        F.col("nlp.aspect_food_neg"),
+        F.col("nlp.aspect_price_pos"),
+        F.col("nlp.aspect_price_neg"),
+        F.col("nlp.aspect_service_pos"),
+        F.col("nlp.aspect_service_neg"),
+        F.col("nlp.aspect_transport_pos"),
+        F.col("nlp.aspect_transport_neg"),
+        F.col("nlp.aspect_accommodation_pos"),
+        F.col("nlp.aspect_accommodation_neg"),
         F.col("nlp.intent_label"),
         F.col("nlp.intent_confidence"),
         F.col("nlp.word_count"),

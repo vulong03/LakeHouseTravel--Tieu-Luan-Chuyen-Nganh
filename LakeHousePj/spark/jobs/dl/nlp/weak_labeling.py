@@ -89,7 +89,7 @@ def load_comments(spark):
 def create_weak_labeling_udf():
     """
     Pandas UDF that assigns sentiment, aspects, and intent labels
-    using keyword + emoji rules. Returns confidence scores.
+    using clause-level keyword + emoji rules. Returns confidence scores.
     """
 
     output_schema = StructType([
@@ -98,6 +98,20 @@ def create_weak_labeling_udf():
         StructField("aspects", StringType(), True),
         StructField("intent_label", StringType(), True),
         StructField("intent_confidence", FloatType(), True),
+        
+        # New aspect-sentiment pairs
+        StructField("aspect_scenery_pos", FloatType(), True),
+        StructField("aspect_scenery_neg", FloatType(), True),
+        StructField("aspect_food_pos", FloatType(), True),
+        StructField("aspect_food_neg", FloatType(), True),
+        StructField("aspect_price_pos", FloatType(), True),
+        StructField("aspect_price_neg", FloatType(), True),
+        StructField("aspect_service_pos", FloatType(), True),
+        StructField("aspect_service_neg", FloatType(), True),
+        StructField("aspect_transport_pos", FloatType(), True),
+        StructField("aspect_transport_neg", FloatType(), True),
+        StructField("aspect_accommodation_pos", FloatType(), True),
+        StructField("aspect_accommodation_neg", FloatType(), True),
     ])
 
     @pandas_udf(output_schema)
@@ -105,24 +119,47 @@ def create_weak_labeling_udf():
         import re as _re
         import emoji as _emoji_lib
         
-        # FIX ISSUE-03: Move underthesea import outside loop for performance
+        # Move underthesea import outside loop for performance
         try:
             from underthesea import sentiment as _uts_sentiment
             HAS_UTS = True
         except Exception:
             HAS_UTS = False
 
+        def match_keyword(kw, text_str):
+            if len(kw) <= 2:
+                VIETNAMESE_LETTERS = 'a-zA-ZđĐêÊôÔâÂăĂưƯơƠáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ'
+                pattern = r'(?<![' + VIETNAMESE_LETTERS + r'])' + _re.escape(kw) + r'(?![' + VIETNAMESE_LETTERS + r'])'
+                return bool(_re.search(pattern, text_str))
+            else:
+                return kw in text_str
+
         results = []
 
         for text in texts:
+            # Default empty output dictionary
+            out = {
+                "sentiment_label": "neutral",
+                "sentiment_confidence": 0.3,
+                "aspects": "",
+                "intent_label": "share",
+                "intent_confidence": 0.3,
+                "aspect_scenery_pos": 0.0,
+                "aspect_scenery_neg": 0.0,
+                "aspect_food_pos": 0.0,
+                "aspect_food_neg": 0.0,
+                "aspect_price_pos": 0.0,
+                "aspect_price_neg": 0.0,
+                "aspect_service_pos": 0.0,
+                "aspect_service_neg": 0.0,
+                "aspect_transport_pos": 0.0,
+                "aspect_transport_neg": 0.0,
+                "aspect_accommodation_pos": 0.0,
+                "aspect_accommodation_neg": 0.0,
+            }
+
             if not text or len(str(text).strip()) < 3:
-                results.append({
-                    "sentiment_label": "neutral",
-                    "sentiment_confidence": 0.3,
-                    "aspects": "",
-                    "intent_label": "share",
-                    "intent_confidence": 0.3,
-                })
+                results.append(out)
                 continue
 
             text_str = str(text)
@@ -130,14 +167,14 @@ def create_weak_labeling_udf():
             text_clean = _re.sub(r'http\S+|www\S+|@\w+', '', text_lower)
             text_clean = ' '.join(text_clean.split())
 
-            # ========== SENTIMENT ==========
+            # ========== GLOBAL SENTIMENT ==========
             pos_signals = 0
             neg_signals = 0
             total_signals = 0
 
             # Signal 1: Keywords
-            pos_kw_count = sum(1 for kw in POSITIVE_KEYWORDS if kw in text_clean)
-            neg_kw_count = sum(1 for kw in NEGATIVE_KEYWORDS if kw in text_clean)
+            pos_kw_count = sum(1 for kw in POSITIVE_KEYWORDS if match_keyword(kw, text_clean))
+            neg_kw_count = sum(1 for kw in NEGATIVE_KEYWORDS if match_keyword(kw, text_clean))
             if pos_kw_count > 0:
                 pos_signals += min(pos_kw_count, 3)
                 total_signals += min(pos_kw_count, 3)
@@ -163,7 +200,6 @@ def create_weak_labeling_udf():
                 total_signals += 1
 
             # Signal 4: underthesea (if available)
-            # FIX ISSUE-03: Use pre-imported underthesea module
             if HAS_UTS:
                 try:
                     uts_result = _uts_sentiment(text_clean)
@@ -180,41 +216,93 @@ def create_weak_labeling_udf():
             else:
                 total_signals += 1
 
-            # Determine sentiment
+            # Determine global sentiment
             if total_signals == 0:
-                sent_label = "neutral"
+                global_sent = "neutral"
                 sent_conf = 0.4
             elif pos_signals > neg_signals:
-                sent_label = "positive"
-                # FIX ISSUE-01: Scale confidence by signal strength
+                global_sent = "positive"
                 signal_strength = min(total_signals / 5.0, 1.0)
                 ratio = pos_signals / max(total_signals, 1)
                 sent_conf = min(0.95, 0.4 + ratio * 0.55 * signal_strength)
             elif neg_signals > pos_signals:
-                sent_label = "negative"
-                # FIX ISSUE-01: Scale confidence by signal strength
+                global_sent = "negative"
                 signal_strength = min(total_signals / 5.0, 1.0)
                 ratio = neg_signals / max(total_signals, 1)
                 sent_conf = min(0.95, 0.4 + ratio * 0.55 * signal_strength)
             else:
-                sent_label = "neutral"
+                global_sent = "neutral"
                 sent_conf = 0.5
 
-            # ========== ASPECTS (multi-label) ==========
-            detected_aspects = []
-            for aspect, keywords in ASPECT_KEYWORD_MAP.items():
-                matches = sum(1 for kw in keywords if kw in text_clean)
-                if matches >= 2:
-                    detected_aspects.append(aspect)
-                elif matches == 1 and len(text_clean.split()) <= 15:
-                    detected_aspects.append(aspect)
+            out["sentiment_label"] = global_sent
+            out["sentiment_confidence"] = float(sent_conf)
 
-            aspects_str = ",".join(detected_aspects) if detected_aspects else ""
+            # ========== CLAUSE-LEVEL ASPECT & SENTIMENT ==========
+            # Split by punctuation and contrastive conjunctions
+            clauses = _re.split(r'[.,!?;\n]|\b(?:nhưng|tuy nhiên|bù lại|nhưng mà|song|trong khi)\b', text_lower)
+            
+            detected_aspects = set()
+            aspect_pos_signals = {a: 0 for a in ASPECT_LABELS}
+            aspect_neg_signals = {a: 0 for a in ASPECT_LABELS}
+
+            for clause in clauses:
+                clause = clause.strip()
+                if len(clause) < 3:
+                    continue
+                
+                # Detect aspects in clause
+                clause_aspects = []
+                for aspect, keywords in ASPECT_KEYWORD_MAP.items():
+                    matches = sum(1 for kw in keywords if match_keyword(kw, clause))
+                    if matches >= 2:
+                        clause_aspects.append(aspect)
+                    elif matches == 1 and len(clause.split()) <= 15:
+                        clause_aspects.append(aspect)
+                
+                if not clause_aspects:
+                    continue
+                
+                for a in clause_aspects:
+                    detected_aspects.add(a)
+
+                # Local sentiment signals in clause
+                c_pos = sum(1 for kw in POSITIVE_KEYWORDS if match_keyword(kw, clause))
+                c_neg = sum(1 for kw in NEGATIVE_KEYWORDS if match_keyword(kw, clause))
+                c_emojis = [c for c in clause if c in _emoji_lib.EMOJI_DATA]
+                c_pos += sum(1 for e in c_emojis if e in POSITIVE_EMOJIS)
+                c_neg += sum(1 for e in c_emojis if e in NEGATIVE_EMOJIS)
+                
+                if clause.count('!') >= 2:
+                    c_pos += 1
+
+                for a in clause_aspects:
+                    if c_pos > c_neg:
+                        aspect_pos_signals[a] += 1
+                    elif c_neg > c_pos:
+                        aspect_neg_signals[a] += 1
+
+            # Populate ABSA columns based on clause results and global fallback
+            for a in detected_aspects:
+                pos_sig = aspect_pos_signals[a]
+                neg_sig = aspect_neg_signals[a]
+
+                if pos_sig > neg_sig:
+                    out[f"aspect_{a}_pos"] = 1.0
+                elif neg_sig > pos_sig:
+                    out[f"aspect_{a}_neg"] = 1.0
+                else:
+                    # Fallback to global sentiment if clause sentiment is tied/neutral
+                    if global_sent == "positive":
+                        out[f"aspect_{a}_pos"] = 1.0
+                    elif global_sent == "negative":
+                        out[f"aspect_{a}_neg"] = 1.0
+
+            out["aspects"] = ",".join(detected_aspects) if detected_aspects else ""
 
             # ========== INTENT ==========
-            question_count = sum(1 for kw in QUESTION_KEYWORDS if kw in text_clean)
-            recommend_count = sum(1 for kw in RECOMMEND_KEYWORDS if kw in text_clean)
-            complain_count = sum(1 for kw in COMPLAIN_KEYWORDS if kw in text_clean)
+            question_count = sum(1 for kw in QUESTION_KEYWORDS if match_keyword(kw, text_clean))
+            recommend_count = sum(1 for kw in RECOMMEND_KEYWORDS if match_keyword(kw, text_clean))
+            complain_count = sum(1 for kw in COMPLAIN_KEYWORDS if match_keyword(kw, text_clean))
 
             intent_scores = {
                 "question": question_count * 2,
@@ -235,13 +323,10 @@ def create_weak_labeling_udf():
                 best_intent = "share"
                 intent_conf = 0.5
 
-            results.append({
-                "sentiment_label": sent_label,
-                "sentiment_confidence": float(sent_conf),
-                "aspects": aspects_str,
-                "intent_label": best_intent,
-                "intent_confidence": float(intent_conf),
-            })
+            out["intent_label"] = best_intent
+            out["intent_confidence"] = float(intent_conf)
+
+            results.append(out)
 
         return pd.DataFrame(results)
 
@@ -268,6 +353,18 @@ def apply_weak_labels(spark, df):
         F.col("labels.aspects").alias("aspects"),
         F.col("labels.intent_label").alias("intent_label"),
         F.col("labels.intent_confidence").alias("intent_confidence"),
+        F.col("labels.aspect_scenery_pos").alias("aspect_scenery_pos"),
+        F.col("labels.aspect_scenery_neg").alias("aspect_scenery_neg"),
+        F.col("labels.aspect_food_pos").alias("aspect_food_pos"),
+        F.col("labels.aspect_food_neg").alias("aspect_food_neg"),
+        F.col("labels.aspect_price_pos").alias("aspect_price_pos"),
+        F.col("labels.aspect_price_neg").alias("aspect_price_neg"),
+        F.col("labels.aspect_service_pos").alias("aspect_service_pos"),
+        F.col("labels.aspect_service_neg").alias("aspect_service_neg"),
+        F.col("labels.aspect_transport_pos").alias("aspect_transport_pos"),
+        F.col("labels.aspect_transport_neg").alias("aspect_transport_neg"),
+        F.col("labels.aspect_accommodation_pos").alias("aspect_accommodation_pos"),
+        F.col("labels.aspect_accommodation_neg").alias("aspect_accommodation_neg"),
     )
 
     total = df_labeled.count()

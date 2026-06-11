@@ -67,6 +67,21 @@ def create_nlp_v2_table(spark):
         StructField("aspect_service", DoubleType(), True),
         StructField("aspect_transport", DoubleType(), True),
         StructField("aspect_accommodation", DoubleType(), True),
+        
+        # New aspect-sentiment pairs for ABSA
+        StructField("aspect_scenery_pos", DoubleType(), True),
+        StructField("aspect_scenery_neg", DoubleType(), True),
+        StructField("aspect_food_pos", DoubleType(), True),
+        StructField("aspect_food_neg", DoubleType(), True),
+        StructField("aspect_price_pos", DoubleType(), True),
+        StructField("aspect_price_neg", DoubleType(), True),
+        StructField("aspect_service_pos", DoubleType(), True),
+        StructField("aspect_service_neg", DoubleType(), True),
+        StructField("aspect_transport_pos", DoubleType(), True),
+        StructField("aspect_transport_neg", DoubleType(), True),
+        StructField("aspect_accommodation_pos", DoubleType(), True),
+        StructField("aspect_accommodation_neg", DoubleType(), True),
+        
         StructField("aspect_labels", StringType(), True),
 
         # Intent
@@ -119,6 +134,19 @@ def create_nlp_v2_table(spark):
             if "negative_emoji_count" not in existing_cols:
                 new_cols.append("negative_emoji_count BIGINT")
             
+            # ABSA aspect-sentiment pairs check
+            absa_cols = [
+                "aspect_scenery_pos", "aspect_scenery_neg",
+                "aspect_food_pos", "aspect_food_neg",
+                "aspect_price_pos", "aspect_price_neg",
+                "aspect_service_pos", "aspect_service_neg",
+                "aspect_transport_pos", "aspect_transport_neg",
+                "aspect_accommodation_pos", "aspect_accommodation_neg"
+            ]
+            for col in absa_cols:
+                if col not in existing_cols:
+                    new_cols.append(f"{col} DOUBLE")
+            
             if new_cols:
                 print(f"   Adding new columns to existing Iceberg table: {new_cols}")
                 for col_def in new_cols:
@@ -160,6 +188,18 @@ def main():
             F.col("aspect_service").cast("double"),
             F.col("aspect_transport").cast("double"),
             F.col("aspect_accommodation").cast("double"),
+            F.col("aspect_scenery_pos").cast("double"),
+            F.col("aspect_scenery_neg").cast("double"),
+            F.col("aspect_food_pos").cast("double"),
+            F.col("aspect_food_neg").cast("double"),
+            F.col("aspect_price_pos").cast("double"),
+            F.col("aspect_price_neg").cast("double"),
+            F.col("aspect_service_pos").cast("double"),
+            F.col("aspect_service_neg").cast("double"),
+            F.col("aspect_transport_pos").cast("double"),
+            F.col("aspect_transport_neg").cast("double"),
+            F.col("aspect_accommodation_pos").cast("double"),
+            F.col("aspect_accommodation_neg").cast("double"),
             F.col("aspect_labels").cast("string"),
             F.col("intent_label").cast("string"),
             F.col("intent_confidence").cast("double"),

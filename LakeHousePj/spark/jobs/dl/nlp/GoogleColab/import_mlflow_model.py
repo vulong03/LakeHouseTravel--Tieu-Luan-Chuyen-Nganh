@@ -1,7 +1,11 @@
 import sys
+import os
 sys.path.append('/opt/spark/jobs')
 sys.path.append('/opt/spark/jobs/dl/nlp')
 
+os.environ['MLFLOW_S3_ENDPOINT_URL'] = 'http://minio:9000'
+os.environ['AWS_ACCESS_KEY_ID'] = 'minioadmin'
+os.environ['AWS_SECRET_ACCESS_KEY'] = 'minioadmin123'
 
 import torch
 import mlflow
@@ -23,7 +27,7 @@ def main():
     model = PhoBERTMultiTask(
         model_name=PHOBERT_MODEL_NAME,
         num_sentiments=len(SENTIMENT_LABELS),
-        num_aspects=len(ASPECT_LABELS),
+        num_aspects=len(ASPECT_LABELS) * 3,
         num_intents=len(INTENT_LABELS),
     )
 
