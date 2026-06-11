@@ -73,7 +73,7 @@ DL_JOBS = {
         'description': 'Run PhoBERT inference on all comments and save to Iceberg'
     },
     'train_lstm_forecast': {
-        'job_path': '/opt/spark/jobs/dl/train_lstm_forecast.py',
+        'job_path': '/opt/spark/jobs/dl/train_province_lstm_v5.py',
         'resource_level': 'heavy',
         'description': 'Train LSTM model on Gold features to forecast hotel review volume'
     },
