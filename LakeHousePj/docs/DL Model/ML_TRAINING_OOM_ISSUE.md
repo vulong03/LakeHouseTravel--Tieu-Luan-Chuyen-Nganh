@@ -7,7 +7,7 @@ Tài liệu này giải thích chi tiết nguyên nhân dẫn đến tình trạ
 ## 1. Vấn đề đang gặp phải
 Khi cố gắng thực thi lệnh huấn luyện mô hình bên trong container Spark:
 ```bash
-docker exec -it lakehouse_spark_master /opt/spark/bin/spark-submit /opt/spark/jobs/ml/nlp/train_phobert.py
+docker exec -it lakehouse_spark_master /opt/spark/bin/spark-submit /opt/spark/jobs/dl/nlp/train_phobert.py
 ```
 Tiến trình bị ngắt đột ngột (Exit Code: 1 hoặc Docker bị dead). 
 

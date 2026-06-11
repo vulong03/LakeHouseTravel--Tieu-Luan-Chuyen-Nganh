@@ -124,9 +124,9 @@ FORECAST_MONTHS = 12
 
 # FIX 1: 3-way time-based split (train/val/test)
 # 70% train → 15% val → 15% test
-TRAIN_RATIO = 0.75
-VAL_RATIO   = 0.125
-# TEST_RATIO  = 0.125 (implicit: remainder)
+TRAIN_RATIO = 0.70
+VAL_RATIO   = 0.15
+# TEST_RATIO  = 0.15 (implicit: remainder)
 
 # Model hyperparameters (aligned with v4 configurations)
 SEQUENCE_LENGTH = 3

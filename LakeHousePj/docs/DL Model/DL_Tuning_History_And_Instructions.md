@@ -31,7 +31,7 @@ This document captures the recent tuning runs performed on June 5, 2026, aimed a
 The model performance targets have been **successfully met** through Feature Engineering (Option A) combined with BatchNorm removal. The model is ready for staging/production deployment.
 
 ### Current Hyperparameter Configuration
-The current active configurations in [train_lstm_forecast.py](file:///d:/CodeStored/Nam_4/TieuLuanCuoiKy/LakeHouse/LakeHousePj/spark/jobs/ml/train_lstm_forecast.py) are:
+The current active configurations in [train_province_lstm_v5.py](file:///d:/CodeStored/Nam_4/TieuLuanCuoiKy/LakeHouse/LakeHousePj/spark/jobs/dl/train_province_lstm_v5.py) are:
 *   `SEQUENCE_LENGTH = 3`
 *   `HIDDEN_SIZE = 48`
 *   `NUM_LAYERS = 2`
@@ -39,7 +39,7 @@ The current active configurations in [train_lstm_forecast.py](file:///d:/CodeSto
 *   `LEARNING_RATE = 0.0005`
 *   `BATCH_SIZE = 32`
 *   `weight_decay = 7e-4`
-*   `BatchNorm1d`: **Removed** (helps resolve recursive forecast batch size 1 mismatch)
-*   New Features introduced: `social_to_booking_ratio`, `sentiment_polarity_change`, `hotel_vol_std_rolling_3m`
+*   `BatchNorm1d`: **Removed**
+*   New Features introduced: `social_to_booking_ratio`, `sentiment_polarity_change`, `hotel_vol_std_rolling_3m`, plus aspect features and hotness lags.
 
 No further hyperparameter tuning is required for this pipeline stage. Let's proceed to other components of the LakeHouse project.

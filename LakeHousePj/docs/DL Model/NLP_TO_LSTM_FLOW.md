@@ -11,7 +11,7 @@ Quá trình chia làm 3 giai đoạn chính:
 ---
 
 ## GIAI ĐOẠN 1: QUY TRÌNH NLP PHOBERT (TRÍCH XUẤT ĐẶC TRƯNG VĂN BẢN)
-* **Thực thi bởi:** `weak_labeling.py` -> `train_phobert.py` -> `inference_phobert.py` (Cấu hình bởi `config.py`)
+* **Thực thi bởi:** `weak_labeling.py` -> `train_phobert.py` -> `inference_phobert.py` (Cấu hình bởi `config.py` thuộc thư mục `spark/jobs/dl/nlp/`)
 * **Mục tiêu:** Biến đổi bình luận dạng chữ (Text) của du khách thành các con số toán học thể hiện cảm xúc, ý định và khía cạnh đánh giá.
 
 ### 1. Đầu vào (Inputs)
@@ -54,7 +54,7 @@ Kết quả xuất ra bảng trung gian **`gold.gold.fact_comment_nlp_v2`**.
 
 ### 1. Đầu vào (Inputs)
 * `gold.gold.fact_comment_nlp_v2` (Lấy yếu tố NLP)
-* Các bảng Fact/Dim khác về khách sạn, lượng bài viết, lượt tương tác (views, likes, shares).
+* Các bảng Fact/Dim khác về khách sạn, lượng bài viết, lượt tương tác (views, likes).
 
 ### 2. Quá trình xử lý
 Nhóm dữ liệu lại theo cấu trúc `(province_sk, year_month)` (VD: Hà Nội - Tháng 10/2023) và tính trung bình, tổng số, độ lệch chuẩn,...
@@ -62,20 +62,21 @@ Nhóm dữ liệu lại theo cấu trúc `(province_sk, year_month)` (VD: Hà N�
 ### 3. Đầu vào (Outputs - Đây chính là Input cho Giai đoạn 3)
 Xuất ra bảng **`gold.gold.fact_province_month_dl_features`**.
 * **Độ chi tiết:** Từng tỉnh, Từng tháng.
-* **Các nhóm biến (Features):** (~40 features)
+* **Các nhóm biến (Features):** (50 features)
   * **Biến chuỗi thời gian (Temporal):** `month_sin`, `month_cos`.
   * **Biến tương tác (Engagement):** `avg_likes_per_post`, `avg_saves_per_post`, `viral_post_ratio`...
-  * **Biến NLP (Kế thừa từ Giai đoạn 1):** 
+  * **Biến NLP & Aspects (Kế thừa từ Giai đoạn 1):** 
     * `avg_sentiment`: Điểm cảm xúc trung bình của Tỉnh tháng đó.
     * `positive_ratio`, `negative_ratio`: Tỷ lệ % bình luận tích cực/tiêu cực.
-  * **Biến trễ (Lag/Target):** `hotel_vol_lag_1`, `hotel_vol_lag_2`, `hotel_vol_lag_12`, v.v...
+    * `avg_aspect_scenery`, `avg_aspect_food`, v.v. (6 aspect features).
+  * **Biến trễ (Lag/Target):** 6 lag của hotel volume + 6 lag của hotness index.
   * Biến mục tiêu **TARGET**: `hotel_review_volume` (Lượt đặt phòng thực tế của tháng hiện tại - được log-normalized).
 
 ---
 
 ## GIAI ĐOẠN 3: DỰ BÁO LSTM FORECASTING
-* **Thực thi bởi:** `train_lstm_forecast.py`
-* **Mục tiêu:** Tìm ra quy luật (Pattern) từ chuỗi thời gian lịch sử kết hợp với các biến NLP/Tương tác để dự đoán lượng đặt phòng thực tế (`hotel_review_volume`) của Tỉnh trong 12 tháng kế tiếp.
+* **Thực thi bởi:** `train_province_lstm_v5.py`
+* **Mục tiêu:** Tìm ra quy luật (Pattern) từ chuỗi thời gian lịch sử kết hợp với các biến NLP/Tương tác/Aspects để dự đoán lượng đặt phòng thực tế (`hotel_review_volume`) của Tỉnh trong 12 tháng kế tiếp.
 
 ### 1. Đầu vào (Inputs)
 Đọc bảng feature sinh ra từ bước trước: **`gold.gold.fact_province_month_dl_features`**.
@@ -84,7 +85,7 @@ Không cần tính toán lại bất kỳ feature nào trong Pipeline này, toà
 ### 2. Quá trình xử lý
 1. **Prepare Sequences:** Tạo cửa sổ trượt (Sequence Window), ví dụ `SEQUENCE_LENGTH = 3` tháng liên tục để dự đoán tháng thứ 4.
 2. **Scaling:** Chuẩn hóa dữ liệu bằng `RobustScaler` (sử dụng Median và IQR để tăng tính chống nhiễu từ các tỉnh có tương tác cực lớn/outliers) dựa trên tập Training.
-3. **Training:** Đưa vào kiến trúc mạng `LSTM + Lớp Attention`.
+3. **Training:** Đưa vào kiến trúc mạng `LSTM + Lớp Attention` với 3-way time split.
 4. **Forecasting (Dự báo 12 tháng):** Dự báo cuốn chiếu (Autoregressive). Nó dùng mô hình để đoán Tháng T+1. Sau đó lấy kết quả T+1 nhét vào chuỗi đầu vào để dự đoán tiếp T+2, T+3,... và tính toán lại động các thuộc tính lag (như `rolling_avg` và `lag_12` từ quá khứ).
 5. **Inverse Transform:** Sử dụng `expm1` đưa kết quả từ log-scale về định dạng volume thực tế.
 
@@ -92,14 +93,14 @@ Không cần tính toán lại bất kỳ feature nào trong Pipeline này, toà
 Kết quả sẽ được ghi xuất dưới hai dạng: Artifact mô hình (MLFlow) và Dữ liệu dự báo.
 
 1. **Mô hình Model (Lưu trên MLflow):** 
-   Tên mô hình: `province_hotel_volume_forecaster_lstm`. Các file hỗ trợ kèm theo: `scaler_lstm.pkl`, `feature_config.json`.
+   Tên mô hình: `province_hotel_volume_forecaster_lstm_v5`. Các file hỗ trợ kèm theo: `scaler_lstm_v5.pkl`, `feature_config_v5.json`.
 2. **Bảng kết quả Iceberg trên DL:** **`gold.gold.province_month_forecast_lstm_next12`**.
    * **Cấu trúc:**
      * `province_sk`, `province_name`, `region`: Thông tin định danh của Tỉnh.
      * `year`, `month`, `year_month`: Thời điểm được dự báo tương lai.
      * `horizon_month` (Int, từ 1 tới 12): Quãng thời gian dự báo (Tháng T+1 tới T+12).
      * `predicted_hotel_volume_actual` (Double): **Kết quả dự đoán** - Lượt đặt phòng thực tế sau expm1.
-     * `predicted_growth_pct` (Double): Tốc độ tăng trưởng dự tính.
+     * `predicted_growth_pct` (Double): Tốc độ tăng trưởng dự tính so với bước trước đó.
      * `forecast_date`: Ngày thực hiện dự báo.
 3. **File Parquet Export:**
-   * Một bản copy Parquet xuất thẳng lên Cloud/MinIO: `s3a://gold/ml_forecast/province_hotel_volume_forecast_lstm_*` để API giao diện (Gradio App) có thể dễ dàng truy xuất phục vụ biểu đồ.
+   * Một bản copy Parquet xuất thẳng lên Cloud/MinIO: `s3a://gold/dl_forecast/province_hotel_volume_forecast_lstm_v5` để API giao diện (Gradio App) có thể dễ dàng truy xuất phục vụ biểu đồ.

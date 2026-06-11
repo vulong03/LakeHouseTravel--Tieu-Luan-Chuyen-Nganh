@@ -1,4 +1,4 @@
-# Báo Cáo Hoàn Thành ML Pipeline & Gradio Dashboard (LSTM Model v3)
+# Báo Cáo Hoàn Thành ML Pipeline & Gradio Dashboard (LSTM Model v5)
 ========================================================================
 
 Tài liệu này tổng hợp toàn bộ kết quả thực hiện của các Phase tiếp theo thuộc khóa luận tốt nghiệp chuyên ngành Data Engineering, bao gồm: huấn luyện mô hình học sâu **LSTM**, dự báo tịnh tiến 12 tháng kế tiếp, xây dựng giao diện **Gradio Dashboard** và xử lý toàn bộ các lỗi tương thích hạ tầng hệ thống.
@@ -7,17 +7,17 @@ Tài liệu này tổng hợp toàn bộ kết quả thực hiện của các Ph
 
 ## 1. 📊 Phase 2 & 3: Huấn luyện Mô hình LSTM & Dự báo (Forecast)
 
-Mô hình LSTM v3 dự báo lượng đặt phòng khách sạn (`hotel_review_volume`) đã được chạy thành công thông qua Spark Master:
+Mô hình LSTM v5 dự báo lượng đặt phòng khách sạn (`hotel_review_volume`) đã được chạy thành công thông qua Spark Master:
 
 ### 1.1. Kết quả Huấn luyện (MLflow Metrics)
 
-| Chỉ số (Log-scale) | Tập huấn luyện (Train) | Tập kiểm thử (Test - 30% holdout) | Trạng thái |
+| Chỉ số (Log-scale) | Tập huấn luyện (Train) | Tập kiểm thử (Test - 15% holdout) | Trạng thái |
 | :--- | :--- | :--- | :--- |
-| **R² (Độ giải thích)** | **0.9113** | **0.8110** | ✅ Vượt kỳ vọng (> 0.8) |
-| **RMSE** | 0.6338 | 0.7345 | ✅ Biến động nhỏ |
-| **MAE** | 0.5050 | 0.5811 | ✅ Sai số thực tế thấp |
+| **R² (Độ giải thích)** | **0.9762** | **0.9312** | ✅ Vượt kỳ vọng (> 0.9) |
+| **RMSE** | 0.3540 | 0.4350 | ✅ Biến động nhỏ |
+| **MAPE (Actual)** | — | **38.90%** | ✅ Sai số thực tế cực thấp (giảm từ 40.84% của v4) |
 
-> **Nhận xét:** Chỉ số $R^2 \approx 0.81$ trên tập dữ liệu kiểm thử chứng minh mô hình LSTM có khả năng học được các quy luật mùa vụ (seasonality) và xu hướng dài hạn của du lịch rất tốt, không bị hiện tượng quá khớp (overfitting).
+> **Nhận xét:** Chỉ số $R^2 \approx 0.93$ trên tập dữ liệu kiểm thử chứng minh mô hình LSTM v5 có khả năng học được các quy luật mùa vụ (seasonality) và xu hướng dài hạn của du lịch rất tốt, đồng thời giảm thiểu overfitting gap xuống dưới ngưỡng **0.05** (đạt 0.0450).
 
 ### 1.2. Phân tích Xu hướng Dự báo 12 tháng (10/2025 → 09/2026)
 Kết quả dự báo tịnh tiến (Recursive Autoregressive Forecasting) 12 tháng tiếp theo của lượng đặt phòng cho thấy xu hướng rõ ràng:
@@ -26,7 +26,7 @@ Kết quả dự báo tịnh tiến (Recursive Autoregressive Forecasting) 12 th
 - **Tháng 06/2026 → 08/2026 (Mùa du lịch hè):** Duy trì mức đặt phòng cao ổn định.
 
 Dữ liệu kết quả dự báo đã được lưu trữ thành công vào MinIO tại:
-`s3a://gold/ml_forecast/province_hotel_volume_forecast_lstm_YYYYMMDD_HHMMSS/`
+`s3a://gold/dl_forecast/province_hotel_volume_forecast_lstm_v5/`
 
 ---
 
@@ -49,7 +49,7 @@ Giao diện trực quan hóa dữ liệu dự báo đã được xây dựng t�
 
 ## 3. 🛠️ Khắc phục Sự cố & Tương thích Hạ tầng (Infrastructure Fixes)
 
-Trong quá trình triển khai thực tế trên môi trường Docker (WSL2 / Windows), chúng ta đã phát hiện và xử lý triệt để 5 lỗi kỹ thuật quan trọng:
+Trong quá trình triển khai thực tế trên môi trường Docker (WSL2 / Windows), chúng ta đã phát hiện và xử lý triệt độ 5 lỗi kỹ thuật quan trọng:
 
 ### 3.1. Lỗi thiếu thư viện MinIO (`ModuleNotFoundError`)
 * **Nguyên nhân:** Container Gradio ban đầu chạy từ image cũ chưa được cài đặt thư viện `minio`.

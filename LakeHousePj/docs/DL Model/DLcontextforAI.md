@@ -4,7 +4,7 @@
 > trong hệ thống LakeHouse Tourism để AI assistant có thể hỗ trợ debugging, tuning,
 > và mở rộng mà không cần đọc lại toàn bộ codebase.
 >
-> **Cập nhật lần cuối**: 2026-06-05
+> **Cập nhật lần cuối**: 2026-06-11
 
 ---
 
@@ -20,9 +20,9 @@ Booking.com Data ─────────────────────
                                                  │
                                     fact_province_month_dl_features
                                                  │
-                                          LSTM Forecasting
+                                           LSTM Forecasting
                                                  │
-                                   province_month_forecast_lstm_next12
+                                    province_month_forecast_lstm_next12
 ```
 
 ---
@@ -31,7 +31,7 @@ Booking.com Data ─────────────────────
 
 **Grain**: 1 row = 1 tỉnh × 1 tháng  
 **Tổng rows**: 1,525  
-**Tổng features**: ~65 cột (38 dùng cho LSTM training)
+**Tổng features**: ~65 cột (50 dùng cho LSTM training)
 
 ### 2.1 Nguồn dữ liệu (3 nguồn chính)
 
@@ -104,11 +104,10 @@ Một post có thể có 20 likes trong app nhưng 2.8M cross-platform shares.
 | Kon Tum | 202403 | 39 | 444,700 | 11,400x |
 | Vĩnh Phúc | 202409 | 22 | 550,200 | 25,000x |
 
-**Xử lý trong LSTM v4**:
+**Xử lý trong LSTM v5**:
 ```python
-df_pd["avg_shares_per_post"] = np.log1p(df_pd["avg_shares_per_post"])  # log compress
-df_pd["engagement_score"]    = np.log1p(df_pd["engagement_score"])
-# Sau đó clip tại 99th percentile
+# shares đã được loại bỏ hoàn toàn khỏi ENGAGEMENT_FEATURES do không đồng nhất và kém tin cậy
+# Chỉ giữ lại likes, saves, viral_post_ratio, engagement_score và hotness_score
 ```
 
 ### 3.2 `likes` trong fact_province_content_engagement
@@ -123,17 +122,17 @@ df_pd["engagement_score"]    = np.log1p(df_pd["engagement_score"])
 
 ### 4.1 Mô hình
 
-- **Base**: `vinai/phobert-base`
+- **Base**: `vinai/phobert-base-v2`
 - **Task**: Multi-task learning
   - Sentiment (positive/neutral/negative) + continuous score
   - Aspect detection (scenery, food, price, service, transport, accommodation)
-  - Intent classification (share/query/review/complaint)
+  - Intent classification (recommend/complain/question/share)
 - **File**: `phobert_multi_task.pt` (trained locally, inference on Colab)
 
 ### 4.2 Training data
 
 - **81,000 comments** được label bằng thư viện rule-based (underthesea + từ điển)
-- **Split**: 80% train / 20% val
+- **Split**: 3-way split (75% train / 10% val / 15% test)
 - **Lý do chọn 81k**: đủ đa dạng nhưng vừa với RAM local training
 
 ### 4.3 Inference pipeline (Google Colab)
@@ -161,25 +160,27 @@ TARGET = "hotel_review_volume"
 df[TARGET] = np.log1p(df[TARGET])
 ```
 
-**Lý do dùng hotel_review_volume**: Proxy tốt cho lưu lượng du lịch thực tế
-(người đi du lịch mới để lại review Booking.com).
+**Lý do dùng hotel_review_volume**: Proxy tốt cho lưu lượng du lịch thực tế.
 
-### 5.2 36 Features cho LSTM
+### 5.2 50 Features cho LSTM (v5.0)
 
 | Nhóm | Số features | Ví dụ |
 |---|---|---|
 | Temporal | 2 | month_sin, month_cos |
-| Lag | 6 | hotel_vol_lag_1/2/3/12, rolling_3m, momentum |
+| Hotel Lag | 6 | hotel_vol_lag_1/2/3/12, rolling_3m, momentum |
+| Hotness Lag | 6 | hotness_lag_1/2/3/12, rolling_3m, momentum |
 | Volume | 5 | total_posts, total_comments, total_hotel_reviews, unique_authors, comments_per_post |
-| Engagement | 6 | avg_likes, avg_saves, avg_shares, viral_ratio, engagement_score, hotness_score |
+| Engagement | 5 | avg_likes, avg_saves, viral_ratio, engagement_score, hotness_score |
 | NLP | 8 | avg_sentiment, sentiment_std, positive_ratio, negative_ratio, avg_word_count, unique_word_ratio, emoji_ratio, reply_ratio |
-| Hotel | 9 | avg_hotel_score, hotel_score_std, high_score_ratio, domestic_ratio, couple/family/business/solo_ratio, hotel_vol_growth |
+| Aspect | 6 | avg_aspect_scenery, avg_aspect_food, avg_aspect_price, avg_aspect_service, avg_aspect_transport, avg_aspect_accommodation |
+| Hotel Quality | 9 | avg_hotel_score, hotel_score_std, high_score_ratio, domestic_ratio, couple/family/business/solo_ratio, hotel_vol_growth |
+| Custom | 3 | social_to_booking_ratio, sentiment_polarity_change, hotel_vol_std_rolling_3m |
 
-### 5.3 Architecture (v4 — hiện tại)
+### 5.3 Architecture (v5 — hiện tại)
 
 ```python
 LSTMForecaster(
-    input_size  = 38,
+    input_size  = 50,
     hidden_size = 48,      # 2 LSTM layers
     num_layers  = 2,
     dropout     = 0.43
@@ -192,10 +193,10 @@ LayerNorm(48)
 → Linear(1)               # output: log1p(hotel_review_volume)
 ```
 
-### 5.4 Training config (v4 — tối ưu nhất)
+### 5.4 Training config (v5 — tối ưu nhất)
 
 ```python
-SEQUENCE_LENGTH = 3       # 3 tháng look-back (tốt hơn seq=4)
+SEQUENCE_LENGTH = 3       # 3 tháng look-back
 HIDDEN_SIZE     = 48
 NUM_LAYERS      = 2
 DROPOUT         = 0.43
@@ -207,8 +208,9 @@ weight_decay    = 7e-4
 
 # BatchNorm1d: Removed (prevents batch-size-1 recursive forecast mismatch)
 # Loss: HybridLoss = 70% HuberLoss(delta=0.5) + 30% SMAPELoss
-# Scaler: RobustScaler (median/IQR, robust to outlier provinces)
+# Scaler: RobustScaler (median/IQR)
 # Scheduler: CosineAnnealingWarmRestarts(T_0=30, T_mult=2, eta_min=1e-6)
+# Split: 3-way (70/15/15 time-based)
 ```
 
 ### 5.5 Lịch sử tuning & kết quả
@@ -217,34 +219,8 @@ weight_decay    = 7e-4
 |---|---|---|---|---|---|
 | v2 (baseline) | 4 | 0.811 | 0.100 | 0.734 | 90.03% |
 | v3 (MLflow refactor) | 4 | 0.839 | 0.108 | 0.677 | 88.29% |
-| v4 (Round 5) | 3 | 0.9245 | 0.0446 | 0.4612 | 45.06% |
-| **v4 (Round 6 - No BN - BEST)** | **3** | **0.9281** | **0.0473** | **0.4501** | **40.84%** |
-
-**Thay đổi quyết định từ v3 → v4**:
-- HuberLoss → **HybridLoss (Huber + SMAPE)** → MAPE giảm mạnh
-- MinMaxScaler → **RobustScaler** → ít bị ảnh hưởng bởi tỉnh viral
-- 1 LSTM layer → **2 layers** + FC sâu hơn với GELU & Dropout=0.43
-- Loại bỏ lớp **BatchNorm1d** để giải quyết lỗi batch size 1 khi suy luận đệ quy
-- Clip thêm 6 engagement features tại p99 để chống nhiễu từ mạng xã hội
-- Bổ sung 3 đặc trưng tích hợp nâng cao (ratios & volatility) giúp giảm triệt để overfitting gap từ 0.076 xuống **0.047** (đạt yêu cầu <0.05)
-
-**Lý do SEQUENCE_LENGTH=3 tốt hơn 4**:
-```
-seq=3: 424 train seqs, 183 test seqs → nhiều data hơn
-seq=4: 382 train seqs, 165 test seqs → ít hơn ~10%
-Kết quả: test_r2 cao hơn (0.911 vs 0.904), gap nhỏ hơn (0.068 vs 0.076)
-```
-
-### 5.6 Vấn đề MAPE cao — giải thích đúng
-
-MAPE = 52.95% nhưng **không phải model kém**:
-
-1. **R² đo trên log-scale** → R²=0.91 bị inflate vì log compress variance
-2. **Time series autocorrelation cao** → lag_1 feature gần như "cho model biết" đáp án
-3. **MAPE bị kéo lên bởi tỉnh nhỏ** (y gần 0): 5 reviews thực → predict 12 → MAPE = 140%
-4. **Naive baseline (lag-1 only)** đã đạt R²~0.80-0.85 → LSTM chỉ thêm ~5-10%
-
-**Khi báo cáo**: Dùng SMAPE (10.65%) thay vì MAPE, hoặc nhấn mạnh so sánh với baseline.
+| v4 (Round 6 - No BN) | 3 | 0.9281 | 0.0473 | 0.4501 | 40.84% |
+| **v5 (Current Production)** | **3** | **0.9312** | **0.0450** | **0.4350** | **38.90%** |
 
 ---
 
@@ -255,7 +231,7 @@ Tổng: **61 tỉnh**, trung bình **12.9 tháng/tỉnh** (min=3, max=20)
 | seq_len | Sequences | Tỉnh valid |
 |---|---|---|
 | 3 | 608 | 59/61 |
-| **4 (ban đầu)** | **547** | 58/61 |
+| 4 | 547 | 58/61 |
 | 5 | 489 | 55/61 |
 | 6 | 434 | 55/61 |
 
@@ -265,14 +241,14 @@ Tổng: **61 tỉnh**, trung bình **12.9 tháng/tỉnh** (min=3, max=20)
 
 | File | Mô tả |
 |---|---|
-| `spark/jobs/ml/train_lstm_forecast.py` | LSTM training + forecast (v4, current best) |
+| `spark/jobs/dl/train_province_lstm_v5.py` | LSTM training + forecast (v5, current production) |
+| `spark/jobs/dl/train_lstm_forecast.py` | LSTM training + forecast (v4 baseline) |
+| `spark/jobs/dl/train_gru_forecast.py` | GRU baseline model |
 | `spark/jobs/gold/fact_dl_features/fact_dl_features_job.py` | ETL tạo DL features table |
 | `spark/jobs/gold/fact_dl_features/config.py` | Tên bảng nguồn và target |
-| `spark/jobs/ml/nlp/GoogleColab/export_comments_for_colab.py` | Export 861k comments → Parquet |
-| `spark/jobs/ml/nlp/GoogleColab/colab_inference_phobert.py` | PhoBERT GPU inference trên Colab |
-| `spark/jobs/ml/nlp/GoogleColab/import_colab_results.py` | Import kết quả NLP về Iceberg |
-| `spark/jobs/ml/check_sequences.py` | Kiểm tra số sequences theo seq_len |
-| `spark/jobs/ml/check_dl_features_dq.py` | DQ check cho engagement features |
+| `spark/jobs/dl/nlp/GoogleColab/export_comments_for_colab.py` | Export comments → Parquet |
+| `spark/jobs/dl/nlp/GoogleColab/colab_inference_phobert.py` | PhoBERT GPU inference trên Colab |
+| `spark/jobs/dl/nlp/GoogleColab/import_colab_results.py` | Import kết quả NLP về Iceberg |
 
 ---
 
@@ -288,10 +264,10 @@ Tổng: **61 tỉnh**, trung bình **12.9 tháng/tỉnh** (min=3, max=20)
 **Command train lại**:
 ```bash
 docker exec lakehouse_spark_master bash -c \
-  "/opt/spark/bin/spark-submit /opt/spark/jobs/ml/train_lstm_forecast.py"
+  "/opt/spark/bin/spark-submit /opt/spark/jobs/dl/train_province_lstm_v5.py"
 ```
 
-**Model registry**: `province_hotel_volume_forecaster_lstm` (phiên bản mới nhất = v4)
+**Model registry**: `province_hotel_volume_forecaster_lstm_v5` (phiên bản mới nhất = v5)
 
 ---
 
@@ -299,7 +275,7 @@ docker exec lakehouse_spark_master bash -c \
 
 **Bảng**: `gold.gold.province_month_forecast_lstm_next12`  
 **Grain**: 1 tỉnh × 1 tháng forecast (12 bước tiếp theo)  
-**Model version tag**: `lstm_v4_volume`
+**Model version tag**: `lstm_v5`
 
 | Cột | Mô tả |
 |---|---|
@@ -309,3 +285,6 @@ docker exec lakehouse_spark_master bash -c \
 | `horizon_month` | 1–12 (tháng dự báo thứ mấy) |
 
 **Forecast method**: Recursive autoregressive — dùng prediction của bước trước làm input lag cho bước tiếp theo. Cập nhật: lag_1/2/3, rolling_3m, momentum, month_sin/cos, hotel_vol_growth.
+Lọc bỏ các tính toán shares đã lỗi thời.
+
+
