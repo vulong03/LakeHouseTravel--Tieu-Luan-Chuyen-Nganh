@@ -122,10 +122,10 @@ DL_FEATURES_TABLE = "gold.gold.fact_province_month_dl_features"
 
 FORECAST_MONTHS = 12
 
-# FIX 1: 3-way time-based split (train/val/test)
-# 70% train → 15% val → 15% test
-TRAIN_RATIO = 0.70
-VAL_RATIO   = 0.15
+# 3-way time-based split (train/val/test)
+# 75% train → 12.5% val → 12.5% test
+TRAIN_RATIO = 0.75
+VAL_RATIO   = 0.125
 TEST_RATIO  = 1.0 - TRAIN_RATIO - VAL_RATIO
 
 # Model hyperparameters (aligned with v4 configurations)

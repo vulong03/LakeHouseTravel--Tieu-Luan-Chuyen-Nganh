@@ -1108,7 +1108,41 @@ def create_app():
         with gr.Tabs():
 
             # ══════════════════════════════════════════════
-            # TAB 1: SEASONAL & THEMED RECOMMENDATIONS
+            # TAB 1: TOP PROVINCES (FORECAST RANKING)
+            # ══════════════════════════════════════════════
+            with gr.Tab("🏆 Forecast Ranking"):
+                with gr.Row():
+                    with gr.Column(scale=1, min_width=280):
+                        gr.HTML('<div class="filter-title">⚙️ Time Range Filters</div>')
+                        with gr.Group(elem_classes="filter-panel"):
+                            start_m = gr.Dropdown(MONTH_CHOICES, value="10/2025", label="Start Month")
+                            end_m   = gr.Dropdown(MONTH_CHOICES, value="09/2026", label="End Month")
+                            region_t2 = gr.Dropdown(list(REGIONS_EN.keys()), value="All Regions", label="Geographical Region")
+                            top_n_t2  = gr.Dropdown(["5", "10", "15", "20", "30"], value="10", label="Show Top N")
+                            sort_t2   = gr.Dropdown(
+                                ["Avg Est. Bookings/Month", "Avg Growth %"],
+                                value="Avg Est. Bookings/Month",
+                                label="Sort by"
+                            )
+                            btn2 = gr.Button("📊 Run Ranking", variant="primary", size="lg")
+
+                    with gr.Column(scale=3):
+                        info2 = gr.HTML()
+                        with gr.Row():
+                            chart2_vol = gr.Plot(label="Forecasted Est. Bookings Chart")
+                            chart2_growth = gr.Plot(label="Growth Rate Chart")
+                        table2 = gr.Dataframe(
+                            headers=["Rank", "Province", "Region", "Avg Est. Bookings/Month",
+                                     "Total Est. Bookings (Period)", "Avg Growth %", "Peak Month"],
+                            wrap=True,
+                        )
+
+                btn2.click(tab2_top_provinces,
+                           inputs=[start_m, end_m, region_t2, top_n_t2, sort_t2],
+                           outputs=[table2, chart2_vol, chart2_growth, info2])
+
+            # ══════════════════════════════════════════════
+            # TAB 2: SEASONAL & THEMED RECOMMENDATIONS
             # ══════════════════════════════════════════════
             with gr.Tab("🏖️ Seasonal Recommendations"):
                 with gr.Row():
@@ -1202,42 +1236,6 @@ def create_app():
                     outputs=[table_rec, chart_rec, cards_html, info_rec]
                 )
 
-
-
-            # ══════════════════════════════════════════════
-            # TAB 2: TOP PROVINCES (ORIGINAL FORECAST)
-            # ══════════════════════════════════════════════
-            with gr.Tab("🏆 Forecast Ranking"):
-                with gr.Row():
-                    with gr.Column(scale=1, min_width=280):
-                        gr.HTML('<div class="filter-title">⚙️ Time Range Filters</div>')
-                        with gr.Group(elem_classes="filter-panel"):
-                            start_m = gr.Dropdown(MONTH_CHOICES, value="10/2025", label="Start Month")
-                            end_m   = gr.Dropdown(MONTH_CHOICES, value="09/2026", label="End Month")
-                            region_t2 = gr.Dropdown(list(REGIONS_EN.keys()), value="All Regions", label="Geographical Region")
-                            top_n_t2  = gr.Dropdown(["5", "10", "15", "20", "30"], value="10", label="Show Top N")
-                            sort_t2   = gr.Dropdown(
-                                ["Avg Est. Bookings/Month", "Avg Growth %"],
-                                value="Avg Est. Bookings/Month",
-                                label="Sort by"
-                            )
-                            btn2 = gr.Button("📊 Run Ranking", variant="primary", size="lg")
-
-                    with gr.Column(scale=3):
-                        info2 = gr.HTML()
-                        with gr.Row():
-                            chart2_vol = gr.Plot(label="Forecasted Est. Bookings Chart")
-                            chart2_growth = gr.Plot(label="Growth Rate Chart")
-                        table2 = gr.Dataframe(
-                            headers=["Rank", "Province", "Region", "Avg Est. Bookings/Month",
-                                     "Total Est. Bookings (Period)", "Avg Growth %", "Peak Month"],
-                            wrap=True,
-                        )
-
-                btn2.click(tab2_top_provinces,
-                           inputs=[start_m, end_m, region_t2, top_n_t2, sort_t2],
-                           outputs=[table2, chart2_vol, chart2_growth, info2])
-
             # ══════════════════════════════════════════════
             # TAB 3: PROVINCE COMPARISON
             # ══════════════════════════════════════════════
@@ -1315,11 +1313,11 @@ def create_app():
             Tourism Analytics Engine · LSTM Hotel Volume Forecaster v5 · Powered by PySpark + Iceberg + MLflow + Gradio
         </div>
         """)
-        # Load default recommendations on startup
+        # Load default ranking on startup (Tab 1 = Forecast Ranking)
         app.load(
-            tab1_seasonal_recommend,
-            inputs=[t1_start_m, t1_end_m, theme_dd, region_dd, top_n_dd],
-            outputs=[table_rec, chart_rec, cards_html, info_rec]
+            tab2_top_provinces,
+            inputs=[start_m, end_m, region_t2, top_n_t2, sort_t2],
+            outputs=[table2, chart2_vol, chart2_growth, info2]
         )
 
 
