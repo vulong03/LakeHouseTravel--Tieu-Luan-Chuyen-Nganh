@@ -126,7 +126,7 @@ FORECAST_MONTHS = 12
 # 70% train → 15% val → 15% test
 TRAIN_RATIO = 0.70
 VAL_RATIO   = 0.15
-# TEST_RATIO  = 0.15 (implicit: remainder)
+TEST_RATIO  = 1.0 - TRAIN_RATIO - VAL_RATIO
 
 # Model hyperparameters (aligned with v4 configurations)
 SEQUENCE_LENGTH = 3
@@ -671,7 +671,7 @@ def train_model(df):
             "weight_decay":     str(WEIGHT_DECAY),
             "scheduler":        "CosineAnnealingWarmRestarts_T0=30_step_by_epoch",
             "num_features":     len(ALL_FEATURES),
-            "split":            f"train{int(TRAIN_RATIO*100)}/val{int(VAL_RATIO*100)}/test20",
+            "split":            f"train{int(TRAIN_RATIO*100)}/val{int(VAL_RATIO*100)}/test{int(TEST_RATIO*100)}",
             "fix_1_val_split":  "True",
             "fix_2_clip_leak":  "True",
             "fix_3_hotness_lag":"True",
@@ -752,7 +752,7 @@ def _save_artifacts(scaler, clip_thresholds):
         "sequence_length":  SEQUENCE_LENGTH,
         "scaler_type":      "RobustScaler",
         "model_version":    "lstm_v5",
-        "split":            {"train": TRAIN_RATIO, "val": VAL_RATIO, "test": 0.20},
+        "split":            {"train": TRAIN_RATIO, "val": VAL_RATIO, "test": TEST_RATIO},
         "clip_thresholds":  {k: float(v) for k, v in clip_thresholds.items()},
         "hotness_lag_features":  HOTNESS_LAG_FEATURES,
         "aspect_features":       ASPECT_FEATURES,
@@ -955,7 +955,7 @@ def main():
     print("=" * 80)
     print(f"  Source:   {DL_FEATURES_TABLE}")
     print(f"  Features: {len(ALL_FEATURES)} total")
-    print(f"  Split:    {int(TRAIN_RATIO*100)}/{int(VAL_RATIO*100)}/20 (train/val/test)")
+    print(f"  Split:    {int(TRAIN_RATIO*100)}/{int(VAL_RATIO*100)}/{int(TEST_RATIO*100)} (train/val/test)")
     print(f"  Fixes:    FIX1(val split) FIX2(clip leak) FIX3(hotness lag) "
           f"FIX4(aspect) FIX7(scheduler) "
           f"FIX8(growth) FIX9(bn)")
