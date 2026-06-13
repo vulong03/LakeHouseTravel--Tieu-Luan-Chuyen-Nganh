@@ -44,7 +44,7 @@ DEFAULT_ARGS = {
     'execution_timeout': timedelta(hours=2),
 }
 
-SPARK_JOB_BASE_PATH = '/opt/spark/jobs/DataQualify'
+SPARK_JOB_BASE_PATH = '/opt/spark/jobs/dataqualify'
 
 # ============================================
 # Helper Functions

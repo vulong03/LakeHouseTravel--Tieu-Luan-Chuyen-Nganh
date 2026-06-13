@@ -29,7 +29,7 @@ DEFAULT_ARGS = {
 # ============================================
 # Spark Job Paths
 # ============================================
-SPARK_JOB_BASE_PATH = '/opt/spark/jobs/DataQualify'
+SPARK_JOB_BASE_PATH = '/opt/spark/jobs/dataqualify'
 
 DQ_JOBS = [
     {
