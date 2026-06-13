@@ -743,6 +743,7 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
         df_posts_cleaned = None  # Keep for logging (to check if post_url was processed)
         df_comments_final = None
         df_comments_cleaned = None  # Keep for logging (to check if post_url was processed)
+        df_comments_validated = None  # Initialize for caching/unpersisting
         
         # Track append success status
         posts_append_success = True  # Default: no data to append is OK
@@ -786,6 +787,7 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
                 # Clean & Transform
                 print(f"Cleaning and transforming posts...")
                 df_posts_cleaned = clean_and_transform_posts(df_posts_raw, spark=spark)
+                df_posts_cleaned.cache()
                 
                 # Check duplicates with Silver (anti-join)
                 print(f"Checking duplicates with Silver table...")
@@ -866,6 +868,7 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
                     on="post_url",
                     how="inner"  # Only keep comments with existing posts
                 )
+                df_comments_validated.cache()
                 
                 orphan_count = df_comments_cleaned.count() - df_comments_validated.count()
                 if orphan_count > 0:
@@ -900,7 +903,23 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
             # ============================================================
             print(f"\nLogging batch files to PostgreSQL...")
             
-            # Calculate record counts per file from final DataFrames
+            # Pre-calculate record counts per file from final DataFrames using single aggregation queries
+            posts_counts = {}
+            if df_posts_cleaned is not None:
+                try:
+                    posts_counts_rows = df_posts_cleaned.groupBy("post_url").count().collect()
+                    posts_counts = {row["post_url"]: row["count"] for row in posts_counts_rows}
+                except Exception as count_err:
+                    print(f"Warning: Failed to calculate post counts: {count_err}")
+
+            comments_counts = {}
+            if df_comments_validated is not None:
+                try:
+                    comments_counts_rows = df_comments_validated.groupBy("post_url").count().collect()
+                    comments_counts = {row["post_url"]: row["count"] for row in comments_counts_rows}
+                except Exception as count_err:
+                    print(f"Warning: Failed to calculate comment counts: {count_err}")
+            
             for item in batch_items:
                 post_url = item["post_url"]
                 file_checksum = item["source_file_checksum"]
@@ -910,20 +929,11 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
                 try:
                     # Count posts for this file
                     # Check if post_url was PROCESSED (in cleaned data), not just appended
-                    posts_for_file = 0
-                    if df_posts_cleaned is not None:
-                        # Check if this post_url was processed (even if deduplicated)
-                        posts_check = df_posts_cleaned.filter(F.col("post_url") == post_url).count()
-                        if posts_check > 0:
-                            posts_for_file = 1  # Each post_url = 1 post record
+                    posts_for_file = 1 if post_url in posts_counts else 0
                     
                     # Count comments for this file
                     # Check if post_url was PROCESSED AND VALIDATED (in validated data)
-                    comments_for_file = 0
-                    if df_comments_validated is not None:
-                        comments_for_file = df_comments_validated \
-                            .filter(F.col("post_url") == post_url) \
-                            .count()
+                    comments_for_file = comments_counts.get(post_url, 0)
                     
                     total_records = posts_for_file + comments_for_file
                     
@@ -977,6 +987,18 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
                     print(f"   ⚠️  Failed to log file {file_name}: {log_error}")
                     batch_files_failed += 1
             
+            # Unpersist DataFrames at the end of a successful batch
+            if df_posts_cleaned is not None:
+                try:
+                    df_posts_cleaned.unpersist()
+                except:
+                    pass
+            if df_comments_validated is not None:
+                try:
+                    df_comments_validated.unpersist()
+                except:
+                    pass
+            
             # Update stats
             stats["posts_loaded"] += batch_posts_count
             stats["comments_loaded"] += batch_comments_count
@@ -993,6 +1015,18 @@ def process_batches(spark, unprocessed_items, scratch_path_posts, scratch_path_c
             print(f"{'='*40}")
             
         except Exception as e:
+            # Unpersist DataFrames if batch failed
+            if df_posts_cleaned is not None:
+                try:
+                    df_posts_cleaned.unpersist()
+                except:
+                    pass
+            if df_comments_validated is not None:
+                try:
+                    df_comments_validated.unpersist()
+                except:
+                    pass
+
             print(f"\nERROR in batch {batch_id}: {e}")
             import traceback
             traceback.print_exc()
