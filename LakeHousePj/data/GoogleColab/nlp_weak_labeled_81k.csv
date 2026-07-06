@@ -1,104 +1,104 @@
 comment_sk,comment_text,comment_level,comment_likes,sentiment_label,sentiment_confidence,aspects,intent_label,intent_confidence,aspect_scenery_pos,aspect_scenery_neg,aspect_food_pos,aspect_food_neg,aspect_price_pos,aspect_price_neg,aspect_service_pos,aspect_service_neg,aspect_transport_pos,aspect_transport_neg,aspect_accommodation_pos,aspect_accommodation_neg,use_for_sentiment,use_for_intent,is_weak_label
-782634,E xin giá vé 9/6 ạ,1,1.0,neutral,0.5,price,question,0.6666667,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-776100,150km ạ,2,1.0,neutral,0.5,transport,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-236323,Cả nhà có muốn em làm lịch trình Bà Nà by night không ạ? 🥰,1,1.0,positive,0.51,,question,0.75,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-335888,Việt nam ta có áo giáp chống giặc hết mà nhỉ😁,1,0.0,positive,0.51,price,question,0.6666667,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-273645,@Phươngg Thảoo đẹp lắm,1,2.0,positive,0.51,"accommodation,scenery",share,0.5,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,False,True,False
-203085,"T8 cũng được ạ, sen tàn mất 1 phần rồi, nhma trước khi đi bạn nên xem thời tiết trước khi boôk homestay 1 tuần vì mình sợ có tuần mưa có tuần không. Mình người Ninh Bình thấy tháng 4-5-6-7 là rất…",2,1.0,negative,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-489185,đi rồi nước ko sâu dành cho trẻ em,1,1.0,neutral,0.5,food,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-233936,đẹp quá nè,1,0.0,positive,0.51,"accommodation,scenery",share,0.5,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,False,True,False
-99202,mong một ngày đủ duyên được đến đây ạ🥺,1,3.0,negative,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-313109,phú thọ🥰,1,0.0,positive,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-755290,dong huong,1,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-399584,Đẹp quá shop ơi,1,2.0,positive,0.62,"accommodation,scenery",share,0.5,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,True,True,False
-855890,Nhà bạn ở đây luôn à 🥰🥰 thích thế,2,,positive,0.73,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
-1181,Đẹpp quá b,1,1.0,positive,0.51,"accommodation,scenery",share,0.5,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,False,True,False
-185136,"Mua vé tắm lẻ thì 120k/ người lớn, xong ở bên ngoài cũng đc nha, mình ở chi pâu cách cường hải mấy trăm mét thôi, siu đẹp",2,2.0,positive,0.51,"accommodation,transport,price,scenery",share,0.5,1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0,0.0,1.0,0.0,False,True,False
-280047,Mình đang tính đi cuối tuần mà đông toá🌝,1,0.0,negative,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-160363,@Mít🌻 đây nè,1,2.0,positive,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-739665,@kimberlypham02 😳😳,1,1.0,negative,0.62,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
-72299,Thêm 1 chuyến nữa🤣,2,0.0,positive,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-267503,check in giúp em nhé,2,0.0,positive,0.51,accommodation,question,0.6666667,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,False,True,False
-9857,mày bơi hay sao mà tời tận 6 tiếng hả ku,1,0.0,positive,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-442366,Cho m sdt hoac page b đặt phòng dc k. Giờ sợ lừa đảo quá,1,0.0,negative,0.73,"accommodation,price,scenery",complain,0.6666667,0.0,1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,1.0,True,True,False
-653332,Hà Giang đẹp ko cj oii,1,0.0,positive,0.51,"accommodation,scenery",share,0.5,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,False,True,False
-407989,"Có ai quê ở miền tây kh ạ, em muốn đc về miền tây chơi quá🥰🥰",1,126.0,positive,0.62,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
-379127,đúng gòi htrc tui đi té cái bụp mà lúc đó còn đông nx,2,0.0,negative,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-500319,Đẹp vậy 🥰,1,1.0,positive,0.62,"accommodation,scenery",share,0.5,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,True,True,False
-792013,Êii chill nhỉ,2,0.0,positive,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-408961,cứ thấy cảnh quê là bình yên gê 🥺,1,0.0,negative,0.51,scenery,share,0.5,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-199742,Sen có để địa chỉ ở đầu trang ạ,2,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-604597,Một năm rồi a oi🥺,2,0.0,negative,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-775791,"Này mình chụp 11/11/22 á mom,vào mùa khô nên cỏ ko xanh,mùa này là đẹp nhất á,muốn đi săn mây mà k lẽ cắp con đi từ sáng sớm thì hơi kì 😅",2,1.0,positive,0.51,"accommodation,scenery",share,0.5,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,False,True,False
-740206,Giờ mới xây lại mà,2,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-884089,BG với BN bh toàn ae miền núi chiếm spotslai hết rồi😁,1,,positive,0.51,scenery,share,0.5,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-791983,Xinh xỉu bà uôi,1,0.0,positive,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-246448,"Giờ ngoài đường có tainan thì mình k đi đường đó nữa, ngta kéo mih á :)))😒",2,0.0,negative,0.51,"transport,price",share,0.5,0.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0,0.0,0.0,False,True,False
-809590,Rồi đang bán trời mưa cái chạy đi đâu😭😭😭,1,1.0,negative,0.73,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
-82848,nô tì tây hoàng đế ta,1,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-133214,đi phú yên à,2,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-587556,nhà t có cái diệm mà kh biết miêu tả sao nữa 😂,1,2.0,positive,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-506525,qua cảm Pu chia bán,1,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-63977,Thầy cô giáo dạy bạn ăn nói như vậy à ?😳,2,0.0,negative,0.51,"food,price",question,0.875,0.0,0.0,0.0,1.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-143672,Đẹp qua ạ😳😳😳,1,1.0,negative,0.73,"accommodation,scenery",share,0.5,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,True,True,False
-554868,chet luon,2,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-805821,em tập xây kênh ạ,1,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-783702,Hihi. Hông Kong bên hông Chà Dzinh 😂😂😂,2,1.0,positive,0.73,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
-244002,😂😂😂 hoan hỉ cảnh chùa đẹp quá 🥰🥰,2,5.0,positive,0.84,"accommodation,scenery",share,0.5,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,True,True,False
-678505,Xin giá,1,1.0,neutral,0.5,price,question,0.6666667,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-196685,❤️Chờ b quay “trở về”,2,6.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-520539,Huế đâu,1,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-521270,10 k đông thế k lm j cũng giàu 🥺,2,0.0,negative,0.62,price,share,0.5,0.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
-693284,Sợ luôn trước khi ăn cứ hỏi trước chắc ăn 😅 có dịp ghé dưới xíu xin phép mời e cf nhé,2,0.0,negative,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-69763,Cho em xin giá phòng ạ,1,1.0,neutral,0.5,"accommodation,price",question,0.6666667,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-723781,cảnh đẹp 🥰🥰,1,2.0,positive,0.73,"accommodation,scenery",share,0.5,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,True,True,False
-524555,Mọi người nhấn follow để cập nhật thêm nhiều video hay từ Mỹ Tho Gì Cũng Có nha. Xin cảm ơn! 😊,2,0.0,positive,0.62,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
-602614,280 với người lớn cơ á mắc z 😭,1,3.0,negative,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-602369,Menu mới điều chỉnh ngon hơn nữa c ạ,2,1.0,neutral,0.5,food,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-652583,🥰 tam đảo đẹp quá,1,0.0,positive,0.62,"accommodation,scenery",share,0.5,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,True,True,False
-45581,Giá có ảo quá không 😱 xe khứ hồi + fremier có 1 củ 3 hơn,1,0.0,negative,0.51,,question,0.6666667,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-67264,toi đi rồi á vui lắm luon,1,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,True
-328846,Thanh Uyên ✌️,2,1.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-596941,Đi về r mới thấy cái clip này 🥺,1,1.0,negative,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-562483,Bữa t có rủ chỗ này nè,2,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-806973,"mình sống thời nay nghe vua kiểu bình thường thôi, chứ dân ngày xưa gặp vua chả sợ nhũn hết chân tay",1,0.0,negative,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-771491,Vừa giống vừa không giống 😭,1,1.0,negative,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-797347,Là trời địa điểm vui chơi bật nhất ><,1,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-387334,dịch vụ thì chán lắm,1,1.0,negative,0.51,service,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,False,True,False
-773971,😁😁😁😁😁,1,1.0,positive,0.73,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
-782078,@thuan thao,1,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-861908,Giờ nay thì đông pải biết,1,,negative,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-430676,@Lý khang @Thảo Sadboi,1,1.0,neutral,0.5,scenery,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-445333,làng cổ lộc yên nhà lưu niệm cụ huỳnh thúc kháng lò thung,1,1.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-226357,chào bạn nha chúc bạn ngày mới tràn đầy niềm vui ❤❤❤❤❤❤❤,1,1.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-552345,@Tô Tuấn Hoàng ib chủ shop luôn b ơi,2,2.0,positive,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-869082,đúng quá chị ơi,1,,positive,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-764904,thác bản dốc cao bằng ngày /4/5/2025 nghỉ chân tại đây 5 ngày,1,2.0,neutral,0.5,scenery,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-814690,sao trông như trong phim tận thế vậy trời. sợ thế mong mọi ng bình an,1,0.0,negative,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-208674,em xin video nhé 😊❤️,1,1.0,positive,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-461651,"nao vào thôn Khuổi ma, xã Hùng lợi, Tuyên Quang đi cũng có suối,đá đẹp lắm",1,1.0,positive,0.51,"accommodation,scenery",share,0.5,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,False,True,False
-547990,@Chào các mày 🤯,1,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-710971,Có bạn nhé,2,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-590004,🤣 dễ hiểu mà,2,0.0,positive,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-314018,Sau video hot rồi 💚,2,0.0,positive,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-627533,"Dù đi 4,5 lần rồi nhưng năm nay lại đi 1 năm có 1 lần giỗ tổ thôi 😅😅",1,0.0,positive,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-477311,shop có cho thuê hay bán tấm hắt sáng k ạ😭😭😭e cần gấp ngày mai ạ,1,1.0,negative,0.73,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
-790691,hôm 30/4 1/5 đi 2 ngày ta nói vui nha . làm gì làm phải tắm biển nha trải nghiệm tuyệt vời 🤣🤣🤣,1,0.0,positive,0.85833335,scenery,share,0.5,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
-427941,😳😳😳 đã,2,0.0,negative,0.73,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
-614149,🌹🌹🌹🌹🌹,1,1.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-363717,má ơi,2,0.0,positive,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-626052,Vĩnh phúc đổi tên thành phú thọ buồn thật,1,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-444781,Sau hay vay 🥰,2,0.0,positive,0.62,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
-35993,th4 mới đi🥺🥺,1,3.0,negative,0.62,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
-727959,Chỗ này nhiều góc để chụp hình nek🥰,2,0.0,positive,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-189793,điện biên đông,1,0.0,negative,0.51,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-516959,Đi nước lớn tắm đc chứ gặp hôm nước cạn đục ngàu chán kinh,1,0.0,negative,0.51,food,share,0.5,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-672007,Ai chưa lấy được tiền bị lừa mất qua sàn app vay đầu tư trên mạng nhắn mình chỉ cho chỗ uy tín lấy lại nhé ..,1,0.0,negative,0.51,,complain,0.6666667,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-388732,anh nên chỉnh màu nào đẹp hơn đc ko ạ chứ nhìn ntn thấy TQ mình xấu quá😭,1,0.0,negative,0.62,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
-698025,😳😳😳😳😳🤯,1,1.0,negative,0.73,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
-698274,xã Hồng Tiến tp phổ Yên Thái Nguyên chứ không còn huyện nữa nhé,1,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
-87043,@Laura Biltoft Brosbøl,1,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,True
-654843,chị ơi ở đó có cái biển cấm lấy đá đó chị,2,0.0,positive,0.51,scenery,share,0.5,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
+782634,E xin giá vé 9/6 ạ,1,1.0,neutral,1.0,price,question,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+776100,150km ạ,2,1.0,neutral,1.0,transport,share,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+236323,Cả nhà có muốn em làm lịch trình Bà Nà by night không ạ? 🥰,1,1.0,positive,0.9,,question,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+335888,Việt nam ta có áo giáp chống giặc hết mà nhỉ😁,1,0.0,positive,0.9,,share,0.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+273645,@Phươngg Thảoo đẹp lắm,1,2.0,positive,0.9,scenery,share,0.9,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+203085,"T8 cũng được ạ, sen tàn mất 1 phần rồi, nhma trước khi đi bạn nên xem thời tiết trước khi boôk homestay 1 tuần vì mình sợ có tuần mưa có tuần không. Mình người Ninh Bình thấy tháng 4-5-6-7 là rất…",2,1.0,neutral,0.8,accommodation,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+489185,đi rồi nước ko sâu dành cho trẻ em,1,1.0,positive,0.9,scenery,share,0.9,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+233936,đẹp quá nè,1,0.0,positive,0.95,scenery,share,0.9,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+99202,mong một ngày đủ duyên được đến đây ạ🥺,1,3.0,positive,0.8,,share,0.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+313109,phú thọ🥰,1,0.0,positive,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+755290,dong huong,1,0.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+399584,Đẹp quá shop ơi,1,2.0,positive,0.95,scenery,share,0.9,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+855890,Nhà bạn ở đây luôn à 🥰🥰 thích thế,2,,positive,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+1181,Đẹpp quá b,1,1.0,positive,0.95,scenery,share,0.9,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+185136,"Mua vé tắm lẻ thì 120k/ người lớn, xong ở bên ngoài cũng đc nha, mình ở chi pâu cách cường hải mấy trăm mét thôi, siu đẹp",2,2.0,positive,0.95,"accommodation,price,transport,scenery",share,0.9,1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0,0.0,1.0,0.0,True,True,False
+280047,Mình đang tính đi cuối tuần mà đông toá🌝,1,0.0,negative,0.85,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+160363,@Mít🌻 đây nè,1,2.0,positive,0.8,,share,0.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+739665,@kimberlypham02 😳😳,1,1.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+72299,Thêm 1 chuyến nữa🤣,2,0.0,positive,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+267503,check in giúp em nhé,2,0.0,neutral,0.9,scenery,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+9857,mày bơi hay sao mà tời tận 6 tiếng hả ku,1,0.0,neutral,0.8,,share,0.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+442366,Cho m sdt hoac page b đặt phòng dc k. Giờ sợ lừa đảo quá,1,0.0,neutral,0.85,accommodation,question,0.95,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+653332,Hà Giang đẹp ko cj oii,1,0.0,neutral,0.9,scenery,question,0.95,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+407989,"Có ai quê ở miền tây kh ạ, em muốn đc về miền tây chơi quá🥰🥰",1,126.0,positive,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+379127,đúng gòi htrc tui đi té cái bụp mà lúc đó còn đông nx,2,0.0,negative,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+500319,Đẹp vậy 🥰,1,1.0,positive,0.95,scenery,share,0.9,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+792013,Êii chill nhỉ,2,0.0,positive,0.9,scenery,share,0.9,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+408961,cứ thấy cảnh quê là bình yên gê 🥺,1,0.0,positive,0.9,scenery,share,0.9,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+199742,Sen có để địa chỉ ở đầu trang ạ,2,0.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+604597,Một năm rồi a oi🥺,2,0.0,neutral,0.8,,share,0.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+775791,"Này mình chụp 11/11/22 á mom,vào mùa khô nên cỏ ko xanh,mùa này là đẹp nhất á,muốn đi săn mây mà k lẽ cắp con đi từ sáng sớm thì hơi kì 😅",2,1.0,positive,0.9,scenery,share,0.9,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+740206,Giờ mới xây lại mà,2,0.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+884089,BG với BN bh toàn ae miền núi chiếm spotslai hết rồi😁,1,,neutral,0.8,,share,0.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+791983,Xinh xỉu bà uôi,1,0.0,positive,0.95,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+246448,"Giờ ngoài đường có tainan thì mình k đi đường đó nữa, ngta kéo mih á :)))😒",2,0.0,negative,0.9,transport,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,True,True,False
+809590,Rồi đang bán trời mưa cái chạy đi đâu😭😭😭,1,1.0,negative,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+82848,nô tì tây hoàng đế ta,1,0.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+133214,đi phú yên à,2,0.0,neutral,0.9,,question,0.95,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+587556,nhà t có cái diệm mà kh biết miêu tả sao nữa 😂,1,2.0,positive,0.8,,share,0.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+506525,qua cảm Pu chia bán,1,0.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+63977,Thầy cô giáo dạy bạn ăn nói như vậy à ?😳,2,0.0,negative,0.9,,question,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+143672,Đẹp qua ạ😳😳😳,1,1.0,positive,0.95,scenery,share,0.9,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+554868,chet luon,2,0.0,neutral,0.8,,share,0.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+805821,em tập xây kênh ạ,1,0.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+783702,Hihi. Hông Kong bên hông Chà Dzinh 😂😂😂,2,1.0,positive,0.8,,share,0.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+244002,😂😂😂 hoan hỉ cảnh chùa đẹp quá 🥰🥰,2,5.0,positive,0.95,scenery,share,0.9,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+678505,Xin giá,1,1.0,neutral,1.0,price,question,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+196685,❤️Chờ b quay “trở về”,2,6.0,positive,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+520539,Huế đâu,1,0.0,neutral,0.9,,question,0.95,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+521270,10 k đông thế k lm j cũng giàu 🥺,2,0.0,neutral,0.8,price,share,0.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+693284,Sợ luôn trước khi ăn cứ hỏi trước chắc ăn 😅 có dịp ghé dưới xíu xin phép mời e cf nhé,2,0.0,neutral,0.85,food,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+69763,Cho em xin giá phòng ạ,1,1.0,neutral,1.0,"accommodation,price",question,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+723781,cảnh đẹp 🥰🥰,1,2.0,positive,0.95,scenery,share,0.9,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+524555,Mọi người nhấn follow để cập nhật thêm nhiều video hay từ Mỹ Tho Gì Cũng Có nha. Xin cảm ơn! 😊,2,0.0,positive,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+602614,280 với người lớn cơ á mắc z 😭,1,3.0,negative,0.9,price,complain,0.9,0.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+602369,Menu mới điều chỉnh ngon hơn nữa c ạ,2,1.0,positive,0.9,food,share,0.9,0.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+652583,🥰 tam đảo đẹp quá,1,0.0,positive,0.95,scenery,share,0.9,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+45581,Giá có ảo quá không 😱 xe khứ hồi + fremier có 1 củ 3 hơn,1,0.0,positive,0.85,"price,transport",share,0.9,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,True,True,False
+67264,toi đi rồi á vui lắm luon,1,0.0,positive,0.95,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+328846,Thanh Uyên ✌️,2,1.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+596941,Đi về r mới thấy cái clip này 🥺,1,1.0,neutral,0.8,,share,0.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+562483,Bữa t có rủ chỗ này nè,2,0.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+806973,"mình sống thời nay nghe vua kiểu bình thường thôi, chứ dân ngày xưa gặp vua chả sợ nhũn hết chân tay",1,0.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+771491,Vừa giống vừa không giống 😭,1,1.0,neutral,0.8,,share,0.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+797347,Là trời địa điểm vui chơi bật nhất ><,1,0.0,positive,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+387334,dịch vụ thì chán lắm,1,1.0,negative,0.95,service,complain,0.95,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,True,True,False
+773971,😁😁😁😁😁,1,1.0,positive,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+782078,@thuan thao,1,0.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+861908,Giờ nay thì đông pải biết,1,,neutral,0.8,,share,0.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+430676,@Lý khang @Thảo Sadboi,1,1.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+445333,làng cổ lộc yên nhà lưu niệm cụ huỳnh thúc kháng lò thung,1,1.0,neutral,0.9,scenery,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+226357,chào bạn nha chúc bạn ngày mới tràn đầy niềm vui ❤❤❤❤❤❤❤,1,1.0,positive,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+552345,@Tô Tuấn Hoàng ib chủ shop luôn b ơi,2,2.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+869082,đúng quá chị ơi,1,,positive,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+764904,thác bản dốc cao bằng ngày /4/5/2025 nghỉ chân tại đây 5 ngày,1,2.0,neutral,0.9,scenery,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+814690,sao trông như trong phim tận thế vậy trời. sợ thế mong mọi ng bình an,1,0.0,negative,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+208674,em xin video nhé 😊❤️,1,1.0,positive,0.9,,question,0.95,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+461651,"nao vào thôn Khuổi ma, xã Hùng lợi, Tuyên Quang đi cũng có suối,đá đẹp lắm",1,1.0,positive,0.95,scenery,recommend,0.95,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+547990,@Chào các mày 🤯,1,0.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+710971,Có bạn nhé,2,0.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+590004,🤣 dễ hiểu mà,2,0.0,positive,0.8,,share,0.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+314018,Sau video hot rồi 💚,2,0.0,positive,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+627533,"Dù đi 4,5 lần rồi nhưng năm nay lại đi 1 năm có 1 lần giỗ tổ thôi 😅😅",1,0.0,positive,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+477311,shop có cho thuê hay bán tấm hắt sáng k ạ😭😭😭e cần gấp ngày mai ạ,1,1.0,neutral,0.9,,question,0.95,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+790691,hôm 30/4 1/5 đi 2 ngày ta nói vui nha . làm gì làm phải tắm biển nha trải nghiệm tuyệt vời 🤣🤣🤣,1,0.0,positive,0.95,scenery,recommend,0.95,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+427941,😳😳😳 đã,2,0.0,positive,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+614149,🌹🌹🌹🌹🌹,1,1.0,positive,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+363717,má ơi,2,0.0,neutral,0.8,,share,0.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+626052,Vĩnh phúc đổi tên thành phú thọ buồn thật,1,0.0,negative,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+444781,Sau hay vay 🥰,2,0.0,positive,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+35993,th4 mới đi🥺🥺,1,3.0,neutral,0.85,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+727959,Chỗ này nhiều góc để chụp hình nek🥰,2,0.0,positive,0.95,scenery,share,0.9,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+189793,điện biên đông,1,0.0,neutral,0.9,scenery,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+516959,Đi nước lớn tắm đc chứ gặp hôm nước cạn đục ngàu chán kinh,1,0.0,negative,0.95,scenery,complain,0.95,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+672007,Ai chưa lấy được tiền bị lừa mất qua sàn app vay đầu tư trên mạng nhắn mình chỉ cho chỗ uy tín lấy lại nhé ..,1,0.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+388732,anh nên chỉnh màu nào đẹp hơn đc ko ạ chứ nhìn ntn thấy TQ mình xấu quá😭,1,0.0,negative,0.95,scenery,complain,0.95,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
+698025,😳😳😳😳😳🤯,1,1.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+698274,xã Hồng Tiến tp phổ Yên Thái Nguyên chứ không còn huyện nữa nhé,1,0.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+87043,@Laura Biltoft Brosbøl,1,0.0,neutral,0.9,,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,False,False
+654843,chị ơi ở đó có cái biển cấm lấy đá đó chị,2,0.0,neutral,0.9,scenery,share,0.9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,True,True,False
 52237,có ghé chưa bé,2,0.0,neutral,0.5,,share,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
 449458,cảnh đẹp lắm bạn ơi ❤️❤️❤️😘😘,1,1.0,positive,0.84,"accommodation,scenery",share,0.5,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,True,True,False
 148420,Nghe hợp lý lắm ạ 😁,2,0.0,positive,0.51,price,share,0.5,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,False,True,False
