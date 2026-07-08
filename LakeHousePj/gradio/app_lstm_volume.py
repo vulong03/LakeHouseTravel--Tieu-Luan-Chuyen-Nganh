@@ -216,9 +216,18 @@ def get_model_info():
             "version": latest.version,
             "run_id": latest.run_id,
             "trained_at": datetime.fromtimestamp(run.info.start_time / 1000).strftime("%Y-%m-%d %H:%M"),
-            "train_rmse": m.get("train_rmse"), "train_r2": m.get("train_r2"),
-            "test_rmse":  m.get("test_rmse"),  "test_r2":  m.get("test_r2"),
-            "test_mae":   m.get("test_mae"),    "test_mape_actual": m.get("test_mape_actual"),
+            
+            # Log scale
+            "train_rmse_log": m.get("train_rmse_log"), "train_mae_log": m.get("train_mae_log"), "train_r2_log": m.get("train_r2_log"),
+            "test_rmse_log":  m.get("test_rmse_log"),  "test_mae_log":  m.get("test_mae_log"),  "test_r2_log":  m.get("test_r2_log"),
+            "val_rmse_log":   m.get("val_rmse_log"),   "val_mae_log":   m.get("val_mae_log"),   "val_r2_log":   m.get("val_r2_log"),
+            "test_smape_log": m.get("test_smape_log"),
+
+            # Actual scale
+            "train_rmse_actual": m.get("train_rmse_actual"), "train_mae_actual": m.get("train_mae_actual"), "train_r2_actual": m.get("train_r2_actual"), "train_wape_actual": m.get("train_wape_actual"), "train_mape_actual": m.get("train_mape_actual"),
+            "test_rmse_actual":  m.get("test_rmse_actual"),  "test_mae_actual":  m.get("test_mae_actual"),  "test_r2_actual":  m.get("test_r2_actual"),  "test_wape_actual":  m.get("test_wape_actual"),  "test_mape_actual":  m.get("test_mape_actual"),
+            "val_rmse_actual":   m.get("val_rmse_actual"),   "val_mae_actual":   m.get("val_mae_actual"),   "val_r2_actual":   m.get("val_r2_actual"),   "val_wape_actual":   m.get("val_wape_actual"),   "val_mape_actual":   m.get("val_mape_actual"),
+            
             "best_val_loss": m.get("best_val_loss"),
             "epochs_trained": m.get("epochs_trained"),
             "num_features": p.get("num_features"),
@@ -776,6 +785,8 @@ def tab4_model_info():
     if info:
         def _fmt(v):
             return f"{v:.4f}" if v is not None else "—"
+        def _fmt_dec(v):
+            return f"{v:.2f}" if v is not None else "—"
 
         html = f"""
 <div style="font-family: 'Inter', sans-serif; max-width: 900px; margin: 0 auto; color: #f1f5f9;">
@@ -787,18 +798,43 @@ def tab4_model_info():
     <p style="margin:8px 0 0; opacity:0.75; font-size:0.9em">Trained: {info['trained_at']} · Run ID: {info['run_id'][:12]}…</p>
   </div>
 
-  <!-- Metrics grid -->
+  <!-- Metrics grid (Standardized Log vs Actual Scale) -->
+  <h3 style="margin:20px 0 10px; color:#f1f5f9; font-weight: 700;">📊 Model Metrics Specs</h3>
   <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 20px;">
-    <div style="background:rgba(34, 197, 94, 0.1); border-left:4px solid #22c55e; border-radius:10px; padding:18px; border-top:1px solid rgba(34,197,94,0.15); border-right:1px solid rgba(34,197,94,0.15); border-bottom:1px solid rgba(34,197,94,0.15);">
-      <div style="font-size:0.85em; color:#22c55e; font-weight:700; margin-bottom:6px;">TRAIN SET</div>
-      <div style="font-size:1.4em; font-weight:700; color:#4ade80">R² = {_fmt(info['train_r2'])}</div>
-      <div style="color:#a7f3d0; margin-top:4px; font-size:0.9em;">RMSE = {_fmt(info['train_rmse'])}</div>
+    
+    <!-- Log Scale Metrics Card -->
+    <div style="background:rgba(30, 41, 59, 0.5); border-left:4px solid #a855f7; border-radius:10px; padding:18px; border-top:1px solid #1f2937; border-right:1px solid #1f2937; border-bottom:1px solid #1f2937;">
+      <div style="font-size:0.85em; color:#c084fc; font-weight:700; margin-bottom:10px;">📉 LOG SCALE METRICS (Training Space)</div>
+      
+      <div style="margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px dashed #334155;">
+        <strong style="color: #e2e8f0; font-size: 0.95em;">Test Set (Hold-out):</strong>
+        <div style="font-size:1.3em; font-weight:700; color:#c084fc; margin-top:4px;">R² = {_fmt(info['test_r2_log'])}</div>
+        <div style="font-size:0.9em; color:#94a3b8; margin-top:2px;">RMSE = {_fmt(info['test_rmse_log'])} · MAE = {_fmt(info['test_mae_log'])}</div>
+      </div>
+      
+      <div>
+        <strong style="color: #cbd5e1; font-size: 0.9em;">Train Set baseline:</strong>
+        <div style="font-size:0.9em; color:#94a3b8; margin-top:2px;">R² = {_fmt(info['train_r2_log'])} · RMSE = {_fmt(info['train_rmse_log'])}</div>
+      </div>
     </div>
+    
+    <!-- Actual Scale Metrics Card -->
     <div style="background:rgba(59, 130, 246, 0.1); border-left:4px solid #3b82f6; border-radius:10px; padding:18px; border-top:1px solid rgba(59,130,246,0.15); border-right:1px solid rgba(59,130,246,0.15); border-bottom:1px solid rgba(59,130,246,0.15);">
-      <div style="font-size:0.85em; color:#3b82f6; font-weight:700; margin-bottom:6px;">TEST SET (hold-out 12.5%)</div>
-      <div style="font-size:1.4em; font-weight:700; color:#60a5fa">R² = {_fmt(info['test_r2'])}</div>
-      <div style="color:#bfdbfe; margin-top:4px; font-size:0.9em;">RMSE = {_fmt(info['test_rmse'])} · MAE = {_fmt(info['test_mae'])}</div>
+      <div style="font-size:0.85em; color:#3b82f6; font-weight:700; margin-bottom:10px;">🏖️ ACTUAL SCALE METRICS (Physical Reviews)</div>
+      
+      <div style="margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px dashed #334155;">
+        <strong style="color: #e2e8f0; font-size: 0.95em;">Test Set (Hold-out):</strong>
+        <div style="font-size:1.3em; font-weight:700; color:#60a5fa; margin-top:4px;">R² = {_fmt(info['test_r2_actual'])}</div>
+        <div style="font-size:0.9em; color:#bfdbfe; margin-top:2px;">RMSE = {_fmt_dec(info['test_rmse_actual'])} · MAE = {_fmt_dec(info['test_mae_actual'])} reviews</div>
+        <div style="font-size:0.95em; color:#38bdf8; font-weight:700; margin-top:6px;">WAPE = {_fmt_dec(info['test_wape_actual'])}% · MAPE = {_fmt_dec(info['test_mape_actual'])}%</div>
+      </div>
+      
+      <div>
+        <strong style="color: #cbd5e1; font-size: 0.9em;">Train Set baseline:</strong>
+        <div style="font-size:0.9em; color:#94a3b8; margin-top:2px;">R² = {_fmt(info['train_r2_actual'])} · WAPE = {_fmt_dec(info['train_wape_actual'])}%</div>
+      </div>
     </div>
+
   </div>
 
   <!-- Architecture -->
@@ -807,9 +843,9 @@ def tab4_model_info():
     <table style="width:100%; border-collapse:collapse; font-size:0.95em; color:#cbd5e1;">
       <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Model Architecture</td><td style="padding:8px 14px">LSTM + LayerNorm + Temporal Attention + Dense (Multi-features)</td></tr>
       <tr><td style="padding:8px 14px; font-weight:600">Target Variable (Log-normalized)</td><td style="padding:8px 14px">hotel_volume (hotel_review_volume, Log1p scaled, Expm1 output)</td></tr>
-      <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Number of Features</td><td style="padding:8px 14px">{info.get('num_features', '50')} (includes Hotel & Hotness volume/lags, TikTok engagement, NLP & PhoBERT aspects)</td></tr>
+      <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Number of Features</td><td style="padding:8px 14px">{info.get('num_features', '39')} (includes Hotel & Hotness volume/lags, TikTok engagement, NLP & PhoBERT aspects)</td></tr>
       <tr><td style="padding:8px 14px; font-weight:600">Input Sequence Length</td><td style="padding:8px 14px">{info.get('sequence_length', '3')} historical months</td></tr>
-      <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Hidden Size</td><td style="padding:8px 14px">{info.get('hidden_size', '48')} units</td></tr>
+      <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Hidden Size</td><td style="padding:8px 14px">{info.get('hidden_size', '48')} units (Optuna optimized)</td></tr>
       <tr><td style="padding:8px 14px; font-weight:600">Loss Function</td><td style="padding:8px 14px">HybridLoss (70% Huber + 30% SMAPE) — directly optimizes for MAPE reduction</td></tr>
       <tr style="background:#1f2937"><td style="padding:8px 14px; font-weight:600">Actual Epochs Run</td><td style="padding:8px 14px">{info.get('epochs_trained', '—')} (Early Stopping patience=25)</td></tr>
       <tr><td style="padding:8px 14px; font-weight:600">Best Validation Loss</td><td style="padding:8px 14px">{_fmt(info.get('best_val_loss'))}</td></tr>

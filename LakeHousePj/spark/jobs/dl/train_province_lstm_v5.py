@@ -2,68 +2,24 @@
 ML Pipeline: Train LSTM Deep Learning Model & Forecast Province Hotel Volume
 =============================================================================
 
-Source table: gold.gold.fact_province_month_dl_features (~47 features after v5 additions)
+Source table: gold.gold.fact_province_month_dl_features
 
-Architecture (v5):
+Architecture:
 - 2-layer LSTM + LayerNorm + Temporal Attention
 - Deeper FC head: Linear(hidden) → GELU → Dropout → Linear(16) → ReLU → Linear(1)
 - HybridLoss: 70% HuberLoss + 30% SMAPELoss
 - RobustScaler (median/IQR)
 - CosineAnnealingWarmRestarts scheduler
 
-Changes from v4 → v5:
-============================================================
-🔴 FIX 1 [CRITICAL] Train/Val/Test split
-   v4: 2-way split (70/30), test_loader dùng làm val cho early stopping
-       → test metrics bị lạc quan (test set không còn khách quan)
-   v5: 3-way split (60/20/20 time-based)
-       train → học weights
-       val   → early stopping, chọn epoch tốt nhất (KHÔNG báo metrics)
-       test  → chỉ dùng 1 lần để report final metrics
-
-🔴 FIX 2 [CRITICAL] Outlier clipping leakage
-   v4: tính p99 trên toàn bộ df_pd TRƯỚC khi split
-       → ngưỡng clip đã "nhìn thấy" test period → leakage nhẹ
-   v5: chia train/val/test TRƯỚC, tính p99 trên train only,
-       apply cùng ngưỡng cho val/test
-
-🟡 FIX 3 Thêm hotness_lag features
-   v4: chỉ dùng hotness_score (hiện tại), bỏ qua lag
-   v5: thêm hotness_lag_1/2/3/12, hotness_rolling_3m, hotness_momentum
-       → lập luận "TikTok có tác động trễ" có bằng chứng trong feature set
-
-🟡 FIX 4 Thêm PhoBERT aspect features
-   v4: bỏ qua avg_aspect_scenery/food/price/service/transport/accommodation
-   v5: thêm đủ 6 aspect features
-       → PhoBERT pipeline được tận dụng đầy đủ trong LSTM
-
-🟢 FIX 7 Sửa scheduler.step() bug
-   v4: scheduler.step(epoch + avg_val / 100)
-       → CosineAnnealingWarmRestarts nhận epoch position, không nhận loss
-   v5: scheduler.step(epoch) — đúng API
-
-🟢 FIX 8 Sửa growth_pct bug trong forecast loop
-   v4: last_actual_volume gán 1 lần trước loop
-       → tất cả 12 horizon so growth với tháng cuối lịch sử cố định
-   v5: prev_volume cập nhật mỗi bước horizon
-
-🟢 FIX 9 Bỏ unused BatchNorm1d layer
-   v4: self.bn khai báo nhưng bị comment out → lãng phí params
-   v5: xóa hẳn self.bn
-
-🟢 FIX 10 Framing rõ 12-month forecast assumption
-   v5: doc rõ "social/NLP features dùng persistence assumption
-       (giữ theo trạng thái gần nhất)" trong output table
-
-Features v5: 47 total
+Features: 39 total
   Temporal (2): month_sin, month_cos
-  Hotel lag (6): hotel_vol_lag_1/2/3/12, rolling_3m, momentum
-  Hotness lag (6): hotness_lag_1/2/3/12, rolling_3m, momentum  [NEW]
-  Volume (5): total_posts, total_comments, total_hotel_reviews, unique_authors, comments_per_post
-  Engagement (4): avg_likes_per_post, avg_saves_per_post, viral_post_ratio, engagement_score, hotness_score
-  NLP (7): avg_sentiment, sentiment_std, positive_ratio, negative_ratio,
-           avg_word_count, avg_unique_word_ratio, emoji_sentiment_ratio, reply_ratio
-  Aspect (6): avg_aspect_scenery, avg_aspect_food, avg_aspect_price,  [NEW]
+  Hotel lag (3): hotel_vol_lag_12, hotel_vol_rolling_3m, hotel_vol_momentum
+  Hotness lag (3): hotness_lag_12, hotness_rolling_3m, hotness_momentum
+  Volume (3): total_posts, total_comments, comments_per_post
+  Engagement (4): avg_likes_per_post, avg_saves_per_post, viral_post_ratio, engagement_score
+  NLP (6): avg_sentiment, sentiment_std, positive_ratio, negative_ratio,
+           emoji_sentiment_ratio, reply_ratio
+  Aspect (6): avg_aspect_scenery, avg_aspect_food, avg_aspect_price,
               avg_aspect_service, avg_aspect_transport, avg_aspect_accommodation
   Hotel quality (9): avg_hotel_score, hotel_score_std, high_score_ratio,
                      domestic_review_ratio, couple_ratio, family_ratio,
@@ -110,6 +66,31 @@ from torch.utils.data import Dataset, DataLoader
 
 from utils.iceberg_utils import create_iceberg_table_if_not_exists
 
+optuna_available = False
+import sys
+import os
+LIB_PATH = "/tmp/pip_packages"
+if LIB_PATH not in sys.path:
+    sys.path.append(LIB_PATH)
+
+try:
+    import optuna
+    optuna_available = True
+except ImportError:
+    import subprocess
+    try:
+        print(f"  Optuna not found. Trying to install via pip to {LIB_PATH}...")
+        os.makedirs(LIB_PATH, exist_ok=True)
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install",
+            f"--target={LIB_PATH}", "optuna"
+        ])
+        import optuna
+        optuna_available = True
+        print("  Optuna installed successfully.")
+    except Exception as e:
+        print(f"  WARNING: Failed to install optuna ({e}). Fallback to hardcoded hyperparameters.")
+
 # ============================================================
 # Configuration
 # ============================================================
@@ -128,16 +109,22 @@ TRAIN_RATIO = 0.75
 VAL_RATIO   = 0.125
 TEST_RATIO  = 1.0 - TRAIN_RATIO - VAL_RATIO
 
-# Model hyperparameters (aligned with v4 configurations)
+# Default/Fallback hyperparameters (aligned with v4 configurations)
 SEQUENCE_LENGTH = 3
-HIDDEN_SIZE     = 48
-NUM_LAYERS      = 2
-DROPOUT         = 0.43
-LEARNING_RATE   = 0.0005
+DEFAULT_HIDDEN_SIZE   = 48
+DEFAULT_NUM_LAYERS    = 2
+DEFAULT_DROPOUT       = 0.43
+DEFAULT_LEARNING_RATE = 0.0005
+DEFAULT_WEIGHT_DECAY  = 7e-4
+
 EPOCHS          = 200
 BATCH_SIZE      = 32
 PATIENCE        = 25
-WEIGHT_DECAY    = 7e-4
+
+# Hyperparameter Search Space for Optuna
+TUNING_EPOCHS   = 80
+TUNING_PATIENCE = 10
+N_TRIALS        = 15
 
 TARGET = "hotel_review_volume"
 
@@ -148,36 +135,28 @@ TARGET = "hotel_review_volume"
 TEMPORAL_FEATURES = ["month_sin", "month_cos"]
 
 HOTEL_LAG_FEATURES = [
-    "hotel_vol_lag_1", "hotel_vol_lag_2", "hotel_vol_lag_3",
     "hotel_vol_lag_12", "hotel_vol_rolling_3m", "hotel_vol_momentum",
 ]
 
-# FIX 3: hotness lag features (TikTok delayed signal)
 HOTNESS_LAG_FEATURES = [
-    "hotness_lag_1", "hotness_lag_2", "hotness_lag_3",
     "hotness_lag_12", "hotness_rolling_3m", "hotness_momentum",
 ]
 
 VOLUME_FEATURES = [
-    "total_posts", "total_comments", "total_hotel_reviews",
-    "unique_authors", "comments_per_post",
+    "total_posts", "total_comments",
+    "comments_per_post",
 ]
 
 ENGAGEMENT_FEATURES = [
-    # avg_shares_per_post REMOVED (v4, 2026-06-05):
-    # TikTok "total distribution" metric, 63.6% NULL, không đồng nhất → không tin cậy
     "avg_likes_per_post", "avg_saves_per_post",
     "viral_post_ratio", "engagement_score",
-    "hotness_score",
 ]
 
 NLP_FEATURES = [
     "avg_sentiment", "sentiment_std", "positive_ratio", "negative_ratio",
-    "avg_word_count", "avg_unique_word_ratio",
     "emoji_sentiment_ratio", "reply_ratio",
 ]
 
-# FIX 4: PhoBERT aspect features (previously unused)
 ASPECT_FEATURES = [
     "avg_aspect_scenery", "avg_aspect_food", "avg_aspect_price",
     "avg_aspect_service", "avg_aspect_transport", "avg_aspect_accommodation",
@@ -194,15 +173,15 @@ CUSTOM_FEATURES = [
     "social_to_booking_ratio", "sentiment_polarity_change", "hotel_vol_std_rolling_3m",
 ]
 
-# Full feature set (v5: 47 features)
+# Full feature set (39 features)
 ALL_FEATURES = (
     TEMPORAL_FEATURES
     + HOTEL_LAG_FEATURES
-    + HOTNESS_LAG_FEATURES      # FIX 3: +6 new
+    + HOTNESS_LAG_FEATURES
     + VOLUME_FEATURES
     + ENGAGEMENT_FEATURES
     + NLP_FEATURES
-    + ASPECT_FEATURES           # FIX 4: +6 new
+    + ASPECT_FEATURES
     + HOTEL_FEATURES
     + CUSTOM_FEATURES
 )
@@ -249,7 +228,6 @@ class TemporalAttention(nn.Module):
 class LSTMForecaster(nn.Module):
     """
     2-layer LSTM + LayerNorm + Temporal Attention + deep FC head.
-    v5: removed unused BatchNorm1d layer (FIX 9).
     """
     def __init__(self, input_size, hidden_size, num_layers, dropout):
         super().__init__()
@@ -260,7 +238,6 @@ class LSTMForecaster(nn.Module):
         )
         self.layer_norm = nn.LayerNorm(hidden_size)
         self.attention  = TemporalAttention(hidden_size)
-        # FIX 9: BatchNorm1d removed — was declared but never used in v4
         self.fc = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
             nn.GELU(),
@@ -432,26 +409,53 @@ def prepare_sequences(df_pd, features, target, seq_length):
 
 
 def compute_metrics(y_true, y_pred, prefix=""):
-    """Compute all metrics on log scale, plus MAPE/SMAPE on actual scale."""
-    y_true_actual = np.expm1(y_true)
-    y_pred_actual = np.expm1(np.clip(y_pred, 0.0, None))
-
-    mask      = y_true_actual > 0
-    mape      = float(np.mean(np.abs(
-        (y_true_actual[mask] - y_pred_actual[mask]) / y_true_actual[mask]
-    )) * 100) if np.sum(mask) > 0 else 0.0
-
+    """Compute metrics on both log scale and actual scale consistently."""
+    # 1. Log scale metrics (LSTM target scale)
+    rmse_log  = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+    mae_log   = float(mean_absolute_error(y_true, y_pred))
+    r2_log    = float(r2_score(y_true, y_pred))
     smape_log = float(
         2 * np.mean(np.abs(y_true - y_pred) /
                     (np.abs(y_true) + np.abs(y_pred) + 1e-8)) * 100
     )
 
+    # 2. Actual scale metrics (expm1 conversion)
+    y_true_actual = np.expm1(y_true)
+    y_pred_actual = np.expm1(np.clip(y_pred, 0.0, None))
+
+    rmse_actual = float(np.sqrt(mean_squared_error(y_true_actual, y_pred_actual)))
+    mae_actual  = float(mean_absolute_error(y_true_actual, y_pred_actual))
+    r2_actual   = float(r2_score(y_true_actual, y_pred_actual))
+
+    # WAPE (Weighted Absolute Percentage Error)
+    wape_actual = float(
+        (np.sum(np.abs(y_true_actual - y_pred_actual)) / (np.sum(y_true_actual) + 1e-8)) * 100
+    )
+
+    # MAPE (only computed on actual values > 0)
+    mask = y_true_actual > 0
+    mape_actual = float(np.mean(np.abs(
+        (y_true_actual[mask] - y_pred_actual[mask]) / y_true_actual[mask]
+    )) * 100) if np.sum(mask) > 0 else 0.0
+
+    # SMAPE on actual scale
+    smape_actual = float(
+        2 * np.mean(np.abs(y_true_actual - y_pred_actual) /
+                    (np.abs(y_true_actual) + np.abs(y_pred_actual) + 1e-8)) * 100
+    )
+
     return {
-        f"{prefix}rmse":        float(np.sqrt(mean_squared_error(y_true, y_pred))),
-        f"{prefix}mae":         float(mean_absolute_error(y_true, y_pred)),
-        f"{prefix}r2":          float(r2_score(y_true, y_pred)),
-        f"{prefix}mape_actual": mape,
-        f"{prefix}smape_log":   smape_log,
+        f"{prefix}rmse_log":      rmse_log,
+        f"{prefix}mae_log":       mae_log,
+        f"{prefix}r2_log":        r2_log,
+        f"{prefix}smape_log":     smape_log,
+
+        f"{prefix}rmse_actual":   rmse_actual,
+        f"{prefix}mae_actual":    mae_actual,
+        f"{prefix}r2_actual":     r2_actual,
+        f"{prefix}wape_actual":   wape_actual,
+        f"{prefix}mape_actual":   mape_actual,
+        f"{prefix}smape_actual":  smape_actual,
     }
 
 
@@ -460,22 +464,22 @@ def compute_metrics(y_true, y_pred, prefix=""):
 # ============================================================
 
 def train_single_lstm(X_train, y_train, X_val, y_val, X_test, y_test,
-                      input_size, run_name, device):
+                      input_size, run_name, device,
+                      hidden_size, num_layers, dropout, learning_rate, weight_decay,
+                      epochs=EPOCHS, patience=PATIENCE):
     """
-    FIX 1: val set dùng cho early stopping, test set chỉ báo metrics 1 lần ở cuối.
-    FIX 7: scheduler.step(epoch) — đúng API CosineAnnealingWarmRestarts.
+    Train a single LSTM run.
     """
     model = LSTMForecaster(
-        input_size=input_size, hidden_size=HIDDEN_SIZE,
-        num_layers=NUM_LAYERS, dropout=DROPOUT
+        input_size=input_size, hidden_size=hidden_size,
+        num_layers=num_layers, dropout=dropout
     ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
 
     optimizer  = torch.optim.Adam(model.parameters(),
-                                  lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+                                  lr=learning_rate, weight_decay=weight_decay)
     criterion  = HybridLoss(delta=0.5, smape_weight=0.3)
-    # FIX 7: CosineAnnealingWarmRestarts.step(epoch) — step theo epoch position
     scheduler  = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, T_0=30, T_mult=2, eta_min=1e-6
     )
@@ -490,7 +494,7 @@ def train_single_lstm(X_train, y_train, X_val, y_val, X_test, y_test,
     train_losses, val_losses = [], []
     best_state = None
 
-    for epoch in range(EPOCHS):
+    for epoch in range(epochs):
         # --- Train ---
         model.train()
         epoch_loss = 0.0
@@ -505,7 +509,7 @@ def train_single_lstm(X_train, y_train, X_val, y_val, X_test, y_test,
         avg_train = epoch_loss / len(X_train)
         train_losses.append(avg_train)
 
-        # --- Validate (FIX 1: separate val set) ---
+        # --- Validate ---
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
@@ -515,22 +519,21 @@ def train_single_lstm(X_train, y_train, X_val, y_val, X_test, y_test,
         avg_val = val_loss / max(len(X_val), 1)
         val_losses.append(avg_val)
 
-        # FIX 7: step by epoch position (not loss value)
         scheduler.step(epoch)
 
         if (epoch + 1) % 20 == 0:
             lr = optimizer.param_groups[0]['lr']
-            print(f"    [{run_name}] Epoch {epoch+1}/{EPOCHS} | "
+            print(f"    [{run_name}] Epoch {epoch+1}/{epochs} | "
                   f"Train: {avg_train:.5f} | Val: {avg_val:.5f} | LR: {lr:.6f}")
 
-        # Early stopping on VAL (FIX 1)
+        # Early stopping on VAL
         if avg_val < best_val_loss:
             best_val_loss    = avg_val
             patience_counter = 0
             best_state       = {k: v.cpu().clone() for k, v in model.state_dict().items()}
         else:
             patience_counter += 1
-            if patience_counter >= PATIENCE:
+            if patience_counter >= patience:
                 print(f"    [{run_name}] Early stopping at epoch {epoch+1}")
                 break
 
@@ -538,7 +541,7 @@ def train_single_lstm(X_train, y_train, X_val, y_val, X_test, y_test,
     model.load_state_dict(best_state)
     model.to(device)
 
-    # --- Evaluate on TEST (FIX 1: used ONLY here, after training complete) ---
+    # --- Evaluate on TEST ---
     model.eval()
     with torch.no_grad():
         y_pred_train = model(torch.FloatTensor(X_train).to(device)).cpu().numpy()
@@ -564,13 +567,77 @@ def train_single_lstm(X_train, y_train, X_val, y_val, X_test, y_test,
     return model, all_metrics, train_losses, val_losses, y_pred_test
 
 
+def tune_hyperparameters(X_train, y_train, X_val, y_val, X_test, y_test, input_size, device):
+    print("\n" + "=" * 80)
+    print("HYPERPARAMETER TUNING WITH OPTUNA")
+    print("=" * 80)
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    def objective(trial):
+        hidden_size   = trial.suggest_categorical("hidden_size", [24, 32, 48, 64])
+        num_layers    = 2
+        dropout       = trial.suggest_float("dropout", 0.1, 0.5)
+        learning_rate = trial.suggest_categorical("learning_rate", [0.0001, 0.0005, 0.001, 0.005])
+        weight_decay  = trial.suggest_categorical("weight_decay", [1e-4, 5e-4, 1e-3])
+
+        with mlflow.start_run(run_name=f"trial_{trial.number}", nested=True):
+            mlflow.log_params({
+                "hidden_size":   hidden_size,
+                "num_layers":    num_layers,
+                "dropout":       dropout,
+                "learning_rate": learning_rate,
+                "weight_decay":  weight_decay,
+                "stage":         "tuning"
+            })
+
+            _, metrics, _, _, _ = train_single_lstm(
+                X_train, y_train, X_val, y_val, X_test, y_test,
+                input_size=input_size,
+                run_name=f"trial_{trial.number}",
+                device=device,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                dropout=dropout,
+                learning_rate=learning_rate,
+                weight_decay=weight_decay,
+                epochs=TUNING_EPOCHS,
+                patience=TUNING_PATIENCE
+            )
+
+            mlflow.log_metrics({
+                "val_loss": metrics["best_val_loss"],
+                "val_rmse": metrics["val_rmse_log"],
+                "val_mae":  metrics["val_mae_log"],
+                "val_r2":   metrics["val_r2_log"]
+            })
+
+            print(f"    [Trial {trial.number}] Finished | val_loss: {metrics['best_val_loss']:.5f} | params: {trial.params}")
+
+            return metrics["best_val_loss"]
+
+    study = optuna.create_study(direction="minimize")
+    study.optimize(objective, n_trials=N_TRIALS)
+
+    print("\n" + "=" * 80)
+    print("TUNING COMPLETED")
+    print(f"  Best trial: #{study.best_trial.number}")
+    print(f"  Best Val Loss: {study.best_value:.5f}")
+    best_params = study.best_params.copy()
+    best_params["num_layers"] = 2
+    print(f"  Best Hyperparameters: {best_params}")
+    print("=" * 80)
+
+    return best_params
+
+
 # ============================================================
-# Step 3c: Main LSTM training (FIX 5 ablation study removed)
+# Step 3c: Main LSTM training
 # ============================================================
 
 def train_model(df):
     print("\n" + "=" * 80)
-    print("STEP 3: TRAINING LSTM MODEL v5")
+    print("STEP 3: TRAINING LSTM MODEL")
     print("=" * 80)
 
     select_cols = ALL_FEATURES + [TARGET, "year_month", "province_sk", "province_name", "region"]
@@ -578,7 +645,6 @@ def train_model(df):
     df_pd       = df_pd.sort_values(["province_sk", "year_month"])
     df_pd[ALL_FEATURES] = df_pd[ALL_FEATURES].fillna(0)
 
-    # Log-transform target BEFORE split
     df_pd[TARGET] = np.log1p(df_pd[TARGET].astype(float))
 
     # Determine split boundaries (chronological)
@@ -594,7 +660,7 @@ def train_model(df):
         df_pd, train_end, ALL_FEATURES
     )
 
-    # Build sequences for the entire dataset (prevents boundary sequence loss!)
+    # Build sequences for the entire dataset
     X_all, y_all, meta_all = prepare_sequences(df_pd_scaled, ALL_FEATURES, TARGET, SEQUENCE_LENGTH)
 
     # Chronologically split sequences based on the target year_month
@@ -629,56 +695,82 @@ def train_model(df):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"  Device: {device}")
 
-
-
     # -------------------------------------------------------
-    # Main LSTM run (full features)
+    # Main LSTM run
     # -------------------------------------------------------
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment(EXPERIMENT_NAME)
 
-    print("\n  Training main LSTM (full features)...")
+    best_hparams = {
+        "hidden_size":   DEFAULT_HIDDEN_SIZE,
+        "num_layers":    DEFAULT_NUM_LAYERS,
+        "dropout":       DEFAULT_DROPOUT,
+        "learning_rate": DEFAULT_LEARNING_RATE,
+        "weight_decay":  DEFAULT_WEIGHT_DECAY
+    }
+
+    if optuna_available:
+        print("\n  Starting hyperparameter tuning parent run...")
+        with mlflow.start_run(run_name=f"lstm_v5_tuning_parent_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
+            best_hparams = tune_hyperparameters(
+                X_train, y_train, X_val, y_val, X_test, y_test,
+                input_size=len(ALL_FEATURES),
+                device=device
+            )
+            mlflow.log_params({
+                "best_" + k: v for k, v in best_hparams.items()
+            })
+            print(f"  Tuning complete. Best parameters to train: {best_hparams}")
+
+    print("\n  Training main LSTM...")
     with mlflow.start_run(run_name=f"lstm_v5_full_{datetime.now().strftime('%Y%m%d_%H%M%S')}") as main_run:
 
         model, metrics, train_losses, val_losses, y_pred_test = train_single_lstm(
             X_train, y_train, X_val, y_val, X_test, y_test,
             input_size=len(ALL_FEATURES),
             run_name="full",
-            device=device
+            device=device,
+            hidden_size=best_hparams["hidden_size"],
+            num_layers=best_hparams["num_layers"],
+            dropout=best_hparams["dropout"],
+            learning_rate=best_hparams["learning_rate"],
+            weight_decay=best_hparams["weight_decay"],
+            epochs=EPOCHS,
+            patience=PATIENCE
         )
 
         print(f"\n  MAIN MODEL RESULTS:")
-        print(f"  Train: RMSE={metrics['train_rmse']:.4f}  MAE={metrics['train_mae']:.4f}  R²={metrics['train_r2']:.4f}")
-        print(f"  Val:   RMSE={metrics['val_rmse']:.4f}    MAE={metrics['val_mae']:.4f}    R²={metrics['val_r2']:.4f}")
-        print(f"  Test:  RMSE={metrics['test_rmse']:.4f}   MAE={metrics['test_mae']:.4f}   R²={metrics['test_r2']:.4f}")
-        print(f"  MAPE(actual)={metrics['test_mape_actual']:.2f}%  SMAPE(log)={metrics['test_smape_log']:.2f}%")
-        print(f"  Train-Val R² gap:  {metrics['train_r2'] - metrics['val_r2']:.4f}")
-        print(f"  Val-Test R² gap:   {metrics['val_r2']   - metrics['test_r2']:.4f}")
+        print(f"  [LOG SCALE]")
+        print(f"    Train: RMSE={metrics['train_rmse_log']:.4f}  MAE={metrics['train_mae_log']:.4f}  R²={metrics['train_r2_log']:.4f}  SMAPE={metrics['train_smape_log']:.2f}%")
+        print(f"    Val:   RMSE={metrics['val_rmse_log']:.4f}    MAE={metrics['val_mae_log']:.4f}    R²={metrics['val_r2_log']:.4f}  SMAPE={metrics['val_smape_log']:.2f}%")
+        print(f"    Test:  RMSE={metrics['test_rmse_log']:.4f}   MAE={metrics['test_mae_log']:.4f}   R²={metrics['test_r2_log']:.4f}  SMAPE={metrics['test_smape_log']:.2f}%")
+        print(f"  [ACTUAL SCALE]")
+        print(f"    Train: RMSE={metrics['train_rmse_actual']:.2f}  MAE={metrics['train_mae_actual']:.2f}  R²={metrics['train_r2_actual']:.4f}  WAPE={metrics['train_wape_actual']:.2f}%  MAPE={metrics['train_mape_actual']:.2f}%  SMAPE={metrics['train_smape_actual']:.2f}%")
+        print(f"    Val:   RMSE={metrics['val_rmse_actual']:.2f}    MAE={metrics['val_mae_actual']:.2f}    R²={metrics['val_r2_actual']:.4f}  WAPE={metrics['val_wape_actual']:.2f}%  MAPE={metrics['val_mape_actual']:.2f}%  SMAPE={metrics['val_smape_actual']:.2f}%")
+        print(f"    Test:  RMSE={metrics['test_rmse_actual']:.2f}   MAE={metrics['test_mae_actual']:.2f}   R²={metrics['test_r2_actual']:.4f}  WAPE={metrics['test_wape_actual']:.2f}%  MAPE={metrics['test_mape_actual']:.2f}%  SMAPE={metrics['test_smape_actual']:.2f}%")
+        print(f"  [METRIC GAPS]")
+        print(f"    Train-Val R² (Log) gap:  {metrics['train_r2_log'] - metrics['val_r2_log']:.4f}")
+        print(f"    Val-Test R² (Log) gap:   {metrics['val_r2_log']   - metrics['test_r2_log']:.4f}")
+        print(f"  Selected Hyperparameters: {best_hparams}")
 
         mlflow.log_params({
             "model_version":    "lstm_v5_full",
             "source_table":     DL_FEATURES_TABLE,
             "sequence_length":  SEQUENCE_LENGTH,
-            "hidden_size":      HIDDEN_SIZE,
-            "num_layers":       NUM_LAYERS,
-            "dropout":          DROPOUT,
-            "learning_rate":    LEARNING_RATE,
+            "hidden_size":      best_hparams["hidden_size"],
+            "num_layers":       best_hparams["num_layers"],
+            "dropout":          best_hparams["dropout"],
+            "learning_rate":    best_hparams["learning_rate"],
             "loss":             "HybridLoss_Huber0.5_SMAPE0.3",
             "scaler_type":      "RobustScaler",
             "epochs_max":       EPOCHS,
             "batch_size":       BATCH_SIZE,
             "patience":         PATIENCE,
-            "weight_decay":     str(WEIGHT_DECAY),
+            "weight_decay":     str(best_hparams["weight_decay"]),
             "scheduler":        "CosineAnnealingWarmRestarts_T0=30_step_by_epoch",
             "num_features":     len(ALL_FEATURES),
             "split":            f"train{int(TRAIN_RATIO*100)}/val{int(VAL_RATIO*100)}/test{int(TEST_RATIO*100)}",
-            "fix_1_val_split":  "True",
-            "fix_2_clip_leak":  "True",
-            "fix_3_hotness_lag":"True",
-            "fix_4_aspect":     "True",
-            "fix_7_scheduler":  "True",
-            "fix_8_growth_pct": "True",
-            "fix_9_bn_removed": "True",
+            "tuning_applied":   str(optuna_available)
         })
         mlflow.log_metrics(metrics)
 
@@ -705,9 +797,9 @@ def train_model(df):
 def _log_training_plots(train_losses, val_losses, y_test, y_pred_test, metrics, meta_test):
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(train_losses, label='Train')
-    ax.plot(val_losses,   label='Val (early stopping)')
+    ax.plot(val_losses,   label='Val')
     ax.set_xlabel('Epoch'); ax.set_ylabel('Loss')
-    ax.set_title('LSTM v5 — Training & Validation Loss')
+    ax.set_title('LSTM — Training & Validation Loss')
     ax.legend()
     mlflow.log_figure(fig, "loss_curve.png"); plt.close()
 
@@ -716,7 +808,7 @@ def _log_training_plots(train_losses, val_losses, y_test, y_pred_test, metrics, 
     max_val = float(max(y_test.max(), y_pred_test.max()))
     ax.plot([0, max_val], [0, max_val], 'r--')
     ax.set_xlabel('Actual (log1p)'); ax.set_ylabel('Predicted (log1p)')
-    ax.set_title(f"LSTM v5: Actual vs Predicted — Test Set (R²={metrics['test_r2']:.3f})")
+    ax.set_title(f"LSTM: Actual vs Predicted — Test Set (R²={metrics['test_r2_log']:.3f})")
     mlflow.log_figure(fig, "actual_vs_predicted_test.png"); plt.close()
 
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -756,17 +848,6 @@ def _save_artifacts(scaler, clip_thresholds):
         "clip_thresholds":  {k: float(v) for k, v in clip_thresholds.items()},
         "hotness_lag_features":  HOTNESS_LAG_FEATURES,
         "aspect_features":       ASPECT_FEATURES,
-        "fixes_applied": {
-            "FIX1_train_val_test_split":   True,
-            "FIX2_clip_leakage_fixed":     True,
-            "FIX3_hotness_lag_added":      True,
-            "FIX4_aspect_features_added":  True,
-            "FIX5_ablation_study":         False,
-            "FIX6_baselines":              False,
-            "FIX7_scheduler_step_fixed":   True,
-            "FIX8_growth_pct_fixed":       True,
-            "FIX9_batchnorm_removed":      True,
-        },
         "forecast_assumption":
             "Social/NLP/aspect features beyond lag window use persistence assumption "
             "(held at most recent known value). Hotel volume lags are updated "
@@ -853,7 +934,6 @@ def forecast_12_months(spark, model, scaler, clip_thresholds, df_pd, device):
                 pred_log    = float(max(0.0, pred_log))
                 pred_actual = float(np.expm1(pred_log))
 
-            # FIX 8: growth vs PREVIOUS step (not fixed baseline)
             prev_volume = recent_volumes[-1] if recent_volumes else 0.0
             growth_pct  = float(
                 (pred_actual - prev_volume) / prev_volume * 100.0
@@ -883,10 +963,7 @@ def forecast_12_months(spark, model, scaler, clip_thresholds, df_pd, device):
             new_row[fi["month_sin"]] = _scale_value(math.sin(2 * math.pi * tm / 12), fi["month_sin"], scaler)
             new_row[fi["month_cos"]] = _scale_value(math.cos(2 * math.pi * tm / 12), fi["month_cos"], scaler)
 
-            # Hotel volume lags (autoregressive update)
-            new_row[fi["hotel_vol_lag_3"]] = new_row[fi["hotel_vol_lag_2"]]
-            new_row[fi["hotel_vol_lag_2"]] = new_row[fi["hotel_vol_lag_1"]]
-            new_row[fi["hotel_vol_lag_1"]] = _scale_value(pred_actual, fi["hotel_vol_lag_1"], scaler)
+            # (hotel_vol_lag_1/2/3 removed from features, autoregressive state maintained in recent_volumes)
 
             if len(recent_volumes) >= 12:
                 new_row[fi["hotel_vol_lag_12"]] = _scale_value(
@@ -951,14 +1028,11 @@ def forecast_12_months(spark, model, scaler, clip_thresholds, df_pd, device):
 
 def main():
     print("\n" + "=" * 80)
-    print("ML PIPELINE: PROVINCE HOTEL VOLUME FORECASTING (LSTM v5)")
+    print("ML PIPELINE: PROVINCE HOTEL VOLUME FORECASTING (LSTM)")
     print("=" * 80)
     print(f"  Source:   {DL_FEATURES_TABLE}")
     print(f"  Features: {len(ALL_FEATURES)} total")
     print(f"  Split:    {int(TRAIN_RATIO*100)}/{int(VAL_RATIO*100)}/{int(TEST_RATIO*100)} (train/val/test)")
-    print(f"  Fixes:    FIX1(val split) FIX2(clip leak) FIX3(hotness lag) "
-          f"FIX4(aspect) FIX7(scheduler) "
-          f"FIX8(growth) FIX9(bn)")
     print(f"  Start:    {datetime.now()}")
     print("=" * 80)
 

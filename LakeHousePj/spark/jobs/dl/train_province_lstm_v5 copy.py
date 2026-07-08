@@ -1,54 +1,24 @@
 """
-DL Pipeline: Train GRU Deep Learning Model & Forecast Province Hotel Volume
+ML Pipeline: Train LSTM Deep Learning Model & Forecast Province Hotel Volume
 =============================================================================
 
-Source table: gold.gold.fact_province_month_dl_features (~47 features after v5 additions)
+Source table: gold.gold.fact_province_month_dl_features
 
-Architecture (v5):
-- 2-layer GRU + LayerNorm + Temporal Attention
+Architecture:
+- 2-layer LSTM + LayerNorm + Temporal Attention
 - Deeper FC head: Linear(hidden) → GELU → Dropout → Linear(16) → ReLU → Linear(1)
 - HybridLoss: 70% HuberLoss + 30% SMAPELoss
 - RobustScaler (median/IQR)
 - CosineAnnealingWarmRestarts scheduler
 
-Changes from v4 → v5 (Aligned with LSTM v5):
-============================================================
-🔴 FIX 1 [CRITICAL] Train/Val/Test split
-   3-way split (60/20/20 time-based or 70/15/15)
-   train → học weights
-   val   → early stopping, chọn epoch tốt nhất (KHÔNG báo metrics)
-   test  → chỉ dùng 1 lần để report final metrics
-
-🔴 FIX 2 [CRITICAL] Outlier clipping leakage
-   chia train/val/test TRƯỚC, tính p99 trên train only,
-   apply cùng ngưỡng cho val/test
-
-🟡 FIX 3 Thêm hotness_lag features
-   thêm hotness_lag_1/2/3/12, hotness_rolling_3m, hotness_momentum
-
-🟡 FIX 4 Thêm PhoBERT aspect features
-   thêm đủ 6 aspect features
-
-🟢 FIX 7 Sửa scheduler.step() bug
-   scheduler.step(epoch) — đúng API
-
-🟢 FIX 8 Sửa growth_pct bug trong forecast loop
-   prev_volume cập nhật mỗi bước horizon
-
-🟢 FIX 9 Bỏ unused BatchNorm1d layer
-   xóa hẳn self.bn
-
-🟢 FIX 10 Framing rõ 12-month forecast assumption
-   social/NLP features dùng persistence assumption (giữ theo trạng thái gần nhất)
-
-Features v5: 47 total
+Features: 45 total
   Temporal (2): month_sin, month_cos
   Hotel lag (6): hotel_vol_lag_1/2/3/12, rolling_3m, momentum
   Hotness lag (6): hotness_lag_1/2/3/12, rolling_3m, momentum
-  Volume (5): total_posts, total_comments, total_hotel_reviews, unique_authors, comments_per_post
+  Volume (4): total_posts, total_comments, unique_authors, comments_per_post
   Engagement (4): avg_likes_per_post, avg_saves_per_post, viral_post_ratio, engagement_score, hotness_score
-  NLP (7): avg_sentiment, sentiment_std, positive_ratio, negative_ratio,
-           avg_word_count, avg_unique_word_ratio, emoji_sentiment_ratio, reply_ratio
+  NLP (6): avg_sentiment, sentiment_std, positive_ratio, negative_ratio,
+           avg_unique_word_ratio, emoji_sentiment_ratio, reply_ratio
   Aspect (6): avg_aspect_scenery, avg_aspect_food, avg_aspect_price,
               avg_aspect_service, avg_aspect_transport, avg_aspect_accommodation
   Hotel quality (9): avg_hotel_score, hotel_score_std, high_score_ratio,
@@ -57,8 +27,8 @@ Features v5: 47 total
   Custom (3): social_to_booking_ratio, sentiment_polarity_change, hotel_vol_std_rolling_3m
 
 Output:
-- Model: province_hotel_volume_forecaster_gru_v5 (MLflow registry)
-- Table: gold.gold.province_month_forecast_gru_next12
+- Model: province_hotel_volume_forecaster_lstm_v5 (MLflow registry)
+- Table: gold.gold.province_month_forecast_lstm_next12
 """
 
 import sys
@@ -101,19 +71,20 @@ from utils.iceberg_utils import create_iceberg_table_if_not_exists
 # ============================================================
 
 MLFLOW_TRACKING_URI = "http://mlflow:5000"
-EXPERIMENT_NAME     = "province_hotel_volume_forecasting_gru"
-MODEL_NAME          = "province_hotel_volume_forecaster_gru_v5"
+EXPERIMENT_NAME     = "province_hotel_volume_forecasting_lstm"
+MODEL_NAME          = "province_hotel_volume_forecaster_lstm_v5"
 
 DL_FEATURES_TABLE = "gold.gold.fact_province_month_dl_features"
 
 FORECAST_MONTHS = 12
 
-# Aligned with LSTM split ratios: 75% train → 12.5% val → 12.5% test
+# 3-way time-based split (train/val/test)
+# 75% train → 12.5% val → 12.5% test
 TRAIN_RATIO = 0.75
 VAL_RATIO   = 0.125
 TEST_RATIO  = 1.0 - TRAIN_RATIO - VAL_RATIO
 
-# Model hyperparameters (aligned with LSTM configurations)
+# Model hyperparameters (aligned with v4 configurations)
 SEQUENCE_LENGTH = 3
 HIDDEN_SIZE     = 48
 NUM_LAYERS      = 2
@@ -127,7 +98,7 @@ WEIGHT_DECAY    = 7e-4
 TARGET = "hotel_review_volume"
 
 # ============================================================
-# Feature Groups (Identical to LSTM v5)
+# Feature Groups
 # ============================================================
 
 TEMPORAL_FEATURES = ["month_sin", "month_cos"]
@@ -137,30 +108,26 @@ HOTEL_LAG_FEATURES = [
     "hotel_vol_lag_12", "hotel_vol_rolling_3m", "hotel_vol_momentum",
 ]
 
-# FIX 3: hotness lag features (TikTok delayed signal)
 HOTNESS_LAG_FEATURES = [
     "hotness_lag_1", "hotness_lag_2", "hotness_lag_3",
     "hotness_lag_12", "hotness_rolling_3m", "hotness_momentum",
 ]
 
 VOLUME_FEATURES = [
-    "total_posts", "total_comments", "total_hotel_reviews",
+    "total_posts", "total_comments",
     "unique_authors", "comments_per_post",
 ]
 
 ENGAGEMENT_FEATURES = [
     "avg_likes_per_post", "avg_saves_per_post",
     "viral_post_ratio", "engagement_score",
-    "hotness_score",
 ]
 
 NLP_FEATURES = [
     "avg_sentiment", "sentiment_std", "positive_ratio", "negative_ratio",
-    "avg_word_count", "avg_unique_word_ratio",
     "emoji_sentiment_ratio", "reply_ratio",
 ]
 
-# FIX 4: PhoBERT aspect features
 ASPECT_FEATURES = [
     "avg_aspect_scenery", "avg_aspect_food", "avg_aspect_price",
     "avg_aspect_service", "avg_aspect_transport", "avg_aspect_accommodation",
@@ -177,7 +144,7 @@ CUSTOM_FEATURES = [
     "social_to_booking_ratio", "sentiment_polarity_change", "hotel_vol_std_rolling_3m",
 ]
 
-# Full feature set (v5: 47 features)
+# Full feature set (45 features)
 ALL_FEATURES = (
     TEMPORAL_FEATURES
     + HOTEL_LAG_FEATURES
@@ -214,7 +181,7 @@ class HybridLoss(nn.Module):
 
 
 # ============================================================
-# GRU Model (v5 — aligned architecture and fixes with LSTM)
+# LSTM Model (v5 — removed unused BatchNorm, FIX 9)
 # ============================================================
 
 class TemporalAttention(nn.Module):
@@ -222,21 +189,20 @@ class TemporalAttention(nn.Module):
         super().__init__()
         self.attn = nn.Linear(hidden_size, 1)
 
-    def forward(self, gru_output):
-        scores  = self.attn(gru_output).squeeze(-1)
+    def forward(self, lstm_output):
+        scores  = self.attn(lstm_output).squeeze(-1)
         weights = torch.softmax(scores, dim=1)
-        context = torch.bmm(weights.unsqueeze(1), gru_output).squeeze(1)
+        context = torch.bmm(weights.unsqueeze(1), lstm_output).squeeze(1)
         return context, weights
 
 
-class GRUForecaster(nn.Module):
+class LSTMForecaster(nn.Module):
     """
-    2-layer GRU + LayerNorm + Temporal Attention + deep FC head.
-    v5: aligned architecture and parameters with LSTM.
+    2-layer LSTM + LayerNorm + Temporal Attention + deep FC head.
     """
     def __init__(self, input_size, hidden_size, num_layers, dropout):
         super().__init__()
-        self.gru = nn.GRU(
+        self.lstm = nn.LSTM(
             input_size=input_size, hidden_size=hidden_size,
             num_layers=num_layers, batch_first=True,
             dropout=dropout if num_layers > 1 else 0.0
@@ -253,9 +219,9 @@ class GRUForecaster(nn.Module):
         )
 
     def forward(self, x):
-        gru_out, _  = self.gru(x)
-        gru_out     = self.layer_norm(gru_out)
-        context, _   = self.attention(gru_out)
+        lstm_out, _  = self.lstm(x)
+        lstm_out     = self.layer_norm(lstm_out)
+        context, _   = self.attention(lstm_out)
         return self.fc(context).squeeze(-1)
 
 
@@ -274,7 +240,7 @@ class TimeSeriesDataset(Dataset):
 
 def create_spark_session():
     return SparkSession.builder \
-        .appName("ML_Province_HotelVolume_GRU_v5") \
+        .appName("ML_Province_HotelVolume_LSTM_v5") \
         .config("spark.sql.extensions",
                 "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
         .config("spark.sql.catalog.gold",         "org.apache.iceberg.spark.SparkCatalog") \
@@ -298,7 +264,7 @@ def create_spark_session():
 
 def load_features(spark):
     print("\n" + "=" * 80)
-    print("STEP 1: LOADING PRE-COMPUTED DL FEATURES FOR GRU")
+    print("STEP 1: LOADING PRE-COMPUTED DL FEATURES")
     print("=" * 80)
 
     df = spark.table(DL_FEATURES_TABLE)
@@ -387,20 +353,12 @@ def clip_and_scale_entire(df_pd, train_end, features):
 
     print(f"  Clip thresholds (train p99): { {k: f'{v:.2f}' for k,v in clip_thresholds.items()} }")
 
-    # --- RobustScaler: fit on train only for each province ---
-    scalers = {}
-    for province_sk, group in df.groupby("province_sk"):
-        train_group = group[group["year_month"] <= train_end]
-        if len(train_group) < 2:
-            train_group = group
-        
-        scaler = RobustScaler()
-        scaler.fit(train_group[features])
-        scalers[province_sk] = scaler
-        
-        df.loc[df["province_sk"] == province_sk, features] = scaler.transform(group[features])
+    # --- RobustScaler: fit on train only ---
+    scaler = RobustScaler()
+    scaler.fit(train_raw[features])
+    df[features] = scaler.transform(df[features])
 
-    return df, scalers, clip_thresholds
+    return df, scaler, clip_thresholds
 
 
 def prepare_sequences(df_pd, features, target, seq_length):
@@ -445,81 +403,16 @@ def compute_metrics(y_true, y_pred, prefix=""):
     }
 
 
-def compute_per_province_metrics(y_true, y_pred, meta_test):
-    """Compute R2 and MAPE per province and print summaries."""
-    print("\n" + "-" * 55)
-    print("PER-PROVINCE TEST METRICS EVALUATION")
-    print("-" * 55)
-    
-    test_df = pd.DataFrame(meta_test)
-    test_df["y_true_log"] = y_true
-    test_df["y_pred_log"] = y_pred
-    
-    test_df["y_true_actual"] = np.expm1(y_true)
-    test_df["y_pred_actual"] = np.expm1(np.clip(y_pred, 0.0, None))
-    
-    results = {}
-    for prov_name, group in test_df.groupby("province_name"):
-        if len(group) < 2:
-            continue
-        
-        # Calculate actual MAPE
-        y_t_act = group["y_true_actual"].values
-        y_p_act = group["y_pred_actual"].values
-        mask = y_t_act > 0
-        mape = float(np.mean(np.abs(y_t_act[mask] - y_p_act[mask]) / y_t_act[mask]) * 100) if np.sum(mask) > 0 else 0.0
-        
-        # Calculate R2 (log-scale)
-        try:
-            r2 = float(r2_score(group["y_true_log"].values, group["y_pred_log"].values))
-        except Exception:
-            r2 = 0.0
-            
-        # Calculate RMSE (log-scale)
-        rmse = float(np.sqrt(mean_squared_error(group["y_true_log"].values, group["y_pred_log"].values)))
-        
-        results[prov_name] = {
-            "mape_actual": mape,
-            "r2_log": r2,
-            "rmse_log": rmse,
-            "samples": len(group)
-        }
-        
-    # Convert to DataFrame for sorting and display
-    report_df = pd.DataFrame.from_dict(results, orient="index").sort_values("mape_actual")
-    
-    print("\n  Top 5 Best Performing Provinces (Lowest MAPE):")
-    for name, row in report_df.head(5).iterrows():
-        print(f"    - {name}: MAPE={row['mape_actual']:.2f}% | R²={row['r2_log']:.4f} | Samples={int(row['samples'])}")
-        
-    print("\n  Top 5 Worst Performing Provinces (Highest MAPE):")
-    for name, row in report_df.tail(5).iloc[::-1].iterrows():
-        print(f"    - {name}: MAPE={row['mape_actual']:.2f}% | R²={row['r2_log']:.4f} | Samples={int(row['samples'])}")
-        
-    # Save report to JSON file
-    report_json_path = "/tmp/per_province_metrics_gru.json"
-    with open(report_json_path, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2, ensure_ascii=False)
-        
-    # Log artifact to MLflow
-    mlflow.log_artifact(report_json_path, "artifacts")
-    print(f"\n  Logged per-province metrics report to MLflow artifacts.")
-    print("-" * 55)
-    
-    return results
-
-
 # ============================================================
-# Step 3b: Single GRU training run
+# Step 3b: Single LSTM training run (reusable)
 # ============================================================
 
-def train_single_gru(X_train, y_train, X_val, y_val, X_test, y_test,
-                     input_size, run_name, device):
+def train_single_lstm(X_train, y_train, X_val, y_val, X_test, y_test,
+                      input_size, run_name, device):
     """
-    FIX 1: val set dùng cho early stopping, test set chỉ báo metrics 1 lần ở cuối.
-    FIX 7: scheduler.step(epoch) — đúng API CosineAnnealingWarmRestarts.
+    Train a single LSTM run.
     """
-    model = GRUForecaster(
+    model = LSTMForecaster(
         input_size=input_size, hidden_size=HIDDEN_SIZE,
         num_layers=NUM_LAYERS, dropout=DROPOUT
     ).to(device)
@@ -568,7 +461,6 @@ def train_single_gru(X_train, y_train, X_val, y_val, X_test, y_test,
         avg_val = val_loss / max(len(X_val), 1)
         val_losses.append(avg_val)
 
-        # scheduler step by epoch position
         scheduler.step(epoch)
 
         if (epoch + 1) % 20 == 0:
@@ -618,12 +510,12 @@ def train_single_gru(X_train, y_train, X_val, y_val, X_test, y_test,
 
 
 # ============================================================
-# Step 3c: Main GRU training
+# Step 3c: Main LSTM training
 # ============================================================
 
 def train_model(df):
     print("\n" + "=" * 80)
-    print("STEP 3: TRAINING GRU MODEL v5")
+    print("STEP 3: TRAINING LSTM MODEL")
     print("=" * 80)
 
     select_cols = ALL_FEATURES + [TARGET, "year_month", "province_sk", "province_name", "region"]
@@ -631,7 +523,6 @@ def train_model(df):
     df_pd       = df_pd.sort_values(["province_sk", "year_month"])
     df_pd[ALL_FEATURES] = df_pd[ALL_FEATURES].fillna(0)
 
-    # Log-transform target BEFORE split
     df_pd[TARGET] = np.log1p(df_pd[TARGET].astype(float))
 
     # Determine split boundaries (chronological)
@@ -642,12 +533,12 @@ def train_model(df):
 
     print(f"  Split boundaries: train≤{train_end} | val {train_end+1}–{val_end} | test>{val_end}")
 
-    # Clip and scale the entire dataframe using train-derived parameters (FIX 2)
-    df_pd_scaled, scalers, clip_thresholds = clip_and_scale_entire(
+    # Clip and scale the entire dataframe using train-derived parameters
+    df_pd_scaled, scaler, clip_thresholds = clip_and_scale_entire(
         df_pd, train_end, ALL_FEATURES
     )
 
-    # Build sequences for the entire dataset (prevents boundary sequence loss!)
+    # Build sequences for the entire dataset
     X_all, y_all, meta_all = prepare_sequences(df_pd_scaled, ALL_FEATURES, TARGET, SEQUENCE_LENGTH)
 
     # Chronologically split sequences based on the target year_month
@@ -683,15 +574,15 @@ def train_model(df):
     print(f"  Device: {device}")
 
     # -------------------------------------------------------
-    # Main GRU run (full features)
+    # Main LSTM run (full features)
     # -------------------------------------------------------
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment(EXPERIMENT_NAME)
 
-    print("\n  Training main GRU (full features)...")
-    with mlflow.start_run(run_name=f"gru_v5_full_{datetime.now().strftime('%Y%m%d_%H%M%S')}") as main_run:
+    print("\n  Training main LSTM...")
+    with mlflow.start_run(run_name=f"lstm_v5_full_{datetime.now().strftime('%Y%m%d_%H%M%S')}") as main_run:
 
-        model, metrics, train_losses, val_losses, y_pred_test = train_single_gru(
+        model, metrics, train_losses, val_losses, y_pred_test = train_single_lstm(
             X_train, y_train, X_val, y_val, X_test, y_test,
             input_size=len(ALL_FEATURES),
             run_name="full",
@@ -707,7 +598,7 @@ def train_model(df):
         print(f"  Val-Test R² gap:   {metrics['val_r2']   - metrics['test_r2']:.4f}")
 
         mlflow.log_params({
-            "model_version":    "gru_v5_full",
+            "model_version":    "lstm_v5_full",
             "source_table":     DL_FEATURES_TABLE,
             "sequence_length":  SEQUENCE_LENGTH,
             "hidden_size":      HIDDEN_SIZE,
@@ -723,18 +614,8 @@ def train_model(df):
             "scheduler":        "CosineAnnealingWarmRestarts_T0=30_step_by_epoch",
             "num_features":     len(ALL_FEATURES),
             "split":            f"train{int(TRAIN_RATIO*100)}/val{int(VAL_RATIO*100)}/test{int(TEST_RATIO*100)}",
-            "fix_1_val_split":  "True",
-            "fix_2_clip_leak":  "True",
-            "fix_3_hotness_lag":"True",
-            "fix_4_aspect":     "True",
-            "fix_7_scheduler":  "True",
-            "fix_8_growth_pct": "True",
-            "fix_9_bn_removed": "True",
         })
         mlflow.log_metrics(metrics)
-
-        # Compute and log per-province metrics
-        compute_per_province_metrics(y_test, y_pred_test, meta_test)
 
         # Plots
         _log_training_plots(
@@ -743,13 +624,13 @@ def train_model(df):
 
         # Save artifacts
         mlflow.pytorch.log_model(model, "model")
-        _save_artifacts(scalers, clip_thresholds)
+        _save_artifacts(scaler, clip_thresholds)
 
         model_uri = f"runs:/{mlflow.active_run().info.run_id}/model"
         mlflow.register_model(model_uri, MODEL_NAME)
         print(f"  Model registered: {MODEL_NAME}")
 
-    return model, scalers, clip_thresholds, df_pd_scaled, device
+    return model, scaler, clip_thresholds, df_pd_scaled, device
 
 
 # ============================================================
@@ -759,9 +640,9 @@ def train_model(df):
 def _log_training_plots(train_losses, val_losses, y_test, y_pred_test, metrics, meta_test):
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(train_losses, label='Train')
-    ax.plot(val_losses,   label='Val (early stopping)')
+    ax.plot(val_losses,   label='Val')
     ax.set_xlabel('Epoch'); ax.set_ylabel('Loss')
-    ax.set_title('GRU v5 — Training & Validation Loss')
+    ax.set_title('LSTM — Training & Validation Loss')
     ax.legend()
     mlflow.log_figure(fig, "loss_curve.png"); plt.close()
 
@@ -770,7 +651,7 @@ def _log_training_plots(train_losses, val_losses, y_test, y_pred_test, metrics, 
     max_val = float(max(y_test.max(), y_pred_test.max()))
     ax.plot([0, max_val], [0, max_val], 'r--')
     ax.set_xlabel('Actual (log1p)'); ax.set_ylabel('Predicted (log1p)')
-    ax.set_title(f"GRU v5: Actual vs Predicted — Test Set (R²={metrics['test_r2']:.3f})")
+    ax.set_title(f"LSTM: Actual vs Predicted — Test Set (R²={metrics['test_r2']:.3f})")
     mlflow.log_figure(fig, "actual_vs_predicted_test.png"); plt.close()
 
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -795,40 +676,29 @@ def _log_training_plots(train_losses, val_losses, y_test, y_pred_test, metrics, 
         mlflow.log_figure(fig, "time_series_sample.png"); plt.close()
 
 
-def _save_artifacts(scalers, clip_thresholds):
-    with open("/tmp/scaler_gru_v5.pkl", "wb") as f:
-        pickle.dump(scalers, f)
-    mlflow.log_artifact("/tmp/scaler_gru_v5.pkl", "artifacts")
+def _save_artifacts(scaler, clip_thresholds):
+    with open("/tmp/scaler_lstm_v5.pkl", "wb") as f:
+        pickle.dump(scaler, f)
+    mlflow.log_artifact("/tmp/scaler_lstm_v5.pkl", "artifacts")
 
     config = {
         "all_features":     ALL_FEATURES,
         "target":           TARGET,
         "sequence_length":  SEQUENCE_LENGTH,
-        "scaler_type":      "PerProvinceRobustScaler",
-        "model_version":    "gru_v5",
+        "scaler_type":      "RobustScaler",
+        "model_version":    "lstm_v5",
         "split":            {"train": TRAIN_RATIO, "val": VAL_RATIO, "test": TEST_RATIO},
         "clip_thresholds":  {k: float(v) for k, v in clip_thresholds.items()},
         "hotness_lag_features":  HOTNESS_LAG_FEATURES,
         "aspect_features":       ASPECT_FEATURES,
-        "fixes_applied": {
-            "FIX1_train_val_test_split":   True,
-            "FIX2_clip_leakage_fixed":     True,
-            "FIX3_hotness_lag_added":      True,
-            "FIX4_aspect_features_added":  True,
-            "FIX5_ablation_study":         False,
-            "FIX6_baselines":              False,
-            "FIX7_scheduler_step_fixed":   True,
-            "FIX8_growth_pct_fixed":       True,
-            "FIX9_batchnorm_removed":      True,
-        },
         "forecast_assumption":
             "Social/NLP/aspect features beyond lag window use persistence assumption "
             "(held at most recent known value). Hotel volume lags are updated "
             "autoregressively from model predictions.",
     }
-    with open("/tmp/feature_config_gru_v5.json", "w") as f:
+    with open("/tmp/feature_config_v5.json", "w") as f:
         json.dump(config, f, indent=2)
-    mlflow.log_artifact("/tmp/feature_config_gru_v5.json", "artifacts")
+    mlflow.log_artifact("/tmp/feature_config_v5.json", "artifacts")
 
 
 # ============================================================
@@ -858,7 +728,7 @@ def create_forecast_table(spark):
     ])
     create_iceberg_table_if_not_exists(
         spark=spark, database="gold",
-        table_name="province_month_forecast_gru_next12",
+        table_name="province_month_forecast_lstm_next12",
         schema=schema, partition_by=["year", "month"],
         table_properties={"format-version": "2",
                           "write.format.default": "parquet",
@@ -867,9 +737,9 @@ def create_forecast_table(spark):
     )
 
 
-def forecast_12_months(spark, model, scalers, clip_thresholds, df_pd, device):
+def forecast_12_months(spark, model, scaler, clip_thresholds, df_pd, device):
     print("\n" + "=" * 80)
-    print("STEP 4: FORECASTING 12 MONTHS (autoregressive GRU)")
+    print("STEP 4: FORECASTING 12 MONTHS (autoregressive)")
     print("=" * 80)
     print("  NOTE: Social/NLP/aspect features beyond seq window use persistence")
     print("        assumption (most recent known value carried forward).")
@@ -894,11 +764,6 @@ def forecast_12_months(spark, model, scalers, clip_thresholds, df_pd, device):
         last_date     = datetime.strptime(str(last_ym), '%Y%m')
 
         recent_volumes = list(np.expm1(group[TARGET].values[-max(SEQUENCE_LENGTH, 12):]))
-        
-        # Get scaler for this specific province
-        scaler = scalers.get(province_sk)
-        if scaler is None:
-            raise ValueError(f"No scaler found for province_sk {province_sk}")
 
         for horizon in range(1, FORECAST_MONTHS + 1):
             total_m = last_date.year * 12 + last_date.month + horizon
@@ -912,7 +777,6 @@ def forecast_12_months(spark, model, scalers, clip_thresholds, df_pd, device):
                 pred_log    = float(max(0.0, pred_log))
                 pred_actual = float(np.expm1(pred_log))
 
-            # FIX 8: growth vs PREVIOUS step (not fixed baseline)
             prev_volume = recent_volumes[-1] if recent_volumes else 0.0
             growth_pct  = float(
                 (pred_actual - prev_volume) / prev_volume * 100.0
@@ -930,7 +794,7 @@ def forecast_12_months(spark, model, scalers, clip_thresholds, df_pd, device):
                 "predicted_hotel_volume_actual": pred_actual,
                 "predicted_growth_pct":          growth_pct,
                 "forecast_date":                 datetime.now().strftime('%Y-%m-%d'),
-                "model_version":                 "gru_v5",
+                "model_version":                 "lstm_v5",
             })
 
             recent_volumes.append(pred_actual)
@@ -983,8 +847,9 @@ def forecast_12_months(spark, model, scalers, clip_thresholds, df_pd, device):
                 new_std, fi["hotel_vol_std_rolling_3m"], scaler
             )
 
-            # Hotness lags & Aspect features: persistence assumption
-            # (already copied from last_seq[-1])
+            # Hotness lags: persistence assumption
+            # (no TikTok data for future → hold last known value)
+            # These are kept as-is in new_row (already copied from last_seq[-1])
 
             last_seq = np.vstack([last_seq[1:], new_row])
 
@@ -992,9 +857,9 @@ def forecast_12_months(spark, model, scalers, clip_thresholds, df_pd, device):
 
     forecast_df = spark.createDataFrame(results)
     forecast_df.write.format("iceberg").mode("overwrite") \
-        .save("gold.gold.province_month_forecast_gru_next12")
+        .save("gold.gold.province_month_forecast_lstm_next12")
 
-    export_path = "s3a://gold/dl_forecast/province_hotel_volume_forecast_gru_v5"
+    export_path = "s3a://gold/dl_forecast/province_hotel_volume_forecast_lstm_v5"
 
     forecast_df.coalesce(1).write.mode("overwrite").parquet(export_path)
     print(f"  Exported: {export_path}")
@@ -1009,14 +874,11 @@ def forecast_12_months(spark, model, scalers, clip_thresholds, df_pd, device):
 
 def main():
     print("\n" + "=" * 80)
-    print("ML PIPELINE: PROVINCE HOTEL VOLUME FORECASTING (GRU v5)")
+    print("ML PIPELINE: PROVINCE HOTEL VOLUME FORECASTING (LSTM)")
     print("=" * 80)
     print(f"  Source:   {DL_FEATURES_TABLE}")
     print(f"  Features: {len(ALL_FEATURES)} total")
     print(f"  Split:    {int(TRAIN_RATIO*100)}/{int(VAL_RATIO*100)}/{int(TEST_RATIO*100)} (train/val/test)")
-    print(f"  Fixes:    FIX1(val split) FIX2(clip leak) FIX3(hotness lag) "
-          f"FIX4(aspect) FIX7(scheduler) "
-          f"FIX8(growth) FIX9(bn)")
     print(f"  Start:    {datetime.now()}")
     print("=" * 80)
 
@@ -1024,14 +886,14 @@ def main():
 
     try:
         df = load_features(spark)
-        model, scalers, clip_thresholds, df_pd, device = train_model(df)
-        forecast_12_months(spark, model, scalers, clip_thresholds, df_pd, device)
+        model, scaler, clip_thresholds, df_pd, device = train_model(df)
+        forecast_12_months(spark, model, scaler, clip_thresholds, df_pd, device)
 
         print("\n" + "=" * 80)
         print("PIPELINE COMPLETED SUCCESSFULLY")
         print("=" * 80)
         print(f"  Model:      {MODEL_NAME}")
-        print(f"  Table:      gold.gold.province_month_forecast_gru_next12")
+        print(f"  Table:      gold.gold.province_month_forecast_lstm_next12")
         print(f"  Features:   {len(ALL_FEATURES)} from {DL_FEATURES_TABLE}")
         print(f"  MLflow:     {MLFLOW_TRACKING_URI}")
         print(f"  End:        {datetime.now()}")
