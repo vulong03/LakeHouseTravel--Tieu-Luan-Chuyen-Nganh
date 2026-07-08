@@ -122,9 +122,9 @@ BATCH_SIZE      = 32
 PATIENCE        = 25
 
 # Hyperparameter Search Space for Optuna
-TUNING_EPOCHS   = 80
-TUNING_PATIENCE = 10
-N_TRIALS        = 15
+TUNING_EPOCHS   = 150
+TUNING_PATIENCE = 20
+N_TRIALS        = 100
 
 TARGET = "hotel_review_volume"
 
@@ -382,10 +382,11 @@ def clip_and_scale_entire(df_pd, train_end, features):
 
     print(f"  Clip thresholds (train p99): { {k: f'{v:.2f}' for k,v in clip_thresholds.items()} }")
 
-    # --- RobustScaler: fit on train only ---
+    # --- RobustScaler: fit on train only (excluding temporal features) ---
+    features_to_scale = [f for f in features if f not in TEMPORAL_FEATURES]
     scaler = RobustScaler()
-    scaler.fit(train_raw[features])
-    df[features] = scaler.transform(df[features])
+    scaler.fit(train_raw[features_to_scale])
+    df[features_to_scale] = scaler.transform(df[features_to_scale])
 
     return df, scaler, clip_thresholds
 
@@ -575,11 +576,11 @@ def tune_hyperparameters(X_train, y_train, X_val, y_val, X_test, y_test, input_s
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
     def objective(trial):
-        hidden_size   = trial.suggest_categorical("hidden_size", [24, 32, 48, 64])
-        num_layers    = 2
-        dropout       = trial.suggest_float("dropout", 0.1, 0.5)
-        learning_rate = trial.suggest_categorical("learning_rate", [0.0001, 0.0005, 0.001, 0.005])
-        weight_decay  = trial.suggest_categorical("weight_decay", [1e-4, 5e-4, 1e-3])
+        hidden_size   = trial.suggest_categorical("hidden_size", [16, 24, 32, 48, 64, 96, 128])
+        num_layers    = trial.suggest_categorical("num_layers", [1, 2])
+        dropout       = trial.suggest_float("dropout", 0.0, 0.6)
+        learning_rate = trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True)
+        weight_decay  = trial.suggest_float("weight_decay", 1e-5, 1e-2, log=True)
 
         with mlflow.start_run(run_name=f"trial_{trial.number}", nested=True):
             mlflow.log_params({
@@ -624,7 +625,6 @@ def tune_hyperparameters(X_train, y_train, X_val, y_val, X_test, y_test, input_s
     print(f"  Best trial: #{study.best_trial.number}")
     print(f"  Best Val Loss: {study.best_value:.5f}")
     best_params = study.best_params.copy()
-    best_params["num_layers"] = 2
     print(f"  Best Hyperparameters: {best_params}")
     print("=" * 80)
 
@@ -864,8 +864,24 @@ def _save_artifacts(scaler, clip_thresholds):
 
 def _scale_value(raw, feat_idx, scaler):
     """Scale a single raw value using fitted RobustScaler."""
-    s = scaler.scale_[feat_idx]
-    return (raw - scaler.center_[feat_idx]) / s if s != 0 else 0.0
+    feature_name = ALL_FEATURES[feat_idx]
+    features_to_scale = [f for f in ALL_FEATURES if f not in TEMPORAL_FEATURES]
+    if feature_name not in features_to_scale:
+        return raw
+    scaler_idx = features_to_scale.index(feature_name)
+    s = scaler.scale_[scaler_idx]
+    return (raw - scaler.center_[scaler_idx]) / s if s != 0 else 0.0
+
+
+def _descale_value(scaled_val, feat_idx, scaler):
+    """Descale a single scaled value back to raw using fitted RobustScaler."""
+    feature_name = ALL_FEATURES[feat_idx]
+    features_to_scale = [f for f in ALL_FEATURES if f not in TEMPORAL_FEATURES]
+    if feature_name not in features_to_scale:
+        return scaled_val
+    scaler_idx = features_to_scale.index(feature_name)
+    s = scaler.scale_[scaler_idx]
+    return scaled_val * s + scaler.center_[scaler_idx] if s != 0 else scaler.center_[scaler_idx]
 
 
 def create_forecast_table(spark):
@@ -987,8 +1003,7 @@ def forecast_12_months(spark, model, scaler, clip_thresholds, df_pd, device):
 
             # social_to_booking_ratio
             idx_tc  = fi["total_comments"]
-            raw_tc  = (new_row[idx_tc] * scaler.scale_[idx_tc] + scaler.center_[idx_tc]
-                       if scaler.scale_[idx_tc] != 0 else scaler.center_[idx_tc])
+            raw_tc  = _descale_value(new_row[idx_tc], idx_tc, scaler)
             new_row[fi["social_to_booking_ratio"]] = _scale_value(
                 raw_tc / (pred_actual + 1.0), fi["social_to_booking_ratio"], scaler
             )
