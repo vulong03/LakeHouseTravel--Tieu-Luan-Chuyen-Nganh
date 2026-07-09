@@ -27,8 +27,7 @@ def main():
     model = PhoBERTMultiTask(
         model_name=PHOBERT_MODEL_NAME,
         num_sentiments=len(SENTIMENT_LABELS),
-        num_aspects=len(ASPECT_LABELS) * 3,
-        num_intents=len(INTENT_LABELS),
+        num_aspects=len(ASPECT_LABELS) * 2,
     )
 
     # Path to downloaded model weights
@@ -56,7 +55,6 @@ def main():
         mlflow.log_param("fine_tuned_model_name", FINE_TUNED_MODEL_NAME)
         mlflow.log_param("num_sentiment_labels", len(SENTIMENT_LABELS))
         mlflow.log_param("num_aspect_labels", len(ASPECT_LABELS))
-        mlflow.log_param("num_intent_labels", len(INTENT_LABELS))
         mlflow.log_param("weights_path", weights_path)
         mlflow.log_param("import_source", "google_colab")
         mlflow.log_param("device", str(device))        

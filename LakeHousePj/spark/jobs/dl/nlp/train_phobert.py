@@ -78,12 +78,11 @@ USE_AMP             = torch.cuda.is_available()  # FP16 only when GPU present
 
 class PhoBERTMultiTask(nn.Module):
     """
-    PhoBERT backbone + 3 heads:
+    PhoBERT backbone + 2 heads:
       - Sentiment : 3-class softmax
       - Aspect    : 6-class sigmoid (multi-label)
-      - Intent    : 4-class softmax
     """
-    def __init__(self, model_name, num_sentiments, num_aspects, num_intents, dropout=0.3):
+    def __init__(self, model_name, num_sentiments, num_aspects, dropout=0.3):
         super().__init__()
         self.backbone = AutoModel.from_pretrained(model_name)
         hidden = self.backbone.config.hidden_size
@@ -95,14 +94,11 @@ class PhoBERTMultiTask(nn.Module):
         self.aspect_head = nn.Sequential(
             nn.Linear(hidden, 128), nn.ReLU(), nn.Dropout(dropout), nn.Linear(128, num_aspects),
         )
-        self.intent_head = nn.Sequential(
-            nn.Linear(hidden, 64), nn.ReLU(), nn.Dropout(dropout), nn.Linear(64, num_intents),
-        )
 
     def forward(self, input_ids, attention_mask):
         outputs = self.backbone(input_ids=input_ids, attention_mask=attention_mask)
         cls = self.dropout(outputs.last_hidden_state[:, 0, :])
-        return self.sentiment_head(cls), self.aspect_head(cls), self.intent_head(cls)
+        return self.sentiment_head(cls), self.aspect_head(cls)
 
 
 def apply_layer_freezing(model, n=FREEZE_N_LAYERS):
@@ -131,13 +127,11 @@ def apply_layer_freezing(model, n=FREEZE_N_LAYERS):
 # ============================================================
 
 class CommentDataset(Dataset):
-    def __init__(self, texts, sentiment_ids, aspect_vectors, intent_ids, use_sent, use_int, is_weak, tokenizer, max_len):
+    def __init__(self, texts, sentiment_ids, aspect_vectors, use_sent, is_weak, tokenizer, max_len):
         self.texts = texts
         self.sentiment_ids = sentiment_ids
         self.aspect_vectors = aspect_vectors
-        self.intent_ids = intent_ids
         self.use_sent = use_sent
-        self.use_int = use_int
         self.is_weak = is_weak
         self.tokenizer = tokenizer
         self.max_len = max_len
@@ -158,9 +152,7 @@ class CommentDataset(Dataset):
             'attention_mask': enc['attention_mask'].squeeze(),
             'sentiment':      torch.tensor(self.sentiment_ids[idx], dtype=torch.long),
             'aspects':        torch.tensor(self.aspect_vectors[idx], dtype=torch.float),
-            'intent':         torch.tensor(self.intent_ids[idx], dtype=torch.long),
             'use_sent':       torch.tensor(self.use_sent[idx], dtype=torch.bool),
-            'use_int':        torch.tensor(self.use_int[idx], dtype=torch.bool),
             'is_weak':        torch.tensor(self.is_weak[idx], dtype=torch.bool),
         }
 
@@ -188,18 +180,15 @@ def load_and_prepare_data():
 
     # Encode labels
     pdf['sentiment_id']  = pdf['sentiment_label'].map(SENTIMENT_TO_ID).fillna(1).astype(int)
-    pdf['intent_id']     = pdf['intent_label'].map(INTENT_TO_ID).fillna(3).astype(int)
 
     # Handle missing columns if running on old parquet
     if 'use_for_sentiment' not in pdf.columns:
         pdf['use_for_sentiment'] = True
-    if 'use_for_intent' not in pdf.columns:
-        pdf['use_for_intent'] = True
     if 'is_weak_label' not in pdf.columns:
         pdf['is_weak_label'] = False
 
     def aspects_to_vector(row):
-        vec = [0.0] * (len(ASPECT_LABELS) * 3)
+        vec = [0.0] * (len(ASPECT_LABELS) * 2)
         aspects_str = str(row['aspects']) if pd.notna(row['aspects']) else ""
         if not aspects_str:
             return vec
@@ -212,11 +201,9 @@ def load_and_prepare_data():
                 neg_col = f"aspect_{a}_neg"
                 pos_val = float(row[pos_col]) if pos_col in row and pd.notna(row[pos_col]) else 0.0
                 neg_val = float(row[neg_col]) if neg_col in row and pd.notna(row[neg_col]) else 0.0
-                neu_val = 1.0 if (pos_val == 0.0 and neg_val == 0.0) else 0.0
                 
-                vec[idx * 3 + 0] = neg_val
-                vec[idx * 3 + 1] = neu_val
-                vec[idx * 3 + 2] = pos_val
+                vec[idx * 2 + 0] = neg_val
+                vec[idx * 2 + 1] = pos_val
         return vec
 
     pdf['aspect_vector'] = pdf.apply(aspects_to_vector, axis=1)
@@ -233,9 +220,7 @@ def load_and_prepare_data():
 
     pdf_out = pd.concat(parts, ignore_index=True).sample(frac=1, random_state=42)
     
-    # FIX ISSUE-07: Log intent distribution after stratified sampling
-    print("\n  Intent distribution after stratified sampling:")
-    print(pdf_out.groupby(['sentiment_label', 'intent_label']).size().unstack(fill_value=0))
+    # Intent distribution logging removed
     
     print(f"\n  After stratified sampling: {len(pdf_out):,}")
     print(pdf_out['sentiment_label'].value_counts())
@@ -256,9 +241,7 @@ def create_dataloaders(pdf, tokenizer):
     texts         = pdf['comment_text'].tolist()
     sentiment_ids = pdf['sentiment_id'].tolist()
     aspect_vecs   = pdf['aspect_vector'].tolist()
-    intent_ids    = pdf['intent_id'].tolist()
     use_sent      = pdf['use_for_sentiment'].tolist()
-    use_int       = pdf['use_for_intent'].tolist()
     is_weak       = pdf['is_weak_label'].tolist()
     n             = len(texts)
 
@@ -279,8 +262,8 @@ def create_dataloaders(pdf, tokenizer):
     def make_ds(idx):
         return CommentDataset(
             [texts[i] for i in idx], [sentiment_ids[i] for i in idx],
-            [aspect_vecs[i] for i in idx], [intent_ids[i] for i in idx],
-            [use_sent[i] for i in idx], [use_int[i] for i in idx],
+            [aspect_vecs[i] for i in idx],
+            [use_sent[i] for i in idx],
             [is_weak[i] for i in idx],
             tokenizer, MAX_SEQ_LENGTH,
         )
@@ -322,7 +305,6 @@ def train_model(model, train_loader, val_loader, test_loader, train_eval_loader,
     head_params = (
         list(model.sentiment_head.parameters())
         + list(model.aspect_head.parameters())
-        + list(model.intent_head.parameters())
     )
     optimizer = torch.optim.AdamW([
         {"params": backbone_params, "lr": BACKBONE_LR, "weight_decay": 0.01},
@@ -382,31 +364,25 @@ def train_model(model, train_loader, val_loader, test_loader, train_eval_loader,
                 mask  = batch['attention_mask'].to(device)
                 s_lbl = batch['sentiment'].to(device)
                 a_lbl = batch['aspects'].to(device)
-                i_lbl = batch['intent'].to(device)
                 u_sent = batch['use_sent'].to(device)
-                u_int  = batch['use_int'].to(device)
                 is_weak = batch['is_weak'].to(device)
 
                 # FP16 forward
                 with torch.autocast(device_type=device.type, enabled=USE_AMP):
-                    s_logits, a_logits, i_logits = model(ids, mask)
+                    s_logits, a_logits = model(ids, mask)
                     
                     # FIX ISSUE-04: Apply label smoothing for weak labels
                     loss_s_unreduced = nn.CrossEntropyLoss(reduction='none')(s_logits, s_lbl)
                     loss_s_smooth = nn.CrossEntropyLoss(reduction='none', label_smoothing=0.1)(s_logits, s_lbl)
                     loss_s = torch.where(is_weak, loss_s_smooth, loss_s_unreduced)
                     
-                    loss_i = nn.CrossEntropyLoss(reduction='none')(i_logits, i_lbl)
-                    
                     # FIX ISSUE-02: Mask loss per-task
                     loss_s = (loss_s * u_sent).sum() / max(u_sent.sum(), 1)
-                    loss_i = (loss_i * u_int).sum() / max(u_int.sum(), 1)
 
-                    # FIX ISSUE-05: Lower aspect loss weight to reduce noise
+                    # FIX ISSUE-05: Adjusted aspect/sentiment loss weight (no intent)
                     loss = (
-                        loss_s * 0.5
-                        + loss_asp_fn(a_logits, a_lbl) * 0.1
-                        + loss_i * 0.4
+                        loss_s * 0.8
+                        + loss_asp_fn(a_logits, a_lbl) * 0.2
                     ) / GRAD_ACCUM_STEPS
 
                 amp_scaler.scale(loss).backward()
@@ -429,8 +405,8 @@ def train_model(model, train_loader, val_loader, test_loader, train_eval_loader,
             val_f1      = val_metrics['sentiment_f1']
             val_f1_history.append(val_f1)
             
-            # FIX ISSUE-06: Use composite metric for early stopping
-            val_composite = 0.6 * val_metrics['sentiment_f1'] + 0.4 * val_metrics['intent_f1']
+            # Use sentiment F1 for composite metric
+            val_composite = val_metrics['sentiment_f1']
 
             # --- Evaluate: Train subset (monitor overfit gap) ---
             train_metrics = evaluate(model, train_eval_loader, device)
@@ -441,20 +417,18 @@ def train_model(model, train_loader, val_loader, test_loader, train_eval_loader,
             gap_flag = " ⚠️ GAP" if overfit_gap > 0.10 else ""
             print(f"  Epoch {epoch+1}/{EPOCHS} | Loss: {avg_loss:.4f} | "
                   f"Train-F1: {train_f1:.4f} | Val-F1: {val_f1:.4f} | "
-                  f"Gap: {overfit_gap:+.4f}{gap_flag} | Intent-F1: {val_metrics['intent_f1']:.4f}")
+                  f"Gap: {overfit_gap:+.4f}{gap_flag}")
 
             mlflow.log_metrics({
                 "train_loss":          avg_loss,
                 "train_sentiment_f1":  train_f1,
                 "val_sentiment_f1":    val_f1,
-                "val_intent_f1":       val_metrics['intent_f1'],
                 "val_sent_accuracy":   val_metrics['sentiment_accuracy'],
                 "val_composite_f1":    val_composite,
                 "overfit_gap":         overfit_gap,
             }, step=epoch + 1)
 
             # --- Early Stopping (theo Val F1, không theo Train F1) ---
-            # FIX ISSUE-06: Check composite score for early stopping
             if val_composite > best_composite:
                 best_composite = val_composite
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
@@ -478,8 +452,6 @@ def train_model(model, train_loader, val_loader, test_loader, train_eval_loader,
             "best_val_composite_f1": best_composite,
             "test_sentiment_f1":  final['sentiment_f1'],
             "test_sentiment_acc": final['sentiment_accuracy'],
-            "test_intent_f1":     final['intent_f1'],
-            "test_intent_acc":    final['intent_accuracy'],
             "epochs_trained":     len(train_losses),
             "final_overfit_gap":  train_f1_history[-1] - val_f1_history[-1] if train_f1_history else 0.0,
         })
@@ -522,7 +494,6 @@ def train_model(model, train_loader, val_loader, test_loader, train_eval_loader,
 def evaluate(model, test_loader, device, verbose=False):
     model.eval()
     all_sent_true, all_sent_pred   = [], []
-    all_intent_true, all_intent_pred = [], []
 
     with torch.no_grad():
         for batch in test_loader:
@@ -530,24 +501,18 @@ def evaluate(model, test_loader, device, verbose=False):
             mask = batch['attention_mask'].to(device)
 
             with torch.autocast(device_type=device.type, enabled=USE_AMP):
-                s_logits, _, i_logits = model(ids, mask)
+                s_logits, _ = model(ids, mask)
 
             all_sent_true.extend(batch['sentiment'].numpy())
             all_sent_pred.extend(s_logits.argmax(dim=1).cpu().numpy())
-            all_intent_true.extend(batch['intent'].numpy())
-            all_intent_pred.extend(i_logits.argmax(dim=1).cpu().numpy())
 
     if verbose:
         print("\n  Sentiment Report:")
         print(classification_report(all_sent_true, all_sent_pred, target_names=SENTIMENT_LABELS))
-        print("\n  Intent Report:")
-        print(classification_report(all_intent_true, all_intent_pred, target_names=INTENT_LABELS))
 
     return {
         'sentiment_f1':       f1_score(all_sent_true,   all_sent_pred,   average='macro'),
         'sentiment_accuracy': accuracy_score(all_sent_true,   all_sent_pred),
-        'intent_f1':          f1_score(all_intent_true, all_intent_pred, average='macro'),
-        'intent_accuracy':    accuracy_score(all_intent_true, all_intent_pred),
     }
 
 
@@ -559,7 +524,7 @@ def main():
     print("=" * 70)
     print("NLP Pipeline Step 2: Fine-tune PhoBERT [OPTIMIZED v2]")
     print("=" * 70)
-    print(f"Tasks  : Sentiment(3) + Aspect(6) + Intent(4)")
+    print(f"Tasks  : Sentiment(3) + Aspect(6)")
     print(f"Optims : LayerFreeze({FREEZE_N_LAYERS}/12) | FP16={USE_AMP} | "
           f"GradAccum={GRAD_ACCUM_STEPS} | EarlyStop(p={EARLY_STOP_PATIENCE})")
     print(f"Start  : {datetime.now()}")
@@ -575,8 +540,7 @@ def main():
     model = PhoBERTMultiTask(
         model_name=PHOBERT_MODEL_NAME,
         num_sentiments=len(SENTIMENT_LABELS),
-        num_aspects=len(ASPECT_LABELS) * 3,
-        num_intents=len(INTENT_LABELS),
+        num_aspects=len(ASPECT_LABELS) * 2,
     ).to(device)
 
     # === Optimization 1: Layer Freezing ===

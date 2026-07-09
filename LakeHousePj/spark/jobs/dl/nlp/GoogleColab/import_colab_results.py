@@ -236,7 +236,7 @@ def main():
             job_details={
                 "job_type": "nlp_inference_v2_colab",
                 "method": "google_colab_gpu",
-                "tasks": "sentiment+aspect+intent",
+                "tasks": "sentiment+aspect",
             },
         )
 

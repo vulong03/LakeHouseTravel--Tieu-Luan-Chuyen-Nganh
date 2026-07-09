@@ -1,54 +1,24 @@
 """
-DL Pipeline: Train GRU Deep Learning Model & Forecast Province Hotel Volume
+ML Pipeline: Train GRU Deep Learning Model & Forecast Province Hotel Volume
 =============================================================================
 
-Source table: gold.gold.fact_province_month_dl_features (~47 features after v5 additions)
+Source table: gold.gold.fact_province_month_dl_features
 
-Architecture (v5):
-- 2-layer GRU + LayerNorm + Temporal Attention
+Architecture:
+- 1 or 2-layer GRU + LayerNorm + Temporal Attention (tuned via Optuna)
 - Deeper FC head: Linear(hidden) → GELU → Dropout → Linear(16) → ReLU → Linear(1)
 - HybridLoss: 70% HuberLoss + 30% SMAPELoss
-- RobustScaler (median/IQR)
+- RobustScaler (applied to continuous features; temporal/ratio/sentiment excluded)
 - CosineAnnealingWarmRestarts scheduler
 
-Changes from v4 → v5 (Aligned with LSTM v5):
-============================================================
-🔴 FIX 1 [CRITICAL] Train/Val/Test split
-   3-way split (60/20/20 time-based or 70/15/15)
-   train → học weights
-   val   → early stopping, chọn epoch tốt nhất (KHÔNG báo metrics)
-   test  → chỉ dùng 1 lần để report final metrics
-
-🔴 FIX 2 [CRITICAL] Outlier clipping leakage
-   chia train/val/test TRƯỚC, tính p99 trên train only,
-   apply cùng ngưỡng cho val/test
-
-🟡 FIX 3 Thêm hotness_lag features
-   thêm hotness_lag_1/2/3/12, hotness_rolling_3m, hotness_momentum
-
-🟡 FIX 4 Thêm PhoBERT aspect features
-   thêm đủ 6 aspect features
-
-🟢 FIX 7 Sửa scheduler.step() bug
-   scheduler.step(epoch) — đúng API
-
-🟢 FIX 8 Sửa growth_pct bug trong forecast loop
-   prev_volume cập nhật mỗi bước horizon
-
-🟢 FIX 9 Bỏ unused BatchNorm1d layer
-   xóa hẳn self.bn
-
-🟢 FIX 10 Framing rõ 12-month forecast assumption
-   social/NLP features dùng persistence assumption (giữ theo trạng thái gần nhất)
-
-Features v5: 47 total
+Features: 39 total
   Temporal (2): month_sin, month_cos
-  Hotel lag (6): hotel_vol_lag_1/2/3/12, rolling_3m, momentum
-  Hotness lag (6): hotness_lag_1/2/3/12, rolling_3m, momentum
-  Volume (5): total_posts, total_comments, total_hotel_reviews, unique_authors, comments_per_post
-  Engagement (4): avg_likes_per_post, avg_saves_per_post, viral_post_ratio, engagement_score, hotness_score
-  NLP (7): avg_sentiment, sentiment_std, positive_ratio, negative_ratio,
-           avg_word_count, avg_unique_word_ratio, emoji_sentiment_ratio, reply_ratio
+  Hotel lag (3): hotel_vol_lag_12, hotel_vol_rolling_3m, hotel_vol_momentum
+  Hotness lag (3): hotness_lag_12, hotness_rolling_3m, hotness_momentum
+  Volume (3): total_posts, total_comments, comments_per_post
+  Engagement (4): avg_likes_per_post, avg_saves_per_post, viral_post_ratio, engagement_score
+  NLP (6): avg_sentiment, sentiment_std, positive_ratio, negative_ratio,
+           emoji_sentiment_ratio, reply_ratio
   Aspect (6): avg_aspect_scenery, avg_aspect_food, avg_aspect_price,
               avg_aspect_service, avg_aspect_transport, avg_aspect_accommodation
   Hotel quality (9): avg_hotel_score, hotel_score_std, high_score_ratio,
@@ -60,6 +30,7 @@ Output:
 - Model: province_hotel_volume_forecaster_gru_v5 (MLflow registry)
 - Table: gold.gold.province_month_forecast_gru_next12
 """
+
 
 import sys
 sys.path.append('/opt/spark/jobs')
@@ -96,6 +67,31 @@ from torch.utils.data import Dataset, DataLoader
 
 from utils.iceberg_utils import create_iceberg_table_if_not_exists
 
+optuna_available = False
+import sys
+import os
+LIB_PATH = "/tmp/pip_packages"
+if LIB_PATH not in sys.path:
+    sys.path.append(LIB_PATH)
+
+try:
+    import optuna
+    optuna_available = True
+except ImportError:
+    import subprocess
+    try:
+        print(f"  Optuna not found. Trying to install via pip to {LIB_PATH}...")
+        os.makedirs(LIB_PATH, exist_ok=True)
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install",
+            f"--target={LIB_PATH}", "optuna"
+        ])
+        import optuna
+        optuna_available = True
+        print("  Optuna installed successfully.")
+    except Exception as e:
+        print(f"  WARNING: Failed to install optuna ({e}). Fallback to hardcoded hyperparameters.")
+
 # ============================================================
 # Configuration
 # ============================================================
@@ -108,59 +104,68 @@ DL_FEATURES_TABLE = "gold.gold.fact_province_month_dl_features"
 
 FORECAST_MONTHS = 12
 
-# Aligned with LSTM split ratios: 75% train → 12.5% val → 12.5% test
+# 3-way time-based split (train/val/test)
+# 75% train → 12.5% val → 12.5% test
 TRAIN_RATIO = 0.75
 VAL_RATIO   = 0.125
 TEST_RATIO  = 1.0 - TRAIN_RATIO - VAL_RATIO
 
-# Model hyperparameters (aligned with LSTM configurations)
+# Default/Fallback hyperparameters (aligned with v4 configurations)
 SEQUENCE_LENGTH = 3
-HIDDEN_SIZE     = 48
-NUM_LAYERS      = 2
-DROPOUT         = 0.43
-LEARNING_RATE   = 0.0005
+DEFAULT_HIDDEN_SIZE   = 48
+DEFAULT_NUM_LAYERS    = 2
+DEFAULT_DROPOUT       = 0.43
+DEFAULT_LEARNING_RATE = 0.0005
+DEFAULT_WEIGHT_DECAY  = 7e-4
+
 EPOCHS          = 200
 BATCH_SIZE      = 32
 PATIENCE        = 25
-WEIGHT_DECAY    = 7e-4
+
+# Fourier Seasonality Configuration
+FOURIER_K = 1  # Set to 1 (baseline sin/cos), 2, 3 or higher to add harmonics
+
+# Hyperparameter Search Space for Optuna
+TUNING_EPOCHS   = 150
+TUNING_PATIENCE = 20
+N_TRIALS        = 100
 
 TARGET = "hotel_review_volume"
 
 # ============================================================
-# Feature Groups (Identical to LSTM v5)
+# Feature Groups
 # ============================================================
 
-TEMPORAL_FEATURES = ["month_sin", "month_cos"]
+TEMPORAL_FEATURES = []
+for k in range(1, FOURIER_K + 1):
+    if k == 1:
+        TEMPORAL_FEATURES.extend(["month_sin", "month_cos"])
+    else:
+        TEMPORAL_FEATURES.extend([f"month_sin_k{k}", f"month_cos_k{k}"])
 
 HOTEL_LAG_FEATURES = [
-    "hotel_vol_lag_1", "hotel_vol_lag_2", "hotel_vol_lag_3",
     "hotel_vol_lag_12", "hotel_vol_rolling_3m", "hotel_vol_momentum",
 ]
 
-# FIX 3: hotness lag features (TikTok delayed signal)
 HOTNESS_LAG_FEATURES = [
-    "hotness_lag_1", "hotness_lag_2", "hotness_lag_3",
     "hotness_lag_12", "hotness_rolling_3m", "hotness_momentum",
 ]
 
 VOLUME_FEATURES = [
-    "total_posts", "total_comments", "total_hotel_reviews",
-    "unique_authors", "comments_per_post",
+    "total_posts", "total_comments",
+    "comments_per_post",
 ]
 
 ENGAGEMENT_FEATURES = [
     "avg_likes_per_post", "avg_saves_per_post",
     "viral_post_ratio", "engagement_score",
-    "hotness_score",
 ]
 
 NLP_FEATURES = [
     "avg_sentiment", "sentiment_std", "positive_ratio", "negative_ratio",
-    "avg_word_count", "avg_unique_word_ratio",
     "emoji_sentiment_ratio", "reply_ratio",
 ]
 
-# FIX 4: PhoBERT aspect features
 ASPECT_FEATURES = [
     "avg_aspect_scenery", "avg_aspect_food", "avg_aspect_price",
     "avg_aspect_service", "avg_aspect_transport", "avg_aspect_accommodation",
@@ -177,7 +182,7 @@ CUSTOM_FEATURES = [
     "social_to_booking_ratio", "sentiment_polarity_change", "hotel_vol_std_rolling_3m",
 ]
 
-# Full feature set (v5: 47 features)
+# Full feature set (39 features)
 ALL_FEATURES = (
     TEMPORAL_FEATURES
     + HOTEL_LAG_FEATURES
@@ -189,6 +194,14 @@ ALL_FEATURES = (
     + HOTEL_FEATURES
     + CUSTOM_FEATURES
 )
+
+UNSCALED_FEATURES = [
+    "viral_post_ratio",
+    "avg_sentiment", "sentiment_std", "positive_ratio", "negative_ratio", "emoji_sentiment_ratio", "reply_ratio",
+    "avg_aspect_scenery", "avg_aspect_food", "avg_aspect_price", "avg_aspect_service", "avg_aspect_transport", "avg_aspect_accommodation",
+    "high_score_ratio", "domestic_review_ratio", "couple_ratio", "family_ratio", "business_ratio", "solo_ratio",
+    "sentiment_polarity_change"
+] + TEMPORAL_FEATURES
 
 # ============================================================
 # Loss Functions
@@ -214,7 +227,7 @@ class HybridLoss(nn.Module):
 
 
 # ============================================================
-# GRU Model (v5 — aligned architecture and fixes with LSTM)
+# GRU Model (v5 — removed unused BatchNorm, FIX 9)
 # ============================================================
 
 class TemporalAttention(nn.Module):
@@ -232,7 +245,6 @@ class TemporalAttention(nn.Module):
 class GRUForecaster(nn.Module):
     """
     2-layer GRU + LayerNorm + Temporal Attention + deep FC head.
-    v5: aligned architecture and parameters with LSTM.
     """
     def __init__(self, input_size, hidden_size, num_layers, dropout):
         super().__init__()
@@ -298,7 +310,7 @@ def create_spark_session():
 
 def load_features(spark):
     print("\n" + "=" * 80)
-    print("STEP 1: LOADING PRE-COMPUTED DL FEATURES FOR GRU")
+    print("STEP 1: LOADING PRE-COMPUTED DL FEATURES")
     print("=" * 80)
 
     df = spark.table(DL_FEATURES_TABLE)
@@ -333,7 +345,7 @@ def load_features(spark):
 
     before = df.count()
     df = df.dropna(subset=HOTEL_LAG_FEATURES + [TARGET])
-    df = df.filter(F.col(TARGET) > 0)
+    df = df.filter(F.col(TARGET) >= 0)
     after = df.count()
 
     print(f"  Dropped {before - after} rows (NULL lags or zero target), remaining: {after}")
@@ -387,20 +399,13 @@ def clip_and_scale_entire(df_pd, train_end, features):
 
     print(f"  Clip thresholds (train p99): { {k: f'{v:.2f}' for k,v in clip_thresholds.items()} }")
 
-    # --- RobustScaler: fit on train only for each province ---
-    scalers = {}
-    for province_sk, group in df.groupby("province_sk"):
-        train_group = group[group["year_month"] <= train_end]
-        if len(train_group) < 2:
-            train_group = group
-        
-        scaler = RobustScaler()
-        scaler.fit(train_group[features])
-        scalers[province_sk] = scaler
-        
-        df.loc[df["province_sk"] == province_sk, features] = scaler.transform(group[features])
+    # --- RobustScaler: fit on train only (excluding unscaled features) ---
+    features_to_scale = [f for f in features if f not in UNSCALED_FEATURES]
+    scaler = RobustScaler()
+    scaler.fit(train_raw[features_to_scale])
+    df[features_to_scale] = scaler.transform(df[features_to_scale])
 
-    return df, scalers, clip_thresholds
+    return df, scaler, clip_thresholds
 
 
 def prepare_sequences(df_pd, features, target, seq_length):
@@ -422,112 +427,76 @@ def prepare_sequences(df_pd, features, target, seq_length):
 
 
 def compute_metrics(y_true, y_pred, prefix=""):
-    """Compute all metrics on log scale, plus MAPE/SMAPE on actual scale."""
-    y_true_actual = np.expm1(y_true)
-    y_pred_actual = np.expm1(np.clip(y_pred, 0.0, None))
-
-    mask      = y_true_actual > 0
-    mape      = float(np.mean(np.abs(
-        (y_true_actual[mask] - y_pred_actual[mask]) / y_true_actual[mask]
-    )) * 100) if np.sum(mask) > 0 else 0.0
-
+    """Compute metrics on both log scale and actual scale consistently."""
+    # 1. Log scale metrics (GRU target scale)
+    rmse_log  = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+    mae_log   = float(mean_absolute_error(y_true, y_pred))
+    r2_log    = float(r2_score(y_true, y_pred))
     smape_log = float(
         2 * np.mean(np.abs(y_true - y_pred) /
                     (np.abs(y_true) + np.abs(y_pred) + 1e-8)) * 100
     )
 
+    # 2. Actual scale metrics (expm1 conversion)
+    y_true_actual = np.expm1(y_true)
+    y_pred_actual = np.expm1(np.clip(y_pred, 0.0, None))
+
+    rmse_actual = float(np.sqrt(mean_squared_error(y_true_actual, y_pred_actual)))
+    mae_actual  = float(mean_absolute_error(y_true_actual, y_pred_actual))
+    r2_actual   = float(r2_score(y_true_actual, y_pred_actual))
+
+    # WAPE (Weighted Absolute Percentage Error)
+    wape_actual = float(
+        (np.sum(np.abs(y_true_actual - y_pred_actual)) / (np.sum(y_true_actual) + 1e-8)) * 100
+    )
+
+    # MAPE (only computed on actual values > 0)
+    mask = y_true_actual > 0
+    mape_actual = float(np.mean(np.abs(
+        (y_true_actual[mask] - y_pred_actual[mask]) / y_true_actual[mask]
+    )) * 100) if np.sum(mask) > 0 else 0.0
+
+    # SMAPE on actual scale
+    smape_actual = float(
+        2 * np.mean(np.abs(y_true_actual - y_pred_actual) /
+                    (np.abs(y_true_actual) + np.abs(y_pred_actual) + 1e-8)) * 100
+    )
+
     return {
-        f"{prefix}rmse":        float(np.sqrt(mean_squared_error(y_true, y_pred))),
-        f"{prefix}mae":         float(mean_absolute_error(y_true, y_pred)),
-        f"{prefix}r2":          float(r2_score(y_true, y_pred)),
-        f"{prefix}mape_actual": mape,
-        f"{prefix}smape_log":   smape_log,
+        f"{prefix}rmse_log":      rmse_log,
+        f"{prefix}mae_log":       mae_log,
+        f"{prefix}r2_log":        r2_log,
+        f"{prefix}smape_log":     smape_log,
+
+        f"{prefix}rmse_actual":   rmse_actual,
+        f"{prefix}mae_actual":    mae_actual,
+        f"{prefix}r2_actual":     r2_actual,
+        f"{prefix}wape_actual":   wape_actual,
+        f"{prefix}mape_actual":   mape_actual,
+        f"{prefix}smape_actual":  smape_actual,
     }
 
 
-def compute_per_province_metrics(y_true, y_pred, meta_test):
-    """Compute R2 and MAPE per province and print summaries."""
-    print("\n" + "-" * 55)
-    print("PER-PROVINCE TEST METRICS EVALUATION")
-    print("-" * 55)
-    
-    test_df = pd.DataFrame(meta_test)
-    test_df["y_true_log"] = y_true
-    test_df["y_pred_log"] = y_pred
-    
-    test_df["y_true_actual"] = np.expm1(y_true)
-    test_df["y_pred_actual"] = np.expm1(np.clip(y_pred, 0.0, None))
-    
-    results = {}
-    for prov_name, group in test_df.groupby("province_name"):
-        if len(group) < 2:
-            continue
-        
-        # Calculate actual MAPE
-        y_t_act = group["y_true_actual"].values
-        y_p_act = group["y_pred_actual"].values
-        mask = y_t_act > 0
-        mape = float(np.mean(np.abs(y_t_act[mask] - y_p_act[mask]) / y_t_act[mask]) * 100) if np.sum(mask) > 0 else 0.0
-        
-        # Calculate R2 (log-scale)
-        try:
-            r2 = float(r2_score(group["y_true_log"].values, group["y_pred_log"].values))
-        except Exception:
-            r2 = 0.0
-            
-        # Calculate RMSE (log-scale)
-        rmse = float(np.sqrt(mean_squared_error(group["y_true_log"].values, group["y_pred_log"].values)))
-        
-        results[prov_name] = {
-            "mape_actual": mape,
-            "r2_log": r2,
-            "rmse_log": rmse,
-            "samples": len(group)
-        }
-        
-    # Convert to DataFrame for sorting and display
-    report_df = pd.DataFrame.from_dict(results, orient="index").sort_values("mape_actual")
-    
-    print("\n  Top 5 Best Performing Provinces (Lowest MAPE):")
-    for name, row in report_df.head(5).iterrows():
-        print(f"    - {name}: MAPE={row['mape_actual']:.2f}% | R²={row['r2_log']:.4f} | Samples={int(row['samples'])}")
-        
-    print("\n  Top 5 Worst Performing Provinces (Highest MAPE):")
-    for name, row in report_df.tail(5).iloc[::-1].iterrows():
-        print(f"    - {name}: MAPE={row['mape_actual']:.2f}% | R²={row['r2_log']:.4f} | Samples={int(row['samples'])}")
-        
-    # Save report to JSON file
-    report_json_path = "/tmp/per_province_metrics_gru.json"
-    with open(report_json_path, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2, ensure_ascii=False)
-        
-    # Log artifact to MLflow
-    mlflow.log_artifact(report_json_path, "artifacts")
-    print(f"\n  Logged per-province metrics report to MLflow artifacts.")
-    print("-" * 55)
-    
-    return results
-
-
 # ============================================================
-# Step 3b: Single GRU training run
+# Step 3b: Single GRU training run (reusable)
 # ============================================================
 
 def train_single_gru(X_train, y_train, X_val, y_val, X_test, y_test,
-                     input_size, run_name, device):
+                      input_size, run_name, device,
+                      hidden_size, num_layers, dropout, learning_rate, weight_decay,
+                      epochs=EPOCHS, patience=PATIENCE):
     """
-    FIX 1: val set dùng cho early stopping, test set chỉ báo metrics 1 lần ở cuối.
-    FIX 7: scheduler.step(epoch) — đúng API CosineAnnealingWarmRestarts.
+    Train a single GRU run.
     """
     model = GRUForecaster(
-        input_size=input_size, hidden_size=HIDDEN_SIZE,
-        num_layers=NUM_LAYERS, dropout=DROPOUT
+        input_size=input_size, hidden_size=hidden_size,
+        num_layers=num_layers, dropout=dropout
     ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
 
     optimizer  = torch.optim.Adam(model.parameters(),
-                                  lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+                                  lr=learning_rate, weight_decay=weight_decay)
     criterion  = HybridLoss(delta=0.5, smape_weight=0.3)
     scheduler  = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, T_0=30, T_mult=2, eta_min=1e-6
@@ -543,7 +512,7 @@ def train_single_gru(X_train, y_train, X_val, y_val, X_test, y_test,
     train_losses, val_losses = [], []
     best_state = None
 
-    for epoch in range(EPOCHS):
+    for epoch in range(epochs):
         # --- Train ---
         model.train()
         epoch_loss = 0.0
@@ -568,12 +537,11 @@ def train_single_gru(X_train, y_train, X_val, y_val, X_test, y_test,
         avg_val = val_loss / max(len(X_val), 1)
         val_losses.append(avg_val)
 
-        # scheduler step by epoch position
-        scheduler.step(epoch)
+        scheduler.step()
 
         if (epoch + 1) % 20 == 0:
             lr = optimizer.param_groups[0]['lr']
-            print(f"    [{run_name}] Epoch {epoch+1}/{EPOCHS} | "
+            print(f"    [{run_name}] Epoch {epoch+1}/{epochs} | "
                   f"Train: {avg_train:.5f} | Val: {avg_val:.5f} | LR: {lr:.6f}")
 
         # Early stopping on VAL
@@ -583,7 +551,7 @@ def train_single_gru(X_train, y_train, X_val, y_val, X_test, y_test,
             best_state       = {k: v.cpu().clone() for k, v in model.state_dict().items()}
         else:
             patience_counter += 1
-            if patience_counter >= PATIENCE:
+            if patience_counter >= patience:
                 print(f"    [{run_name}] Early stopping at epoch {epoch+1}")
                 break
 
@@ -617,21 +585,92 @@ def train_single_gru(X_train, y_train, X_val, y_val, X_test, y_test,
     return model, all_metrics, train_losses, val_losses, y_pred_test
 
 
+def tune_hyperparameters(X_train, y_train, X_val, y_val, X_test, y_test, input_size, device):
+    print("\n" + "=" * 80)
+    print("HYPERPARAMETER TUNING WITH OPTUNA")
+    print("=" * 80)
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    def objective(trial):
+        hidden_size   = trial.suggest_categorical("hidden_size", [16, 24, 32, 48, 64, 96, 128])
+        num_layers    = trial.suggest_categorical("num_layers", [1, 2])
+        dropout       = trial.suggest_float("dropout", 0.0, 0.6)
+        learning_rate = trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True)
+        weight_decay  = trial.suggest_float("weight_decay", 1e-5, 1e-2, log=True)
+
+        with mlflow.start_run(run_name=f"trial_{trial.number}", nested=True):
+            mlflow.log_params({
+                "hidden_size":   hidden_size,
+                "num_layers":    num_layers,
+                "dropout":       dropout,
+                "learning_rate": learning_rate,
+                "weight_decay":  weight_decay,
+                "stage":         "tuning"
+            })
+
+            _, metrics, _, _, _ = train_single_gru(
+                X_train, y_train, X_val, y_val, X_test, y_test,
+                input_size=input_size,
+                run_name=f"trial_{trial.number}",
+                device=device,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                dropout=dropout,
+                learning_rate=learning_rate,
+                weight_decay=weight_decay,
+                epochs=TUNING_EPOCHS,
+                patience=TUNING_PATIENCE
+            )
+
+            mlflow.log_metrics({
+                "val_loss": metrics["best_val_loss"],
+                "val_rmse": metrics["val_rmse_log"],
+                "val_mae":  metrics["val_mae_log"],
+                "val_r2":   metrics["val_r2_log"]
+            })
+
+            print(f"    [Trial {trial.number}] Finished | val_loss: {metrics['best_val_loss']:.5f} | params: {trial.params}")
+
+            return metrics["best_val_loss"]
+
+    study = optuna.create_study(direction="minimize")
+    study.optimize(objective, n_trials=N_TRIALS)
+
+    print("\n" + "=" * 80)
+    print("TUNING COMPLETED")
+    print(f"  Best trial: #{study.best_trial.number}")
+    print(f"  Best Val Loss: {study.best_value:.5f}")
+    best_params = study.best_params.copy()
+    print(f"  Best Hyperparameters: {best_params}")
+    print("=" * 80)
+
+    return best_params
+
+
 # ============================================================
 # Step 3c: Main GRU training
 # ============================================================
 
 def train_model(df):
     print("\n" + "=" * 80)
-    print("STEP 3: TRAINING GRU MODEL v5")
+    print("STEP 3: TRAINING GRU MODEL")
     print("=" * 80)
 
-    select_cols = ALL_FEATURES + [TARGET, "year_month", "province_sk", "province_name", "region"]
+    select_cols = ALL_FEATURES + [TARGET, "year_month", "month", "province_sk", "province_name", "region"]
     df_pd       = df.select(select_cols).toPandas()
     df_pd       = df_pd.sort_values(["province_sk", "year_month"])
     df_pd[ALL_FEATURES] = df_pd[ALL_FEATURES].fillna(0)
 
-    # Log-transform target BEFORE split
+    # Dynamically calculate Fourier seasonality features in Pandas
+    for k in range(1, FOURIER_K + 1):
+        if k == 1:
+            df_pd["month_sin"] = np.sin(2 * np.pi * df_pd["month"] / 12.0)
+            df_pd["month_cos"] = np.cos(2 * np.pi * df_pd["month"] / 12.0)
+        else:
+            df_pd[f"month_sin_k{k}"] = np.sin(2 * np.pi * k * df_pd["month"] / 12.0)
+            df_pd[f"month_cos_k{k}"] = np.cos(2 * np.pi * k * df_pd["month"] / 12.0)
+
     df_pd[TARGET] = np.log1p(df_pd[TARGET].astype(float))
 
     # Determine split boundaries (chronological)
@@ -642,12 +681,12 @@ def train_model(df):
 
     print(f"  Split boundaries: train≤{train_end} | val {train_end+1}–{val_end} | test>{val_end}")
 
-    # Clip and scale the entire dataframe using train-derived parameters (FIX 2)
-    df_pd_scaled, scalers, clip_thresholds = clip_and_scale_entire(
+    # Clip and scale the entire dataframe using train-derived parameters
+    df_pd_scaled, scaler, clip_thresholds = clip_and_scale_entire(
         df_pd, train_end, ALL_FEATURES
     )
 
-    # Build sequences for the entire dataset (prevents boundary sequence loss!)
+    # Build sequences for the entire dataset
     X_all, y_all, meta_all = prepare_sequences(df_pd_scaled, ALL_FEATURES, TARGET, SEQUENCE_LENGTH)
 
     # Chronologically split sequences based on the target year_month
@@ -683,58 +722,83 @@ def train_model(df):
     print(f"  Device: {device}")
 
     # -------------------------------------------------------
-    # Main GRU run (full features)
+    # Main GRU run
     # -------------------------------------------------------
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment(EXPERIMENT_NAME)
 
-    print("\n  Training main GRU (full features)...")
+    best_hparams = {
+        "hidden_size":   DEFAULT_HIDDEN_SIZE,
+        "num_layers":    DEFAULT_NUM_LAYERS,
+        "dropout":       DEFAULT_DROPOUT,
+        "learning_rate": DEFAULT_LEARNING_RATE,
+        "weight_decay":  DEFAULT_WEIGHT_DECAY
+    }
+
+    if optuna_available:
+        print("\n  Starting hyperparameter tuning parent run...")
+        with mlflow.start_run(run_name=f"gru_v5_tuning_parent_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
+            best_hparams = tune_hyperparameters(
+                X_train, y_train, X_val, y_val, X_test, y_test,
+                input_size=len(ALL_FEATURES),
+                device=device
+            )
+            mlflow.log_params({
+                "best_" + k: v for k, v in best_hparams.items()
+            })
+            print(f"  Tuning complete. Best parameters to train: {best_hparams}")
+
+    print("\n  Training main GRU...")
     with mlflow.start_run(run_name=f"gru_v5_full_{datetime.now().strftime('%Y%m%d_%H%M%S')}") as main_run:
 
         model, metrics, train_losses, val_losses, y_pred_test = train_single_gru(
             X_train, y_train, X_val, y_val, X_test, y_test,
             input_size=len(ALL_FEATURES),
             run_name="full",
-            device=device
+            device=device,
+            hidden_size=best_hparams["hidden_size"],
+            num_layers=best_hparams["num_layers"],
+            dropout=best_hparams["dropout"],
+            learning_rate=best_hparams["learning_rate"],
+            weight_decay=best_hparams["weight_decay"],
+            epochs=EPOCHS,
+            patience=PATIENCE
         )
 
         print(f"\n  MAIN MODEL RESULTS:")
-        print(f"  Train: RMSE={metrics['train_rmse']:.4f}  MAE={metrics['train_mae']:.4f}  R²={metrics['train_r2']:.4f}")
-        print(f"  Val:   RMSE={metrics['val_rmse']:.4f}    MAE={metrics['val_mae']:.4f}    R²={metrics['val_r2']:.4f}")
-        print(f"  Test:  RMSE={metrics['test_rmse']:.4f}   MAE={metrics['test_mae']:.4f}   R²={metrics['test_r2']:.4f}")
-        print(f"  MAPE(actual)={metrics['test_mape_actual']:.2f}%  SMAPE(log)={metrics['test_smape_log']:.2f}%")
-        print(f"  Train-Val R² gap:  {metrics['train_r2'] - metrics['val_r2']:.4f}")
-        print(f"  Val-Test R² gap:   {metrics['val_r2']   - metrics['test_r2']:.4f}")
+        print(f"  [LOG SCALE]")
+        print(f"    Train: RMSE={metrics['train_rmse_log']:.4f}  MAE={metrics['train_mae_log']:.4f}  R²={metrics['train_r2_log']:.4f}  SMAPE={metrics['train_smape_log']:.2f}%")
+        print(f"    Val:   RMSE={metrics['val_rmse_log']:.4f}    MAE={metrics['val_mae_log']:.4f}    R²={metrics['val_r2_log']:.4f}  SMAPE={metrics['val_smape_log']:.2f}%")
+        print(f"    Test:  RMSE={metrics['test_rmse_log']:.4f}   MAE={metrics['test_mae_log']:.4f}   R²={metrics['test_r2_log']:.4f}  SMAPE={metrics['test_smape_log']:.2f}%")
+        print(f"  [ACTUAL SCALE]")
+        print(f"    Train: RMSE={metrics['train_rmse_actual']:.2f}  MAE={metrics['train_mae_actual']:.2f}  R²={metrics['train_r2_actual']:.4f}  WAPE={metrics['train_wape_actual']:.2f}%  MAPE={metrics['train_mape_actual']:.2f}%  SMAPE={metrics['train_smape_actual']:.2f}%")
+        print(f"    Val:   RMSE={metrics['val_rmse_actual']:.2f}    MAE={metrics['val_mae_actual']:.2f}    R²={metrics['val_r2_actual']:.4f}  WAPE={metrics['val_wape_actual']:.2f}%  MAPE={metrics['val_mape_actual']:.2f}%  SMAPE={metrics['val_smape_actual']:.2f}%")
+        print(f"    Test:  RMSE={metrics['test_rmse_actual']:.2f}   MAE={metrics['test_mae_actual']:.2f}   R²={metrics['test_r2_actual']:.4f}  WAPE={metrics['test_wape_actual']:.2f}%  MAPE={metrics['test_mape_actual']:.2f}%  SMAPE={metrics['test_smape_actual']:.2f}%")
+        print(f"  [METRIC GAPS]")
+        print(f"    Train-Val R² (Log) gap:  {metrics['train_r2_log'] - metrics['val_r2_log']:.4f}")
+        print(f"    Val-Test R² (Log) gap:   {metrics['val_r2_log']   - metrics['test_r2_log']:.4f}")
+        print(f"  Selected Hyperparameters: {best_hparams}")
 
         mlflow.log_params({
             "model_version":    "gru_v5_full",
             "source_table":     DL_FEATURES_TABLE,
             "sequence_length":  SEQUENCE_LENGTH,
-            "hidden_size":      HIDDEN_SIZE,
-            "num_layers":       NUM_LAYERS,
-            "dropout":          DROPOUT,
-            "learning_rate":    LEARNING_RATE,
+            "hidden_size":      best_hparams["hidden_size"],
+            "num_layers":       best_hparams["num_layers"],
+            "dropout":          best_hparams["dropout"],
+            "learning_rate":    best_hparams["learning_rate"],
             "loss":             "HybridLoss_Huber0.5_SMAPE0.3",
             "scaler_type":      "RobustScaler",
             "epochs_max":       EPOCHS,
             "batch_size":       BATCH_SIZE,
             "patience":         PATIENCE,
-            "weight_decay":     str(WEIGHT_DECAY),
+            "weight_decay":     str(best_hparams["weight_decay"]),
             "scheduler":        "CosineAnnealingWarmRestarts_T0=30_step_by_epoch",
             "num_features":     len(ALL_FEATURES),
             "split":            f"train{int(TRAIN_RATIO*100)}/val{int(VAL_RATIO*100)}/test{int(TEST_RATIO*100)}",
-            "fix_1_val_split":  "True",
-            "fix_2_clip_leak":  "True",
-            "fix_3_hotness_lag":"True",
-            "fix_4_aspect":     "True",
-            "fix_7_scheduler":  "True",
-            "fix_8_growth_pct": "True",
-            "fix_9_bn_removed": "True",
+            "tuning_applied":   str(optuna_available)
         })
         mlflow.log_metrics(metrics)
-
-        # Compute and log per-province metrics
-        compute_per_province_metrics(y_test, y_pred_test, meta_test)
 
         # Plots
         _log_training_plots(
@@ -743,13 +807,13 @@ def train_model(df):
 
         # Save artifacts
         mlflow.pytorch.log_model(model, "model")
-        _save_artifacts(scalers, clip_thresholds)
+        _save_artifacts(scaler, clip_thresholds)
 
         model_uri = f"runs:/{mlflow.active_run().info.run_id}/model"
         mlflow.register_model(model_uri, MODEL_NAME)
         print(f"  Model registered: {MODEL_NAME}")
 
-    return model, scalers, clip_thresholds, df_pd_scaled, device
+    return model, scaler, clip_thresholds, df_pd_scaled, device
 
 
 # ============================================================
@@ -759,9 +823,9 @@ def train_model(df):
 def _log_training_plots(train_losses, val_losses, y_test, y_pred_test, metrics, meta_test):
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(train_losses, label='Train')
-    ax.plot(val_losses,   label='Val (early stopping)')
+    ax.plot(val_losses,   label='Val')
     ax.set_xlabel('Epoch'); ax.set_ylabel('Loss')
-    ax.set_title('GRU v5 — Training & Validation Loss')
+    ax.set_title('GRU — Training & Validation Loss')
     ax.legend()
     mlflow.log_figure(fig, "loss_curve.png"); plt.close()
 
@@ -770,7 +834,7 @@ def _log_training_plots(train_losses, val_losses, y_test, y_pred_test, metrics, 
     max_val = float(max(y_test.max(), y_pred_test.max()))
     ax.plot([0, max_val], [0, max_val], 'r--')
     ax.set_xlabel('Actual (log1p)'); ax.set_ylabel('Predicted (log1p)')
-    ax.set_title(f"GRU v5: Actual vs Predicted — Test Set (R²={metrics['test_r2']:.3f})")
+    ax.set_title(f"GRU: Actual vs Predicted — Test Set (R²={metrics['test_r2_log']:.3f})")
     mlflow.log_figure(fig, "actual_vs_predicted_test.png"); plt.close()
 
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -795,40 +859,29 @@ def _log_training_plots(train_losses, val_losses, y_test, y_pred_test, metrics, 
         mlflow.log_figure(fig, "time_series_sample.png"); plt.close()
 
 
-def _save_artifacts(scalers, clip_thresholds):
+def _save_artifacts(scaler, clip_thresholds):
     with open("/tmp/scaler_gru_v5.pkl", "wb") as f:
-        pickle.dump(scalers, f)
+        pickle.dump(scaler, f)
     mlflow.log_artifact("/tmp/scaler_gru_v5.pkl", "artifacts")
 
     config = {
         "all_features":     ALL_FEATURES,
         "target":           TARGET,
         "sequence_length":  SEQUENCE_LENGTH,
-        "scaler_type":      "PerProvinceRobustScaler",
+        "scaler_type":      "RobustScaler",
         "model_version":    "gru_v5",
         "split":            {"train": TRAIN_RATIO, "val": VAL_RATIO, "test": TEST_RATIO},
         "clip_thresholds":  {k: float(v) for k, v in clip_thresholds.items()},
         "hotness_lag_features":  HOTNESS_LAG_FEATURES,
         "aspect_features":       ASPECT_FEATURES,
-        "fixes_applied": {
-            "FIX1_train_val_test_split":   True,
-            "FIX2_clip_leakage_fixed":     True,
-            "FIX3_hotness_lag_added":      True,
-            "FIX4_aspect_features_added":  True,
-            "FIX5_ablation_study":         False,
-            "FIX6_baselines":              False,
-            "FIX7_scheduler_step_fixed":   True,
-            "FIX8_growth_pct_fixed":       True,
-            "FIX9_batchnorm_removed":      True,
-        },
         "forecast_assumption":
             "Social/NLP/aspect features beyond lag window use persistence assumption "
             "(held at most recent known value). Hotel volume lags are updated "
             "autoregressively from model predictions.",
     }
-    with open("/tmp/feature_config_gru_v5.json", "w") as f:
+    with open("/tmp/feature_config_v5.json", "w") as f:
         json.dump(config, f, indent=2)
-    mlflow.log_artifact("/tmp/feature_config_gru_v5.json", "artifacts")
+    mlflow.log_artifact("/tmp/feature_config_v5.json", "artifacts")
 
 
 # ============================================================
@@ -837,8 +890,24 @@ def _save_artifacts(scalers, clip_thresholds):
 
 def _scale_value(raw, feat_idx, scaler):
     """Scale a single raw value using fitted RobustScaler."""
-    s = scaler.scale_[feat_idx]
-    return (raw - scaler.center_[feat_idx]) / s if s != 0 else 0.0
+    feature_name = ALL_FEATURES[feat_idx]
+    features_to_scale = [f for f in ALL_FEATURES if f not in UNSCALED_FEATURES]
+    if feature_name not in features_to_scale:
+        return raw
+    scaler_idx = features_to_scale.index(feature_name)
+    s = scaler.scale_[scaler_idx]
+    return (raw - scaler.center_[scaler_idx]) / s if s != 0 else 0.0
+
+
+def _descale_value(scaled_val, feat_idx, scaler):
+    """Descale a single scaled value back to raw using fitted RobustScaler."""
+    feature_name = ALL_FEATURES[feat_idx]
+    features_to_scale = [f for f in ALL_FEATURES if f not in UNSCALED_FEATURES]
+    if feature_name not in features_to_scale:
+        return scaled_val
+    scaler_idx = features_to_scale.index(feature_name)
+    s = scaler.scale_[scaler_idx]
+    return scaled_val * s + scaler.center_[scaler_idx] if s != 0 else scaler.center_[scaler_idx]
 
 
 def create_forecast_table(spark):
@@ -867,9 +936,9 @@ def create_forecast_table(spark):
     )
 
 
-def forecast_12_months(spark, model, scalers, clip_thresholds, df_pd, device):
+def forecast_12_months(spark, model, scaler, clip_thresholds, df_pd, device):
     print("\n" + "=" * 80)
-    print("STEP 4: FORECASTING 12 MONTHS (autoregressive GRU)")
+    print("STEP 4: FORECASTING 12 MONTHS (autoregressive)")
     print("=" * 80)
     print("  NOTE: Social/NLP/aspect features beyond seq window use persistence")
     print("        assumption (most recent known value carried forward).")
@@ -894,11 +963,6 @@ def forecast_12_months(spark, model, scalers, clip_thresholds, df_pd, device):
         last_date     = datetime.strptime(str(last_ym), '%Y%m')
 
         recent_volumes = list(np.expm1(group[TARGET].values[-max(SEQUENCE_LENGTH, 12):]))
-        
-        # Get scaler for this specific province
-        scaler = scalers.get(province_sk)
-        if scaler is None:
-            raise ValueError(f"No scaler found for province_sk {province_sk}")
 
         for horizon in range(1, FORECAST_MONTHS + 1):
             total_m = last_date.year * 12 + last_date.month + horizon
@@ -912,7 +976,6 @@ def forecast_12_months(spark, model, scalers, clip_thresholds, df_pd, device):
                 pred_log    = float(max(0.0, pred_log))
                 pred_actual = float(np.expm1(pred_log))
 
-            # FIX 8: growth vs PREVIOUS step (not fixed baseline)
             prev_volume = recent_volumes[-1] if recent_volumes else 0.0
             growth_pct  = float(
                 (pred_actual - prev_volume) / prev_volume * 100.0
@@ -938,14 +1001,16 @@ def forecast_12_months(spark, model, scalers, clip_thresholds, df_pd, device):
             # --- Update sequence for next step ---
             new_row = last_seq[-1].copy()
 
-            # Temporal
-            new_row[fi["month_sin"]] = _scale_value(math.sin(2 * math.pi * tm / 12), fi["month_sin"], scaler)
-            new_row[fi["month_cos"]] = _scale_value(math.cos(2 * math.pi * tm / 12), fi["month_cos"], scaler)
+            # Temporal (Fourier Seasonality based on FOURIER_K)
+            for k in range(1, FOURIER_K + 1):
+                if k == 1:
+                    new_row[fi["month_sin"]] = math.sin(2 * math.pi * tm / 12.0)
+                    new_row[fi["month_cos"]] = math.cos(2 * math.pi * tm / 12.0)
+                else:
+                    new_row[fi[f"month_sin_k{k}"]] = math.sin(2 * math.pi * k * tm / 12.0)
+                    new_row[fi[f"month_cos_k{k}"]] = math.cos(2 * math.pi * k * tm / 12.0)
 
-            # Hotel volume lags (autoregressive update)
-            new_row[fi["hotel_vol_lag_3"]] = new_row[fi["hotel_vol_lag_2"]]
-            new_row[fi["hotel_vol_lag_2"]] = new_row[fi["hotel_vol_lag_1"]]
-            new_row[fi["hotel_vol_lag_1"]] = _scale_value(pred_actual, fi["hotel_vol_lag_1"], scaler)
+            # (hotel_vol_lag_1/2/3 removed from features, autoregressive state maintained in recent_volumes)
 
             if len(recent_volumes) >= 12:
                 new_row[fi["hotel_vol_lag_12"]] = _scale_value(
@@ -969,8 +1034,7 @@ def forecast_12_months(spark, model, scalers, clip_thresholds, df_pd, device):
 
             # social_to_booking_ratio
             idx_tc  = fi["total_comments"]
-            raw_tc  = (new_row[idx_tc] * scaler.scale_[idx_tc] + scaler.center_[idx_tc]
-                       if scaler.scale_[idx_tc] != 0 else scaler.center_[idx_tc])
+            raw_tc  = _descale_value(new_row[idx_tc], idx_tc, scaler)
             new_row[fi["social_to_booking_ratio"]] = _scale_value(
                 raw_tc / (pred_actual + 1.0), fi["social_to_booking_ratio"], scaler
             )
@@ -983,8 +1047,9 @@ def forecast_12_months(spark, model, scalers, clip_thresholds, df_pd, device):
                 new_std, fi["hotel_vol_std_rolling_3m"], scaler
             )
 
-            # Hotness lags & Aspect features: persistence assumption
-            # (already copied from last_seq[-1])
+            # Hotness lags: persistence assumption
+            # (no TikTok data for future → hold last known value)
+            # These are kept as-is in new_row (already copied from last_seq[-1])
 
             last_seq = np.vstack([last_seq[1:], new_row])
 
@@ -1009,14 +1074,11 @@ def forecast_12_months(spark, model, scalers, clip_thresholds, df_pd, device):
 
 def main():
     print("\n" + "=" * 80)
-    print("ML PIPELINE: PROVINCE HOTEL VOLUME FORECASTING (GRU v5)")
+    print("ML PIPELINE: PROVINCE HOTEL VOLUME FORECASTING (GRU)")
     print("=" * 80)
     print(f"  Source:   {DL_FEATURES_TABLE}")
     print(f"  Features: {len(ALL_FEATURES)} total")
     print(f"  Split:    {int(TRAIN_RATIO*100)}/{int(VAL_RATIO*100)}/{int(TEST_RATIO*100)} (train/val/test)")
-    print(f"  Fixes:    FIX1(val split) FIX2(clip leak) FIX3(hotness lag) "
-          f"FIX4(aspect) FIX7(scheduler) "
-          f"FIX8(growth) FIX9(bn)")
     print(f"  Start:    {datetime.now()}")
     print("=" * 80)
 
@@ -1024,8 +1086,8 @@ def main():
 
     try:
         df = load_features(spark)
-        model, scalers, clip_thresholds, df_pd, device = train_model(df)
-        forecast_12_months(spark, model, scalers, clip_thresholds, df_pd, device)
+        model, scaler, clip_thresholds, df_pd, device = train_model(df)
+        forecast_12_months(spark, model, scaler, clip_thresholds, df_pd, device)
 
         print("\n" + "=" * 80)
         print("PIPELINE COMPLETED SUCCESSFULLY")

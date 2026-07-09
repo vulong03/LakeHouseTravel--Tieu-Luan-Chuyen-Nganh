@@ -1,7 +1,7 @@
 """
 NLP Pipeline Step 1: Weak Labeling
 ====================================
-Auto-label 465K TikTok comments using rule-based signals:
+Auto-label > 800K TikTok comments using rule-based signals:
 - underthesea sentiment (existing)
 - Emoji polarity (existing)
 - Keyword matching (new)
@@ -31,9 +31,7 @@ from config import (
     LABELED_PARQUET_PATH,
     SENTIMENT_LABELS, SENTIMENT_TO_ID,
     ASPECT_LABELS, ASPECT_KEYWORD_MAP,
-    INTENT_LABELS, INTENT_TO_ID,
     POSITIVE_KEYWORDS, NEGATIVE_KEYWORDS,
-    QUESTION_KEYWORDS, RECOMMEND_KEYWORDS, COMPLAIN_KEYWORDS,
     POSITIVE_EMOJIS, NEGATIVE_EMOJIS,
 )
 
@@ -96,8 +94,6 @@ def create_weak_labeling_udf():
         StructField("sentiment_label", StringType(), True),
         StructField("sentiment_confidence", FloatType(), True),
         StructField("aspects", StringType(), True),
-        StructField("intent_label", StringType(), True),
-        StructField("intent_confidence", FloatType(), True),
         
         # New aspect-sentiment pairs
         StructField("aspect_scenery_pos", FloatType(), True),
@@ -142,8 +138,6 @@ def create_weak_labeling_udf():
                 "sentiment_label": "neutral",
                 "sentiment_confidence": 0.3,
                 "aspects": "",
-                "intent_label": "share",
-                "intent_confidence": 0.3,
                 "aspect_scenery_pos": 0.0,
                 "aspect_scenery_neg": 0.0,
                 "aspect_food_pos": 0.0,
@@ -299,33 +293,6 @@ def create_weak_labeling_udf():
 
             out["aspects"] = ",".join(detected_aspects) if detected_aspects else ""
 
-            # ========== INTENT ==========
-            question_count = sum(1 for kw in QUESTION_KEYWORDS if match_keyword(kw, text_clean))
-            recommend_count = sum(1 for kw in RECOMMEND_KEYWORDS if match_keyword(kw, text_clean))
-            complain_count = sum(1 for kw in COMPLAIN_KEYWORDS if match_keyword(kw, text_clean))
-
-            intent_scores = {
-                "question": question_count * 2,
-                "recommend": recommend_count * 2,
-                "complain": complain_count * 2,
-                "share": 1,
-            }
-
-            if '?' in text_str:
-                intent_scores["question"] += 3
-
-            best_intent = max(intent_scores, key=intent_scores.get)
-            best_score = intent_scores[best_intent]
-            total_intent = sum(intent_scores.values())
-            intent_conf = min(0.95, best_score / max(total_intent, 1))
-
-            if best_score <= 1:
-                best_intent = "share"
-                intent_conf = 0.5
-
-            out["intent_label"] = best_intent
-            out["intent_confidence"] = float(intent_conf)
-
             results.append(out)
 
         return pd.DataFrame(results)
@@ -351,8 +318,6 @@ def apply_weak_labels(spark, df):
         F.col("labels.sentiment_label").alias("sentiment_label"),
         F.col("labels.sentiment_confidence").alias("sentiment_confidence"),
         F.col("labels.aspects").alias("aspects"),
-        F.col("labels.intent_label").alias("intent_label"),
-        F.col("labels.intent_confidence").alias("intent_confidence"),
         F.col("labels.aspect_scenery_pos").alias("aspect_scenery_pos"),
         F.col("labels.aspect_scenery_neg").alias("aspect_scenery_neg"),
         F.col("labels.aspect_food_pos").alias("aspect_food_pos"),
@@ -377,12 +342,6 @@ def apply_weak_labels(spark, df):
         F.round(F.avg("sentiment_confidence"), 3).alias("avg_confidence"),
     ).orderBy("sentiment_label").show()
 
-    print("  Intent distribution:")
-    df_labeled.groupBy("intent_label").agg(
-        F.count("*").alias("count"),
-        F.round(F.avg("intent_confidence"), 3).alias("avg_confidence"),
-    ).orderBy("intent_label").show()
-
     return df_labeled
 
 
@@ -391,17 +350,17 @@ def filter_confident_samples(df):
     print("\n[3/4] Filtering confident samples...")
 
     min_sentiment_conf = 0.6
-    min_intent_conf = 0.5
 
-    # FIX ISSUE-02: Filter per-task independently using flags
+    # Filter per-task independently using flags (no intent task)
+    # Lower negative threshold to 0.5 due to class scarcity
     df_annotated = df.withColumn(
-        "use_for_sentiment", F.col("sentiment_confidence") >= min_sentiment_conf
-    ).withColumn(
-        "use_for_intent", F.col("intent_confidence") >= min_intent_conf
+        "use_for_sentiment",
+        F.when(F.col("sentiment_label") == "negative", F.col("sentiment_confidence") >= 0.5)
+        .otherwise(F.col("sentiment_confidence") >= min_sentiment_conf)
     )
 
     df_high_conf = df_annotated.filter(
-        F.col("use_for_sentiment") | F.col("use_for_intent")
+        F.col("use_for_sentiment")
     ).withColumn("is_weak_label", F.lit(False))
 
     # FIX ISSUE-04: Preserve neutral samples with weak labels

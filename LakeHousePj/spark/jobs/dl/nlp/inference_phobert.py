@@ -387,23 +387,20 @@ def create_inference_udf():
             attention_mask = encoding['attention_mask'].to(device)
 
             with _torch.no_grad():
-                sent_logits, aspect_logits, intent_logits = model(input_ids, attention_mask)
+                sent_logits, aspect_logits = model(input_ids, attention_mask)
 
             sent_probs   = _torch.softmax(sent_logits, dim=1).cpu().numpy()
             aspect_probs = _torch.sigmoid(aspect_logits).cpu().numpy()
-            intent_probs = _torch.softmax(intent_logits, dim=1).cpu().numpy()
 
             for j, i in enumerate(batch_ids):
                 sp = sent_probs[j]
-                ap = aspect_probs[j]  # 18 values: [neg, neu, pos] × 6 aspects
-                ip = intent_probs[j]
-                intent_idx = int(ip.argmax())
+                ap = aspect_probs[j]  # 12 values: [neg, pos] × 6 aspects
 
-                # Each aspect has 3 outputs: ap[k*3+0]=neg, ap[k*3+1]=neu, ap[k*3+2]=pos
-                # mention score = max of the 3 components (same as Colab)
+                # Each aspect has 2 outputs: ap[k*2+0]=neg, ap[k*2+1]=pos
+                # mention score = max of the 2 components (same as Colab)
                 aspect_labels_list = []
                 for k, aspect_name in enumerate(ASPECT_LABELS):
-                    score = max(ap[k * 3 + 0], ap[k * 3 + 1], ap[k * 3 + 2])
+                    score = max(ap[k * 2 + 0], ap[k * 2 + 1])
                     if score >= ASPECT_THRESHOLD:
                         aspect_labels_list.append(aspect_name)
 
@@ -414,29 +411,29 @@ def create_inference_udf():
                     "sentiment_negative_prob": round(float(sp[0]), 4),
                     "sentiment_neutral_prob": round(float(sp[1]), 4),
                     "sentiment_positive_prob": round(float(sp[2]), 4),
-                    # mention prob = max(neg, neu, pos) — synced with Colab
-                    "aspect_scenery":       round(float(max(ap[0],  ap[1],  ap[2])),  4),
-                    "aspect_food":          round(float(max(ap[3],  ap[4],  ap[5])),  4),
-                    "aspect_price":         round(float(max(ap[6],  ap[7],  ap[8])),  4),
-                    "aspect_service":       round(float(max(ap[9],  ap[10], ap[11])), 4),
-                    "aspect_transport":     round(float(max(ap[12], ap[13], ap[14])), 4),
-                    "aspect_accommodation": round(float(max(ap[15], ap[16], ap[17])), 4),
+                    # mention prob = max(neg, pos)
+                    "aspect_scenery":       round(float(max(ap[0],  ap[1])),  4),
+                    "aspect_food":          round(float(max(ap[2],  ap[3])),  4),
+                    "aspect_price":         round(float(max(ap[4],  ap[5])),  4),
+                    "aspect_service":       round(float(max(ap[6],  ap[7])),  4),
+                    "aspect_transport":     round(float(max(ap[8],  ap[9])),  4),
+                    "aspect_accommodation": round(float(max(ap[10], ap[11])), 4),
                     "aspect_labels":        ",".join(aspect_labels_list),
                     # pos/neg pairs for ABSA Gold formula
-                    "aspect_scenery_pos":       round(float(ap[2]),  4),
+                    "aspect_scenery_pos":       round(float(ap[1]),  4),
                     "aspect_scenery_neg":       round(float(ap[0]),  4),
-                    "aspect_food_pos":          round(float(ap[5]),  4),
-                    "aspect_food_neg":          round(float(ap[3]),  4),
-                    "aspect_price_pos":         round(float(ap[8]),  4),
-                    "aspect_price_neg":         round(float(ap[6]),  4),
-                    "aspect_service_pos":       round(float(ap[11]), 4),
-                    "aspect_service_neg":       round(float(ap[9]),  4),
-                    "aspect_transport_pos":     round(float(ap[14]), 4),
-                    "aspect_transport_neg":     round(float(ap[12]), 4),
-                    "aspect_accommodation_pos": round(float(ap[17]), 4),
-                    "aspect_accommodation_neg": round(float(ap[15]), 4),
-                    "intent_label":      INTENT_LABELS[intent_idx],
-                    "intent_confidence": round(float(ip[intent_idx]), 4),
+                    "aspect_food_pos":          round(float(ap[3]),  4),
+                    "aspect_food_neg":          round(float(ap[2]),  4),
+                    "aspect_price_pos":         round(float(ap[5]),  4),
+                    "aspect_price_neg":         round(float(ap[4]),  4),
+                    "aspect_service_pos":       round(float(ap[7]),  4),
+                    "aspect_service_neg":       round(float(ap[6]),  4),
+                    "aspect_transport_pos":     round(float(ap[9]),  4),
+                    "aspect_transport_neg":     round(float(ap[8]),  4),
+                    "aspect_accommodation_pos": round(float(ap[11]), 4),
+                    "aspect_accommodation_neg": round(float(ap[10]), 4),
+                    "intent_label":      "share",
+                    "intent_confidence": 0.5,
                     "word_count":  word_counts[i],
                     "unique_word_ratio": unique_word_ratios[i],
                     "emoji_count": emoji_counts[i],
@@ -445,7 +442,7 @@ def create_inference_udf():
                 }
 
             # Free memory after each mini-batch
-            del input_ids, attention_mask, sent_logits, aspect_logits, intent_logits
+            del input_ids, attention_mask, sent_logits, aspect_logits
 
         return pd.DataFrame(results)
 

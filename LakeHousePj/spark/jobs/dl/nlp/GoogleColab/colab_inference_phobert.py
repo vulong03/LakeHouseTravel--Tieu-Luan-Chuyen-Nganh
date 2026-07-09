@@ -61,7 +61,7 @@ NEGATIVE_EMOJIS = {
 # Model Class
 # ============================================================
 class PhoBERTMultiTask(nn.Module):
-    def __init__(self, model_name, num_sentiments, num_aspects, num_intents, dropout=0.3):
+    def __init__(self, model_name, num_sentiments, num_aspects, dropout=0.3):
         super().__init__()
         self.backbone = AutoModel.from_pretrained(model_name)
         hidden = self.backbone.config.hidden_size
@@ -73,14 +73,11 @@ class PhoBERTMultiTask(nn.Module):
         self.aspect_head = nn.Sequential(
             nn.Linear(hidden, 128), nn.ReLU(), nn.Dropout(dropout), nn.Linear(128, num_aspects),
         )
-        self.intent_head = nn.Sequential(
-            nn.Linear(hidden, 64), nn.ReLU(), nn.Dropout(dropout), nn.Linear(64, num_intents),
-        )
 
     def forward(self, input_ids, attention_mask):
         outputs = self.backbone(input_ids=input_ids, attention_mask=attention_mask)
         cls = self.dropout(outputs.last_hidden_state[:, 0, :])
-        return self.sentiment_head(cls), self.aspect_head(cls), self.intent_head(cls)
+        return self.sentiment_head(cls), self.aspect_head(cls)
 
 
 # ============================================================
@@ -135,8 +132,7 @@ def main():
     model = PhoBERTMultiTask(
         model_name=PHOBERT_MODEL_NAME,
         num_sentiments=len(SENTIMENT_LABELS),
-        num_aspects=len(ASPECT_LABELS) * 3,
-        num_intents=len(INTENT_LABELS),
+        num_aspects=len(ASPECT_LABELS) * 2,
     )
     
     try:
@@ -225,24 +221,21 @@ def main():
 
             # Auto-cast to FP16 if on GPU
             with torch.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
-                sent_logits, aspect_logits, intent_logits = model(input_ids, attention_mask)
+                sent_logits, aspect_logits = model(input_ids, attention_mask)
 
             # Post-process logits
             sent_probs = torch.softmax(sent_logits, dim=1).cpu().numpy()
             aspect_probs = torch.sigmoid(aspect_logits).cpu().numpy()
-            intent_probs = torch.softmax(intent_logits, dim=1).cpu().numpy()
 
             for j in range(len(input_ids)):
                 sp = sent_probs[j]
                 ap = aspect_probs[j]
-                ip = intent_probs[j]
-                intent_idx = int(ip.argmax())
                 
-                # Each of the 6 aspects has 3 outputs: [neg, neu, pos]
+                # Each of the 6 aspects has 2 outputs: [neg, pos]
                 aspect_labels = []
                 for k, aspect_name in enumerate(ASPECT_LABELS):
                     # Aspect score is the maximum of its sentiment components
-                    score = max(ap[k * 3 + 0], ap[k * 3 + 1], ap[k * 3 + 2])
+                    score = max(ap[k * 2 + 0], ap[k * 2 + 1])
                     if score >= ASPECT_THRESHOLD:
                         aspect_labels.append(aspect_name)
 
@@ -256,30 +249,30 @@ def main():
                     "sentiment_positive_prob": round(float(sp[2]), 4),
 
                     # Original aspect probabilities (max of components for backward compatibility)
-                    "aspect_scenery":       round(float(max(ap[0], ap[1], ap[2])), 4),
-                    "aspect_food":          round(float(max(ap[3], ap[4], ap[5])), 4),
-                    "aspect_price":         round(float(max(ap[6], ap[7], ap[8])), 4),
-                    "aspect_service":       round(float(max(ap[9], ap[10], ap[11])), 4),
-                    "aspect_transport":     round(float(max(ap[12], ap[13], ap[14])), 4),
-                    "aspect_accommodation": round(float(max(ap[15], ap[16], ap[17])), 4),
+                    "aspect_scenery":       round(float(max(ap[0], ap[1])), 4),
+                    "aspect_food":          round(float(max(ap[2], ap[3])), 4),
+                    "aspect_price":         round(float(max(ap[4], ap[5])), 4),
+                    "aspect_service":       round(float(max(ap[6], ap[7])), 4),
+                    "aspect_transport":     round(float(max(ap[8], ap[9])), 4),
+                    "aspect_accommodation": round(float(max(ap[10], ap[11])), 4),
                     "aspect_labels": ",".join(aspect_labels),
 
                     # New aspect-sentiment pair columns for ABSA
-                    "aspect_scenery_pos":       round(float(ap[2]), 4),
+                    "aspect_scenery_pos":       round(float(ap[1]), 4),
                     "aspect_scenery_neg":       round(float(ap[0]), 4),
-                    "aspect_food_pos":          round(float(ap[5]), 4),
-                    "aspect_food_neg":          round(float(ap[3]), 4),
-                    "aspect_price_pos":         round(float(ap[8]), 4),
-                    "aspect_price_neg":         round(float(ap[6]), 4),
-                    "aspect_service_pos":       round(float(ap[11]), 4),
-                    "aspect_service_neg":       round(float(ap[9]), 4),
-                    "aspect_transport_pos":     round(float(ap[14]), 4),
-                    "aspect_transport_neg":     round(float(ap[12]), 4),
-                    "aspect_accommodation_pos": round(float(ap[17]), 4),
-                    "aspect_accommodation_neg": round(float(ap[15]), 4),
+                    "aspect_food_pos":          round(float(ap[3]), 4),
+                    "aspect_food_neg":          round(float(ap[2]), 4),
+                    "aspect_price_pos":         round(float(ap[5]), 4),
+                    "aspect_price_neg":         round(float(ap[4]), 4),
+                    "aspect_service_pos":       round(float(ap[7]), 4),
+                    "aspect_service_neg":       round(float(ap[6]), 4),
+                    "aspect_transport_pos":     round(float(ap[9]), 4),
+                    "aspect_transport_neg":     round(float(ap[8]), 4),
+                    "aspect_accommodation_pos": round(float(ap[11]), 4),
+                    "aspect_accommodation_neg": round(float(ap[10]), 4),
 
-                    "intent_label":      INTENT_LABELS[intent_idx],
-                    "intent_confidence": round(float(ip[intent_idx]), 4),
+                    "intent_label":      "share",
+                    "intent_confidence": 0.5,
                 }
                 results.append(res)
 
