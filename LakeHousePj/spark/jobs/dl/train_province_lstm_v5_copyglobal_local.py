@@ -112,23 +112,20 @@ TEST_RATIO  = 1.0 - TRAIN_RATIO - VAL_RATIO
 
 # Default/Fallback hyperparameters (aligned with v4 configurations)
 SEQUENCE_LENGTH = 3
-DEFAULT_HIDDEN_SIZE   = 48
+DEFAULT_HIDDEN_SIZE   = 128
 DEFAULT_NUM_LAYERS    = 2
-DEFAULT_DROPOUT       = 0.43
-DEFAULT_LEARNING_RATE = 0.0005
-DEFAULT_WEIGHT_DECAY  = 7e-4
+DEFAULT_DROPOUT       = 0.2249811554723359
+DEFAULT_LEARNING_RATE = 0.0007849033200555648
+DEFAULT_WEIGHT_DECAY  = 2.0484420677068144e-05
 
 EPOCHS          = 200
 BATCH_SIZE      = 32
 PATIENCE        = 25
 
-# Fourier Seasonality Configuration
-FOURIER_K = 1  # Set to 1 (baseline sin/cos), 2, 3 or higher to add harmonics
-
 # Hyperparameter Search Space for Optuna
 TUNING_EPOCHS   = 150
 TUNING_PATIENCE = 20
-N_TRIALS        = 100
+N_TRIALS        = 30
 
 TARGET = "hotel_review_volume"
 
@@ -136,12 +133,7 @@ TARGET = "hotel_review_volume"
 # Feature Groups
 # ============================================================
 
-TEMPORAL_FEATURES = []
-for k in range(1, FOURIER_K + 1):
-    if k == 1:
-        TEMPORAL_FEATURES.extend(["month_sin", "month_cos"])
-    else:
-        TEMPORAL_FEATURES.extend([f"month_sin_k{k}", f"month_cos_k{k}"])
+TEMPORAL_FEATURES = ["month_sin", "month_cos"]
 
 HOTEL_LAG_FEATURES = [
     "hotel_vol_lag_12", "hotel_vol_rolling_3m", "hotel_vol_momentum",
@@ -196,12 +188,13 @@ ALL_FEATURES = (
 )
 
 UNSCALED_FEATURES = [
+    "month_sin", "month_cos",
     "viral_post_ratio",
     "avg_sentiment", "sentiment_std", "positive_ratio", "negative_ratio", "emoji_sentiment_ratio", "reply_ratio",
     "avg_aspect_scenery", "avg_aspect_food", "avg_aspect_price", "avg_aspect_service", "avg_aspect_transport", "avg_aspect_accommodation",
     "high_score_ratio", "domestic_review_ratio", "couple_ratio", "family_ratio", "business_ratio", "solo_ratio",
     "sentiment_polarity_change"
-] + TEMPORAL_FEATURES
+]
 
 # ============================================================
 # Loss Functions
@@ -244,9 +237,9 @@ class TemporalAttention(nn.Module):
 
 class LSTMForecaster(nn.Module):
     """
-    2-layer LSTM + LayerNorm + Temporal Attention + deep FC head.
+    1 or 2-layer LSTM + LayerNorm + Temporal Attention + Province Embedding + deep FC head.
     """
-    def __init__(self, input_size, hidden_size, num_layers, dropout):
+    def __init__(self, input_size, hidden_size, num_layers, dropout, num_provinces=64, embed_dim=4):
         super().__init__()
         self.lstm = nn.LSTM(
             input_size=input_size, hidden_size=hidden_size,
@@ -255,8 +248,14 @@ class LSTMForecaster(nn.Module):
         )
         self.layer_norm = nn.LayerNorm(hidden_size)
         self.attention  = TemporalAttention(hidden_size)
+        
+        self.embed_dim = embed_dim
+        if embed_dim > 0:
+            self.province_embed = nn.Embedding(num_provinces, embed_dim)
+            self.embed_dropout  = nn.Dropout(0.1)
+            
         self.fc = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
+            nn.Linear(hidden_size + embed_dim, hidden_size),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_size, 16),
@@ -264,20 +263,34 @@ class LSTMForecaster(nn.Module):
             nn.Linear(16, 1)
         )
 
-    def forward(self, x):
+    def forward(self, x, province_idx=None):
         lstm_out, _  = self.lstm(x)
         lstm_out     = self.layer_norm(lstm_out)
         context, _   = self.attention(lstm_out)
-        return self.fc(context).squeeze(-1)
+        
+        if self.embed_dim > 0 and province_idx is not None:
+            embed = self.province_embed(province_idx)
+            if len(embed.shape) == 1:
+                embed = embed.unsqueeze(0)
+            embed = self.embed_dropout(embed)
+            combined = torch.cat([context, embed], dim=1)
+        else:
+            combined = context
+            
+        return self.fc(combined).squeeze(-1)
 
 
 class TimeSeriesDataset(Dataset):
-    def __init__(self, X, y):
+    def __init__(self, X, y, province_idxs):
         self.X = torch.FloatTensor(X)
         self.y = torch.FloatTensor(y)
+        self.province_idxs = torch.LongTensor(province_idxs)
 
-    def __len__(self):          return len(self.X)
-    def __getitem__(self, idx): return self.X[idx], self.y[idx]
+    def __len__(self):
+        return len(self.X)
+        
+    def __getitem__(self, idx):
+        return self.X[idx], self.y[idx], self.province_idxs[idx]
 
 
 # ============================================================
@@ -366,6 +379,74 @@ def load_features(spark):
 # Step 2: Preprocessing helpers
 # ============================================================
 
+FEATURE_GROUP_A1 = ["hotel_review_volume", "hotel_vol_lag_12", "hotel_vol_rolling_3m", "hotel_vol_momentum", "hotel_vol_std_rolling_3m"]
+FEATURE_GROUP_A2 = ["hotness_lag_12", "hotness_rolling_3m", "hotness_momentum"]
+FEATURE_GROUP_A3 = ["total_posts", "total_comments", "avg_likes_per_post", "avg_saves_per_post", "engagement_score"]
+
+def compute_province_anchors(df_pd, train_end):
+    """
+    Computes safe anchor medians for Nhóm A features per province on Train set.
+    """
+    train_df = df_pd[df_pd["year_month"] <= train_end].copy()
+    
+    # 1. Define groups and target anchors
+    groups = {
+        "volume": FEATURE_GROUP_A1,
+        "hotness": FEATURE_GROUP_A2,
+        "independent": FEATURE_GROUP_A3
+    }
+    
+    # 2. Compute floors (global p5 of target columns on Train set)
+    floors = {}
+    floors["hotel_review_volume"] = float(np.percentile(train_df["hotel_review_volume"].dropna(), 5))
+    floors["hotness_lag_12"]      = float(np.percentile(train_df["hotness_lag_12"].dropna(), 5))
+    for f in groups["independent"]:
+        floors[f] = float(np.percentile(train_df[f].dropna(), 5))
+        
+    for k, v in floors.items():
+        floors[k] = max(v, 1e-5)
+        
+    # 3. Calculate safe medians per province
+    M_safe = {}
+    for prov_sk, group in train_df.groupby("province_sk"):
+        M_safe[int(prov_sk)] = {}
+        
+        # A1: target anchor
+        target_med = float(group["hotel_review_volume"].median())
+        M_safe[int(prov_sk)]["hotel_review_volume"] = max(target_med, floors["hotel_review_volume"])
+        
+        # A2: hotness anchor
+        hotness_med = float(group["hotness_lag_12"].median())
+        M_safe[int(prov_sk)]["hotness_lag_12"] = max(hotness_med, floors["hotness_lag_12"])
+        
+        # A3: independent anchors
+        for f in groups["independent"]:
+            f_med = float(group[f].median())
+            M_safe[int(prov_sk)][f] = max(f_med, floors[f])
+            
+    # Fallback for any province not in Train set
+    default_anchors = {
+        "hotel_review_volume": float(train_df["hotel_review_volume"].median()),
+        "hotness_lag_12":      float(train_df["hotness_lag_12"].median())
+    }
+    for f in groups["independent"]:
+        default_anchors[f] = float(train_df[f].median())
+        
+    return M_safe, default_anchors
+
+
+def _get_anchor_median(feature_name, province_sk, M_safe, default_anchors):
+    prov_sk = int(province_sk)
+    anchors = M_safe.get(prov_sk, default_anchors)
+    if feature_name in FEATURE_GROUP_A1:
+        return anchors["hotel_review_volume"]
+    elif feature_name in FEATURE_GROUP_A2:
+        return anchors["hotness_lag_12"]
+    elif feature_name in FEATURE_GROUP_A3:
+        return anchors[feature_name]
+    return 1.0
+
+
 def clip_and_scale_entire(df_pd, train_end, features):
     """
     Fit clip thresholds and RobustScaler on Train period only,
@@ -376,13 +457,37 @@ def clip_and_scale_entire(df_pd, train_end, features):
     # --- Outlier clipping (applied to entire df first) ---
     GROWTH_MIN, GROWTH_MAX = -1.0, 5.0
     df["hotel_vol_growth"] = df["hotel_vol_growth"].clip(GROWTH_MIN, GROWTH_MAX)
-    df["engagement_score"] = np.log1p(df["engagement_score"])
+
+    # 1. Compute safe medians and floors
+    M_safe, default_anchors = compute_province_anchors(df, train_end)
+
+    # 2. Divide by province-specific safe medians (Scale-free representation)
+    for province_sk, group in df.groupby("province_sk"):
+        prov_sk = int(province_sk)
+        anchors = M_safe.get(prov_sk, default_anchors)
+        
+        # A1 features
+        anchor_vol = anchors["hotel_review_volume"]
+        for f in FEATURE_GROUP_A1:
+            if f in df.columns:
+                df.loc[df["province_sk"] == province_sk, f] = group[f].astype(float) / anchor_vol
+                
+        # A2 features
+        anchor_hot = anchors["hotness_lag_12"]
+        for f in FEATURE_GROUP_A2:
+            if f in df.columns:
+                df.loc[df["province_sk"] == province_sk, f] = group[f].astype(float) / anchor_hot
+                
+        # A3 features
+        for f in FEATURE_GROUP_A3:
+            if f in df.columns:
+                df.loc[df["province_sk"] == province_sk, f] = group[f].astype(float) / anchors[f]
 
     # Create temporary train subset to compute train-only statistics
     train_mask = df["year_month"] <= train_end
     train_raw = df[train_mask].copy()
 
-    # p99 clipping computed on train only
+    # 3. p99 clipping computed on NORMALIZED train only
     clip_cols = ["total_posts", "total_comments", "avg_likes_per_post",
                  "avg_saves_per_post", "engagement_score"]
     clip_thresholds = {}
@@ -399,13 +504,19 @@ def clip_and_scale_entire(df_pd, train_end, features):
 
     print(f"  Clip thresholds (train p99): { {k: f'{v:.2f}' for k,v in clip_thresholds.items()} }")
 
+    # 4. Apply Log1p only after per-province division (engagement_score only, NOT target hotel_review_volume)
+    df["hotel_review_volume"] = df["hotel_review_volume"].astype(float)
+    df["engagement_score"]     = np.log1p(df["engagement_score"].astype(float))
+    train_raw["hotel_review_volume"] = train_raw["hotel_review_volume"].astype(float)
+    train_raw["engagement_score"]     = np.log1p(train_raw["engagement_score"].astype(float))
+
     # --- RobustScaler: fit on train only (excluding unscaled features) ---
     features_to_scale = [f for f in features if f not in UNSCALED_FEATURES]
     scaler = RobustScaler()
     scaler.fit(train_raw[features_to_scale])
     df[features_to_scale] = scaler.transform(df[features_to_scale])
 
-    return df, scaler, clip_thresholds
+    return df, scaler, clip_thresholds, M_safe, default_anchors
 
 
 def prepare_sequences(df_pd, features, target, seq_length):
@@ -426,20 +537,24 @@ def prepare_sequences(df_pd, features, target, seq_length):
     return np.array(X_all), np.array(y_all), meta_all
 
 
-def compute_metrics(y_true, y_pred, prefix=""):
-    """Compute metrics on both log scale and actual scale consistently."""
-    # 1. Log scale metrics (LSTM target scale)
-    rmse_log  = float(np.sqrt(mean_squared_error(y_true, y_pred)))
-    mae_log   = float(mean_absolute_error(y_true, y_pred))
-    r2_log    = float(r2_score(y_true, y_pred))
-    smape_log = float(
+def compute_metrics(y_true, y_pred, prefix="", anchors=None):
+    """Compute metrics on actual scale consistently."""
+    # 1. Ratio scale metrics (LSTM target scale: Vi / Mi)
+    rmse_ratio  = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+    mae_ratio   = float(mean_absolute_error(y_true, y_pred))
+    r2_ratio    = float(r2_score(y_true, y_pred))
+    smape_ratio = float(
         2 * np.mean(np.abs(y_true - y_pred) /
                     (np.abs(y_true) + np.abs(y_pred) + 1e-8)) * 100
     )
 
-    # 2. Actual scale metrics (expm1 conversion)
-    y_true_actual = np.expm1(y_true)
-    y_pred_actual = np.expm1(np.clip(y_pred, 0.0, None))
+    # 2. Actual scale metrics (descaling)
+    y_true_actual = y_true.copy()
+    y_pred_actual = np.clip(y_pred, 0.0, None)
+
+    if anchors is not None:
+        y_true_actual = y_true_actual * anchors
+        y_pred_actual = y_pred_actual * anchors
 
     rmse_actual = float(np.sqrt(mean_squared_error(y_true_actual, y_pred_actual)))
     mae_actual  = float(mean_absolute_error(y_true_actual, y_pred_actual))
@@ -463,10 +578,10 @@ def compute_metrics(y_true, y_pred, prefix=""):
     )
 
     return {
-        f"{prefix}rmse_log":      rmse_log,
-        f"{prefix}mae_log":       mae_log,
-        f"{prefix}r2_log":        r2_log,
-        f"{prefix}smape_log":     smape_log,
+        f"{prefix}rmse_ratio":    rmse_ratio,
+        f"{prefix}mae_ratio":     mae_ratio,
+        f"{prefix}r2_ratio":      r2_ratio,
+        f"{prefix}smape_ratio":   smape_ratio,
 
         f"{prefix}rmse_actual":   rmse_actual,
         f"{prefix}mae_actual":    mae_actual,
@@ -482,15 +597,19 @@ def compute_metrics(y_true, y_pred, prefix=""):
 # ============================================================
 
 def train_single_lstm(X_train, y_train, X_val, y_val, X_test, y_test,
+                      train_prov_idxs, val_prov_idxs, test_prov_idxs,
                       input_size, run_name, device,
                       hidden_size, num_layers, dropout, learning_rate, weight_decay,
-                      epochs=EPOCHS, patience=PATIENCE):
+                      num_provinces=64, embed_dim=4,
+                      epochs=EPOCHS, patience=PATIENCE,
+                      train_anchors=None, val_anchors=None, test_anchors=None):
     """
     Train a single LSTM run.
     """
     model = LSTMForecaster(
         input_size=input_size, hidden_size=hidden_size,
-        num_layers=num_layers, dropout=dropout
+        num_layers=num_layers, dropout=dropout,
+        num_provinces=num_provinces, embed_dim=embed_dim
     ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
@@ -502,9 +621,9 @@ def train_single_lstm(X_train, y_train, X_val, y_val, X_test, y_test,
         optimizer, T_0=30, T_mult=2, eta_min=1e-6
     )
 
-    train_loader = DataLoader(TimeSeriesDataset(X_train, y_train),
+    train_loader = DataLoader(TimeSeriesDataset(X_train, y_train, train_prov_idxs),
                               batch_size=BATCH_SIZE, shuffle=True)
-    val_loader   = DataLoader(TimeSeriesDataset(X_val,   y_val),
+    val_loader   = DataLoader(TimeSeriesDataset(X_val,   y_val,   val_prov_idxs),
                               batch_size=BATCH_SIZE, shuffle=False)
 
     best_val_loss    = float('inf')
@@ -516,10 +635,10 @@ def train_single_lstm(X_train, y_train, X_val, y_val, X_test, y_test,
         # --- Train ---
         model.train()
         epoch_loss = 0.0
-        for xb, yb in train_loader:
-            xb, yb = xb.to(device), yb.to(device)
+        for xb, yb, idx_b in train_loader:
+            xb, yb, idx_b = xb.to(device), yb.to(device), idx_b.to(device)
             optimizer.zero_grad()
-            loss = criterion(model(xb), yb)
+            loss = criterion(model(xb, idx_b), yb)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -531,9 +650,9 @@ def train_single_lstm(X_train, y_train, X_val, y_val, X_test, y_test,
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for xb, yb in val_loader:
-                xb, yb = xb.to(device), yb.to(device)
-                val_loss += criterion(model(xb), yb).item() * len(xb)
+            for xb, yb, idx_b in val_loader:
+                xb, yb, idx_b = xb.to(device), yb.to(device), idx_b.to(device)
+                val_loss += criterion(model(xb, idx_b), yb).item() * len(xb)
         avg_val = val_loss / max(len(X_val), 1)
         val_losses.append(avg_val)
 
@@ -562,17 +681,17 @@ def train_single_lstm(X_train, y_train, X_val, y_val, X_test, y_test,
     # --- Evaluate on TEST ---
     model.eval()
     with torch.no_grad():
-        y_pred_train = model(torch.FloatTensor(X_train).to(device)).cpu().numpy()
-        y_pred_val   = model(torch.FloatTensor(X_val).to(device)).cpu().numpy()
-        y_pred_test  = model(torch.FloatTensor(X_test).to(device)).cpu().numpy()
+        y_pred_train = model(torch.FloatTensor(X_train).to(device), torch.LongTensor(train_prov_idxs).to(device)).cpu().numpy()
+        y_pred_val   = model(torch.FloatTensor(X_val).to(device), torch.LongTensor(val_prov_idxs).to(device)).cpu().numpy()
+        y_pred_test  = model(torch.FloatTensor(X_test).to(device), torch.LongTensor(test_prov_idxs).to(device)).cpu().numpy()
 
     y_pred_train = np.clip(y_pred_train, 0.0, None)
     y_pred_val   = np.clip(y_pred_val,   0.0, None)
     y_pred_test  = np.clip(y_pred_test,  0.0, None)
 
-    train_metrics = compute_metrics(y_train, y_pred_train, "train_")
-    val_metrics   = compute_metrics(y_val,   y_pred_val,   "val_")
-    test_metrics  = compute_metrics(y_test,  y_pred_test,  "test_")
+    train_metrics = compute_metrics(y_train, y_pred_train, "train_", train_anchors)
+    val_metrics   = compute_metrics(y_val,   y_pred_val,   "val_",   val_anchors)
+    test_metrics  = compute_metrics(y_test,  y_pred_test,  "test_",  test_anchors)
 
     all_metrics = {
         **train_metrics, **val_metrics, **test_metrics,
@@ -585,7 +704,9 @@ def train_single_lstm(X_train, y_train, X_val, y_val, X_test, y_test,
     return model, all_metrics, train_losses, val_losses, y_pred_test
 
 
-def tune_hyperparameters(X_train, y_train, X_val, y_val, X_test, y_test, input_size, device):
+def tune_hyperparameters(X_train, y_train, X_val, y_val, X_test, y_test,
+                         train_prov_idxs, val_prov_idxs, test_prov_idxs,
+                         input_size, device, num_provinces=64, embed_dim=4):
     print("\n" + "=" * 80)
     print("HYPERPARAMETER TUNING WITH OPTUNA")
     print("=" * 80)
@@ -611,6 +732,7 @@ def tune_hyperparameters(X_train, y_train, X_val, y_val, X_test, y_test, input_s
 
             _, metrics, _, _, _ = train_single_lstm(
                 X_train, y_train, X_val, y_val, X_test, y_test,
+                train_prov_idxs, val_prov_idxs, test_prov_idxs,
                 input_size=input_size,
                 run_name=f"trial_{trial.number}",
                 device=device,
@@ -619,15 +741,17 @@ def tune_hyperparameters(X_train, y_train, X_val, y_val, X_test, y_test, input_s
                 dropout=dropout,
                 learning_rate=learning_rate,
                 weight_decay=weight_decay,
+                num_provinces=num_provinces,
+                embed_dim=embed_dim,
                 epochs=TUNING_EPOCHS,
                 patience=TUNING_PATIENCE
             )
 
             mlflow.log_metrics({
                 "val_loss": metrics["best_val_loss"],
-                "val_rmse": metrics["val_rmse_log"],
-                "val_mae":  metrics["val_mae_log"],
-                "val_r2":   metrics["val_r2_log"]
+                "val_rmse": metrics["val_rmse_actual"],
+                "val_mae":  metrics["val_mae_actual"],
+                "val_r2":   metrics["val_r2_actual"]
             })
 
             print(f"    [Trial {trial.number}] Finished | val_loss: {metrics['best_val_loss']:.5f} | params: {trial.params}")
@@ -648,30 +772,95 @@ def tune_hyperparameters(X_train, y_train, X_val, y_val, X_test, y_test, input_s
     return best_params
 
 
+def evaluate_per_province(y_true, y_pred, meta_info, province_tiers, label="Test", M_safe=None, default_anchors=None):
+    """
+    Computes per-province WAPE and SMAPE, and prints Tier-based average metrics.
+    """
+    y_true_actual = y_true.copy()
+    y_pred_actual = np.clip(y_pred, 0.0, None)
+    
+    # Group by province_sk
+    prov_data = {}
+    for i in range(len(meta_info)):
+        prov_sk = meta_info[i]["province_sk"]
+        prov_name = meta_info[i]["province_name"]
+        
+        # Descaling anchor
+        anchor = 1.0
+        if M_safe is not None and default_anchors is not None:
+            anchor = M_safe.get(int(prov_sk), default_anchors).get("hotel_review_volume", 1.0)
+            
+        if prov_sk not in prov_data:
+            prov_data[prov_sk] = {"name": prov_name, "true": [], "pred": []}
+        prov_data[prov_sk]["true"].append(y_true_actual[i] * anchor)
+        prov_data[prov_sk]["pred"].append(y_pred_actual[i] * anchor)
+        
+    tier_metrics = {1: {"wape_list": [], "smape_list": [], "samples": 0},
+                    2: {"wape_list": [], "smape_list": [], "samples": 0},
+                    3: {"wape_list": [], "smape_list": [], "samples": 0}}
+    
+    print(f"\n  --- Per-Province Breakdown ({label} Set) ---")
+    print(f"  {'Province Name':<20} | {'Tier':<4} | {'Samples':<7} | {'WAPE (%)':<10} | {'SMAPE (%)':<10}")
+    print(f"  {'-'*20}-+-{'-'*4}-+-{'-'*7}-+-{'-'*10}-+-{'-'*10}")
+    
+    for prov_sk, data in sorted(prov_data.items(), key=lambda x: x[1]["name"]):
+        true_arr = np.array(data["true"])
+        pred_arr = np.array(data["pred"])
+        n_samples = len(true_arr)
+        
+        sum_true = np.sum(true_arr)
+        wape = (np.sum(np.abs(true_arr - pred_arr)) / (sum_true + 1e-8)) * 100.0
+        
+        smape = 2.0 * np.mean(np.abs(true_arr - pred_arr) / (np.abs(true_arr) + np.abs(pred_arr) + 1e-8)) * 100.0
+        
+        tier = province_tiers.get(prov_sk, 2)
+        tier_metrics[tier]["wape_list"].append(wape)
+        tier_metrics[tier]["smape_list"].append(smape)
+        tier_metrics[tier]["samples"] += n_samples
+        
+        print(f"  {data['name']:<20} | Tier {tier:<1} | {n_samples:<7} | {wape:<10.2f} | {smape:<10.2f}")
+        
+    print(f"\n  --- Tier Summary ({label} Set) ---")
+    for tier in [1, 2, 3]:
+        t_wape = np.mean(tier_metrics[tier]["wape_list"]) if tier_metrics[tier]["wape_list"] else 0.0
+        t_smape = np.mean(tier_metrics[tier]["smape_list"]) if tier_metrics[tier]["smape_list"] else 0.0
+        t_samples = tier_metrics[tier]["samples"]
+        print(f"  Tier {tier} (Samples={t_samples}): WAPE = {t_wape:.2f}%, SMAPE = {t_smape:.2f}%")
+
+
 # ============================================================
 # Step 3c: Main LSTM training
 # ============================================================
 
 def train_model(df):
+    global ALL_FEATURES, UNSCALED_FEATURES
     print("\n" + "=" * 80)
     print("STEP 3: TRAINING LSTM MODEL")
     print("=" * 80)
 
-    select_cols = ALL_FEATURES + [TARGET, "year_month", "month", "province_sk", "province_name", "region"]
+    select_cols = ALL_FEATURES + [TARGET, "year_month", "province_sk", "province_name", "region"]
     df_pd       = df.select(select_cols).toPandas()
     df_pd       = df_pd.sort_values(["province_sk", "year_month"])
+
+    # Giai đoạn 2a: One-Hot Encoding region
+    unique_regions = sorted(df_pd["region"].dropna().unique())
+    region_cols = []
+    for reg in unique_regions:
+        col_name = f"region_{reg}"
+        df_pd[col_name] = (df_pd["region"] == reg).astype(float)
+        region_cols.append(col_name)
+        
+    ALL_FEATURES = list(ALL_FEATURES)
+    for col_name in region_cols:
+        if col_name not in ALL_FEATURES:
+            ALL_FEATURES.append(col_name)
+            
+    UNSCALED_FEATURES = list(UNSCALED_FEATURES)
+    for col_name in region_cols:
+        if col_name not in UNSCALED_FEATURES:
+            UNSCALED_FEATURES.append(col_name)
+            
     df_pd[ALL_FEATURES] = df_pd[ALL_FEATURES].fillna(0)
-
-    # Dynamically calculate Fourier seasonality features in Pandas
-    for k in range(1, FOURIER_K + 1):
-        if k == 1:
-            df_pd["month_sin"] = np.sin(2 * np.pi * df_pd["month"] / 12.0)
-            df_pd["month_cos"] = np.cos(2 * np.pi * df_pd["month"] / 12.0)
-        else:
-            df_pd[f"month_sin_k{k}"] = np.sin(2 * np.pi * k * df_pd["month"] / 12.0)
-            df_pd[f"month_cos_k{k}"] = np.cos(2 * np.pi * k * df_pd["month"] / 12.0)
-
-    df_pd[TARGET] = np.log1p(df_pd[TARGET].astype(float))
 
     # Determine split boundaries (chronological)
     ym_sorted = sorted(df_pd["year_month"].unique())
@@ -679,10 +868,8 @@ def train_model(df):
     train_end = ym_sorted[int(n * TRAIN_RATIO) - 1]
     val_end   = ym_sorted[int(n * (TRAIN_RATIO + VAL_RATIO)) - 1]
 
-    print(f"  Split boundaries: train≤{train_end} | val {train_end+1}–{val_end} | test>{val_end}")
-
-    # Clip and scale the entire dataframe using train-derived parameters
-    df_pd_scaled, scaler, clip_thresholds = clip_and_scale_entire(
+    # Preprocess entire dataset consistently using train statistics
+    df_pd_scaled, scaler, clip_thresholds, M_safe, default_anchors = clip_and_scale_entire(
         df_pd, train_end, ALL_FEATURES
     )
 
@@ -690,19 +877,20 @@ def train_model(df):
     X_all, y_all, meta_all = prepare_sequences(df_pd_scaled, ALL_FEATURES, TARGET, SEQUENCE_LENGTH)
 
     # Chronologically split sequences based on the target year_month
-    X_train, y_train = [], []
-    X_val,   y_val   = [], []
-    X_test,  y_test  = [], []
-    meta_test        = []
+    X_train, y_train, meta_train = [], [], []
+    X_val,   y_val,   meta_val   = [], [], []
+    X_test,  y_test,  meta_test  = [], [], []
 
     for i in range(len(X_all)):
         ym = meta_all[i]["year_month"]
         if ym <= train_end:
             X_train.append(X_all[i])
             y_train.append(y_all[i])
+            meta_train.append(meta_all[i])
         elif ym <= val_end:
             X_val.append(X_all[i])
             y_val.append(y_all[i])
+            meta_val.append(meta_all[i])
         else:
             X_test.append(X_all[i])
             y_test.append(y_all[i])
@@ -721,6 +909,39 @@ def train_model(df):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"  Device: {device}")
 
+    # Map province_sk to a 0-based index for embedding
+    unique_prov_sks = sorted(df_pd["province_sk"].unique())
+    prov_sk_to_idx = {sk: idx for idx, sk in enumerate(unique_prov_sks)}
+    num_provinces = len(unique_prov_sks)
+    
+    train_prov_idxs = np.array([prov_sk_to_idx[m["province_sk"]] for m in meta_train])
+    val_prov_idxs   = np.array([prov_sk_to_idx[m["province_sk"]] for m in meta_val])
+    test_prov_idxs  = np.array([prov_sk_to_idx[m["province_sk"]] for m in meta_test])
+
+    train_anchors = np.array([_get_anchor_median("hotel_review_volume", m["province_sk"], M_safe, default_anchors) for m in meta_train])
+    val_anchors   = np.array([_get_anchor_median("hotel_review_volume", m["province_sk"], M_safe, default_anchors) for m in meta_val])
+    test_anchors  = np.array([_get_anchor_median("hotel_review_volume", m["province_sk"], M_safe, default_anchors) for m in meta_test])
+
+    # Define Tiers based on actual historical mean volume on Train set
+    train_df_pd = df_pd[df_pd["year_month"] <= train_end]
+    prov_means_actual = train_df_pd.groupby("province_sk")[TARGET].mean()
+    q33 = prov_means_actual.quantile(0.33)
+    q66 = prov_means_actual.quantile(0.66)
+    
+    province_tiers = {}
+    for prov_sk, mean_vol in prov_means_actual.items():
+        if mean_vol <= q33:
+            province_tiers[prov_sk] = 3
+        elif mean_vol <= q66:
+            province_tiers[prov_sk] = 2
+        else:
+            province_tiers[prov_sk] = 1
+            
+    print(f"\n  Province Tiers Defined (q33={q33:.2f}, q66={q66:.2f}):")
+    for tier in [1, 2, 3]:
+        count = sum(1 for t in province_tiers.values() if t == tier)
+        print(f"    Tier {tier}: {count} provinces")
+
     # -------------------------------------------------------
     # Main LSTM run
     # -------------------------------------------------------
@@ -735,85 +956,133 @@ def train_model(df):
         "weight_decay":  DEFAULT_WEIGHT_DECAY
     }
 
-    if optuna_available:
+    # Bypassing Optuna for Phase 1/2 (ablation)
+    run_optuna = True
+    if optuna_available and run_optuna:
         print("\n  Starting hyperparameter tuning parent run...")
         with mlflow.start_run(run_name=f"lstm_v5_tuning_parent_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
             best_hparams = tune_hyperparameters(
                 X_train, y_train, X_val, y_val, X_test, y_test,
+                train_prov_idxs, val_prov_idxs, test_prov_idxs,
                 input_size=len(ALL_FEATURES),
-                device=device
+                device=device,
+                num_provinces=num_provinces,
+                embed_dim=0
             )
             mlflow.log_params({
                 "best_" + k: v for k, v in best_hparams.items()
             })
             print(f"  Tuning complete. Best parameters to train: {best_hparams}")
 
-    print("\n  Training main LSTM...")
-    with mlflow.start_run(run_name=f"lstm_v5_full_{datetime.now().strftime('%Y%m%d_%H%M%S')}") as main_run:
+    seeds = [42, 100, 2026]
+    seed_results = []
+    last_model = None
 
-        model, metrics, train_losses, val_losses, y_pred_test = train_single_lstm(
-            X_train, y_train, X_val, y_val, X_test, y_test,
-            input_size=len(ALL_FEATURES),
-            run_name="full",
-            device=device,
-            hidden_size=best_hparams["hidden_size"],
-            num_layers=best_hparams["num_layers"],
-            dropout=best_hparams["dropout"],
-            learning_rate=best_hparams["learning_rate"],
-            weight_decay=best_hparams["weight_decay"],
-            epochs=EPOCHS,
-            patience=PATIENCE
-        )
+    print(f"\n  Training main LSTM across 3 seeds: {seeds}...")
+    for seed in seeds:
+        print("\n" + "=" * 80)
+        print(f"  RUNNING SEED: {seed}")
+        print("=" * 80)
+        
+        # Set seeds for reproducibility
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        import random
+        random.seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
 
-        print(f"\n  MAIN MODEL RESULTS:")
-        print(f"  [LOG SCALE]")
-        print(f"    Train: RMSE={metrics['train_rmse_log']:.4f}  MAE={metrics['train_mae_log']:.4f}  R²={metrics['train_r2_log']:.4f}  SMAPE={metrics['train_smape_log']:.2f}%")
-        print(f"    Val:   RMSE={metrics['val_rmse_log']:.4f}    MAE={metrics['val_mae_log']:.4f}    R²={metrics['val_r2_log']:.4f}  SMAPE={metrics['val_smape_log']:.2f}%")
-        print(f"    Test:  RMSE={metrics['test_rmse_log']:.4f}   MAE={metrics['test_mae_log']:.4f}   R²={metrics['test_r2_log']:.4f}  SMAPE={metrics['test_smape_log']:.2f}%")
-        print(f"  [ACTUAL SCALE]")
-        print(f"    Train: RMSE={metrics['train_rmse_actual']:.2f}  MAE={metrics['train_mae_actual']:.2f}  R²={metrics['train_r2_actual']:.4f}  WAPE={metrics['train_wape_actual']:.2f}%  MAPE={metrics['train_mape_actual']:.2f}%  SMAPE={metrics['train_smape_actual']:.2f}%")
-        print(f"    Val:   RMSE={metrics['val_rmse_actual']:.2f}    MAE={metrics['val_mae_actual']:.2f}    R²={metrics['val_r2_actual']:.4f}  WAPE={metrics['val_wape_actual']:.2f}%  MAPE={metrics['val_mape_actual']:.2f}%  SMAPE={metrics['val_smape_actual']:.2f}%")
-        print(f"    Test:  RMSE={metrics['test_rmse_actual']:.2f}   MAE={metrics['test_mae_actual']:.2f}   R²={metrics['test_r2_actual']:.4f}  WAPE={metrics['test_wape_actual']:.2f}%  MAPE={metrics['test_mape_actual']:.2f}%  SMAPE={metrics['test_smape_actual']:.2f}%")
-        print(f"  [METRIC GAPS]")
-        print(f"    Train-Val R² (Log) gap:  {metrics['train_r2_log'] - metrics['val_r2_log']:.4f}")
-        print(f"    Val-Test R² (Log) gap:   {metrics['val_r2_log']   - metrics['test_r2_log']:.4f}")
-        print(f"  Selected Hyperparameters: {best_hparams}")
+        with mlflow.start_run(run_name=f"lstm_v5_seed_{seed}_{datetime.now().strftime('%Y%m%d_%H%M%S')}") as run:
+            model, metrics, train_losses, val_losses, y_pred_test = train_single_lstm(
+                X_train, y_train, X_val, y_val, X_test, y_test,
+                train_prov_idxs, val_prov_idxs, test_prov_idxs,
+                input_size=len(ALL_FEATURES),
+                run_name=f"seed_{seed}",
+                device=device,
+                hidden_size=best_hparams["hidden_size"],
+                num_layers=best_hparams["num_layers"],
+                dropout=best_hparams["dropout"],
+                learning_rate=best_hparams["learning_rate"],
+                weight_decay=best_hparams["weight_decay"],
+                num_provinces=num_provinces,
+                embed_dim=0,
+                epochs=EPOCHS,
+                patience=PATIENCE,
+                train_anchors=train_anchors,
+                val_anchors=val_anchors,
+                test_anchors=test_anchors
+            )
 
-        mlflow.log_params({
-            "model_version":    "lstm_v5_full",
-            "source_table":     DL_FEATURES_TABLE,
-            "sequence_length":  SEQUENCE_LENGTH,
-            "hidden_size":      best_hparams["hidden_size"],
-            "num_layers":       best_hparams["num_layers"],
-            "dropout":          best_hparams["dropout"],
-            "learning_rate":    best_hparams["learning_rate"],
-            "loss":             "HybridLoss_Huber0.5_SMAPE0.3",
-            "scaler_type":      "RobustScaler",
-            "epochs_max":       EPOCHS,
-            "batch_size":       BATCH_SIZE,
-            "patience":         PATIENCE,
-            "weight_decay":     str(best_hparams["weight_decay"]),
-            "scheduler":        "CosineAnnealingWarmRestarts_T0=30_step_by_epoch",
-            "num_features":     len(ALL_FEATURES),
-            "split":            f"train{int(TRAIN_RATIO*100)}/val{int(VAL_RATIO*100)}/test{int(TEST_RATIO*100)}",
-            "tuning_applied":   str(optuna_available)
-        })
-        mlflow.log_metrics(metrics)
+            # Evaluate on Val and Test using model directly
+            model.eval()
+            with torch.no_grad():
+                y_pred_val = model(
+                    torch.FloatTensor(X_val).to(device),
+                    torch.LongTensor(val_prov_idxs).to(device)
+                ).cpu().numpy()
+                y_pred_test = model(
+                    torch.FloatTensor(X_test).to(device),
+                    torch.LongTensor(test_prov_idxs).to(device)
+                ).cpu().numpy()
 
-        # Plots
-        _log_training_plots(
-            train_losses, val_losses, y_test, y_pred_test, metrics, meta_test
-        )
+            evaluate_per_province(y_val, y_pred_val, meta_val, province_tiers, label=f"Val (Seed {seed})", M_safe=M_safe, default_anchors=default_anchors)
+            evaluate_per_province(y_test, y_pred_test, meta_test, province_tiers, label=f"Test (Seed {seed})", M_safe=M_safe, default_anchors=default_anchors)
 
-        # Save artifacts
-        mlflow.pytorch.log_model(model, "model")
-        _save_artifacts(scaler, clip_thresholds)
+            print(f"\n  SEED {seed} MODEL RESULTS:")
+            print(f"    Train: RMSE={metrics['train_rmse_actual']:.2f}  MAE={metrics['train_mae_actual']:.2f}  R²={metrics['train_r2_actual']:.4f}  WAPE={metrics['train_wape_actual']:.2f}%  MAPE={metrics['train_mape_actual']:.2f}%  SMAPE={metrics['train_smape_actual']:.2f}%")
+            print(f"    Val:   RMSE={metrics['val_rmse_actual']:.2f}    MAE={metrics['val_mae_actual']:.2f}    R²={metrics['val_r2_actual']:.4f}  WAPE={metrics['val_wape_actual']:.2f}%  MAPE={metrics['val_mape_actual']:.2f}%  SMAPE={metrics['val_smape_actual']:.2f}%")
+            print(f"    Test:  RMSE={metrics['test_rmse_actual']:.2f}   MAE={metrics['test_mae_actual']:.2f}   R²={metrics['test_r2_actual']:.4f}  WAPE={metrics['test_wape_actual']:.2f}%  MAPE={metrics['test_mape_actual']:.2f}%  SMAPE={metrics['test_smape_actual']:.2f}%")
 
-        model_uri = f"runs:/{mlflow.active_run().info.run_id}/model"
-        mlflow.register_model(model_uri, MODEL_NAME)
-        print(f"  Model registered: {MODEL_NAME}")
+            mlflow.log_params({
+                "model_version":    f"lstm_v5_seed_{seed}",
+                "source_table":     DL_FEATURES_TABLE,
+                "sequence_length":  SEQUENCE_LENGTH,
+                "hidden_size":      best_hparams["hidden_size"],
+                "num_layers":       best_hparams["num_layers"],
+                "dropout":          best_hparams["dropout"],
+                "learning_rate":    best_hparams["learning_rate"],
+                "loss":             "HybridLoss_Huber0.5_SMAPE0.3",
+                "scaler_type":      "RobustScaler",
+                "epochs_max":       EPOCHS,
+                "batch_size":       BATCH_SIZE,
+                "patience":         PATIENCE,
+                "weight_decay":     str(best_hparams["weight_decay"]),
+                "scheduler":        "CosineAnnealingWarmRestarts_T0=30_step_by_epoch",
+                "num_features":     len(ALL_FEATURES),
+                "split":            f"train{int(TRAIN_RATIO*100)}/val{int(VAL_RATIO*100)}/test{int(TEST_RATIO*100)}",
+                "tuning_applied":   str(optuna_available),
+                "seed":             seed,
+                "num_provinces":    num_provinces,
+                "embed_dim":        0
+            })
+            mlflow.log_metrics(metrics)
 
-    return model, scaler, clip_thresholds, df_pd_scaled, device
+            # Plots
+            _log_training_plots(
+                train_losses, val_losses, y_test, y_pred_test, metrics, meta_test
+            )
+
+            # Save artifacts
+            mlflow.pytorch.log_model(model, "model")
+            _save_artifacts(scaler, clip_thresholds, M_safe, default_anchors)
+
+            model_uri = f"runs:/{mlflow.active_run().info.run_id}/model"
+            mlflow.register_model(model_uri, MODEL_NAME)
+            print(f"  Model registered: {MODEL_NAME}")
+            
+            seed_results.append(metrics)
+            last_model = model
+
+    # Print average metrics over seeds
+    print("\n" + "=" * 80)
+    print("  SUMMARY OVER ALL SEEDS (42, 100, 2026)")
+    print("=" * 80)
+    for key in ["train_r2_actual", "train_wape_actual", "val_r2_actual", "val_wape_actual", "test_r2_actual", "test_wape_actual"]:
+        vals = [m[key] for m in seed_results if key in m]
+        if vals:
+            print(f"    Average {key:<20}: {np.mean(vals):.4f} ± {np.std(vals):.4f}")
+
+    return last_model, scaler, clip_thresholds, df_pd_scaled, device
 
 
 # ============================================================
@@ -833,8 +1102,8 @@ def _log_training_plots(train_losses, val_losses, y_test, y_pred_test, metrics, 
     ax.scatter(y_test, y_pred_test, alpha=0.5, s=15)
     max_val = float(max(y_test.max(), y_pred_test.max()))
     ax.plot([0, max_val], [0, max_val], 'r--')
-    ax.set_xlabel('Actual (log1p)'); ax.set_ylabel('Predicted (log1p)')
-    ax.set_title(f"LSTM: Actual vs Predicted — Test Set (R²={metrics['test_r2_log']:.3f})")
+    ax.set_xlabel('Actual (ratio)'); ax.set_ylabel('Predicted (ratio)')
+    ax.set_title(f"LSTM: Actual vs Predicted — Test Set (Actual R²={metrics['test_r2_actual']:.3f})")
     mlflow.log_figure(fig, "actual_vs_predicted_test.png"); plt.close()
 
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -859,7 +1128,7 @@ def _log_training_plots(train_losses, val_losses, y_test, y_pred_test, metrics, 
         mlflow.log_figure(fig, "time_series_sample.png"); plt.close()
 
 
-def _save_artifacts(scaler, clip_thresholds):
+def _save_artifacts(scaler, clip_thresholds, M_safe=None, default_anchors=None):
     with open("/tmp/scaler_lstm_v5.pkl", "wb") as f:
         pickle.dump(scaler, f)
     mlflow.log_artifact("/tmp/scaler_lstm_v5.pkl", "artifacts")
@@ -879,6 +1148,11 @@ def _save_artifacts(scaler, clip_thresholds):
             "(held at most recent known value). Hotel volume lags are updated "
             "autoregressively from model predictions.",
     }
+    if M_safe is not None:
+        config["M_safe"] = M_safe
+    if default_anchors is not None:
+        config["default_anchors"] = default_anchors
+        
     with open("/tmp/feature_config_v5.json", "w") as f:
         json.dump(config, f, indent=2)
     mlflow.log_artifact("/tmp/feature_config_v5.json", "artifacts")
@@ -888,26 +1162,48 @@ def _save_artifacts(scaler, clip_thresholds):
 # Step 4: Forecast 12 months (FIX 8: growth_pct bug fixed)
 # ============================================================
 
-def _scale_value(raw, feat_idx, scaler):
-    """Scale a single raw value using fitted RobustScaler."""
+def _scale_value(raw_val, feat_idx, scaler, province_sk, M_safe, default_anchors):
     feature_name = ALL_FEATURES[feat_idx]
     features_to_scale = [f for f in ALL_FEATURES if f not in UNSCALED_FEATURES]
-    if feature_name not in features_to_scale:
-        return raw
-    scaler_idx = features_to_scale.index(feature_name)
-    s = scaler.scale_[scaler_idx]
-    return (raw - scaler.center_[scaler_idx]) / s if s != 0 else 0.0
+    
+    # 1. Khử quy mô (Divide by corresponding anchor median)
+    if feature_name in FEATURE_GROUP_A1 + FEATURE_GROUP_A2 + FEATURE_GROUP_A3:
+        anchor = _get_anchor_median(feature_name, province_sk, M_safe, default_anchors)
+        val_norm = raw_val / anchor
+    else:
+        val_norm = raw_val
+        
+    # 2. Áp dụng Log1p (engagement_score only, NOT target hotel_review_volume)
+    if feature_name in ["engagement_score"]:
+        val_norm = np.log1p(val_norm)
+        
+    # 3. Áp dụng RobustScaler
+    if feature_name in features_to_scale:
+        idx = features_to_scale.index(feature_name)
+        return (val_norm - scaler.center_[idx]) / scaler.scale_[idx] if scaler.scale_[idx] != 0 else 0.0
+    return val_norm
 
 
-def _descale_value(scaled_val, feat_idx, scaler):
-    """Descale a single scaled value back to raw using fitted RobustScaler."""
+def _descale_value(scaled_val, feat_idx, scaler, province_sk, M_safe, default_anchors):
     feature_name = ALL_FEATURES[feat_idx]
     features_to_scale = [f for f in ALL_FEATURES if f not in UNSCALED_FEATURES]
-    if feature_name not in features_to_scale:
-        return scaled_val
-    scaler_idx = features_to_scale.index(feature_name)
-    s = scaler.scale_[scaler_idx]
-    return scaled_val * s + scaler.center_[scaler_idx] if s != 0 else scaler.center_[scaler_idx]
+    
+    # 1. Đảo ngược RobustScaler
+    if feature_name in features_to_scale:
+        idx = features_to_scale.index(feature_name)
+        val_norm = scaled_val * scaler.scale_[idx] + scaler.center_[idx]
+    else:
+        val_norm = scaled_val
+        
+    # 2. Đảo ngược Log1p (engagement_score only, NOT target hotel_review_volume)
+    if feature_name in ["engagement_score"]:
+        val_norm = np.expm1(val_norm)
+        
+    # 3. Nhân lại quy mô (Multiply by anchor median)
+    if feature_name in FEATURE_GROUP_A1 + FEATURE_GROUP_A2 + FEATURE_GROUP_A3:
+        anchor = _get_anchor_median(feature_name, province_sk, M_safe, default_anchors)
+        return val_norm * anchor
+    return val_norm
 
 
 def create_forecast_table(spark):
@@ -946,9 +1242,24 @@ def forecast_12_months(spark, model, scaler, clip_thresholds, df_pd, device):
 
     create_forecast_table(spark)
 
+    # Load M_safe and default_anchors from temp config for inference
+    try:
+        with open("/tmp/feature_config_v5.json", "r") as f:
+            tmp_config = json.load(f)
+        M_safe_inf = {int(k): v for k, v in tmp_config.get("M_safe", {}).items()}
+        default_anchors_inf = tmp_config.get("default_anchors", {})
+    except Exception as e:
+        print(f"  Warning: could not load M_safe from config: {e}. Using empty scaling maps.")
+        M_safe_inf = {}
+        default_anchors_inf = {}
+
     fi      = {f: ALL_FEATURES.index(f) for f in ALL_FEATURES}
     results = []
     import math
+
+    # Map province_sk to a 0-based index for embedding
+    unique_prov_sks = sorted(df_pd["province_sk"].unique())
+    prov_sk_to_idx = {sk: idx for idx, sk in enumerate(unique_prov_sks)}
 
     for province_sk, group in df_pd.groupby("province_sk"):
         group = group.sort_values("year_month")
@@ -962,7 +1273,9 @@ def forecast_12_months(spark, model, scaler, clip_thresholds, df_pd, device):
         last_ym       = int(group["year_month"].iloc[-1])
         last_date     = datetime.strptime(str(last_ym), '%Y%m')
 
-        recent_volumes = list(np.expm1(group[TARGET].values[-max(SEQUENCE_LENGTH, 12):]))
+        # Descale historical volumes to raw scale using target anchor median
+        anchor_vol = M_safe_inf.get(int(province_sk), default_anchors_inf).get("hotel_review_volume", 1.0)
+        recent_volumes = list(group[TARGET].values[-max(SEQUENCE_LENGTH, 12):] * anchor_vol)
 
         for horizon in range(1, FORECAST_MONTHS + 1):
             total_m = last_date.year * 12 + last_date.month + horizon
@@ -972,9 +1285,16 @@ def forecast_12_months(spark, model, scaler, clip_thresholds, df_pd, device):
 
             model.eval()
             with torch.no_grad():
-                pred_log    = model(torch.FloatTensor(last_seq).unsqueeze(0).to(device)).cpu().item()
+                prov_idx = prov_sk_to_idx[province_sk]
+                pred_log    = model(
+                    torch.FloatTensor(last_seq).unsqueeze(0).to(device),
+                    torch.LongTensor([prov_idx]).to(device)
+                ).cpu().item()
                 pred_log    = float(max(0.0, pred_log))
-                pred_actual = float(np.expm1(pred_log))
+                
+                # Descale back to raw scale by multiplying by the province safe median!
+                anchor = M_safe_inf.get(int(province_sk), default_anchors_inf).get("hotel_review_volume", 1.0)
+                pred_actual = float(pred_log) * anchor
 
             prev_volume = recent_volumes[-1] if recent_volumes else 0.0
             growth_pct  = float(
@@ -1001,50 +1321,45 @@ def forecast_12_months(spark, model, scaler, clip_thresholds, df_pd, device):
             # --- Update sequence for next step ---
             new_row = last_seq[-1].copy()
 
-            # Temporal (Fourier Seasonality based on FOURIER_K)
-            for k in range(1, FOURIER_K + 1):
-                if k == 1:
-                    new_row[fi["month_sin"]] = math.sin(2 * math.pi * tm / 12.0)
-                    new_row[fi["month_cos"]] = math.cos(2 * math.pi * tm / 12.0)
-                else:
-                    new_row[fi[f"month_sin_k{k}"]] = math.sin(2 * math.pi * k * tm / 12.0)
-                    new_row[fi[f"month_cos_k{k}"]] = math.cos(2 * math.pi * k * tm / 12.0)
+            # Temporal
+            new_row[fi["month_sin"]] = _scale_value(math.sin(2 * math.pi * tm / 12), fi["month_sin"], scaler, province_sk, M_safe_inf, default_anchors_inf)
+            new_row[fi["month_cos"]] = _scale_value(math.cos(2 * math.pi * tm / 12), fi["month_cos"], scaler, province_sk, M_safe_inf, default_anchors_inf)
 
             # (hotel_vol_lag_1/2/3 removed from features, autoregressive state maintained in recent_volumes)
 
             if len(recent_volumes) >= 12:
                 new_row[fi["hotel_vol_lag_12"]] = _scale_value(
-                    recent_volumes[-12], fi["hotel_vol_lag_12"], scaler
+                    recent_volumes[-12], fi["hotel_vol_lag_12"], scaler, province_sk, M_safe_inf, default_anchors_inf
                 )
             if len(recent_volumes) >= 3:
                 new_row[fi["hotel_vol_rolling_3m"]] = _scale_value(
-                    float(np.mean(recent_volumes[-3:])), fi["hotel_vol_rolling_3m"], scaler
+                    float(np.mean(recent_volumes[-3:])), fi["hotel_vol_rolling_3m"], scaler, province_sk, M_safe_inf, default_anchors_inf
                 )
             lag1 = recent_volumes[-1] if len(recent_volumes) >= 1 else 0.0
             lag3 = recent_volumes[-3] if len(recent_volumes) >= 3 else lag1
             new_row[fi["hotel_vol_momentum"]] = _scale_value(
-                lag1 - lag3, fi["hotel_vol_momentum"], scaler
+                lag1 - lag3, fi["hotel_vol_momentum"], scaler, province_sk, M_safe_inf, default_anchors_inf
             )
 
             # hotel_vol_growth (clamp consistent with training preprocessing)
             prev_vol = recent_volumes[-2] if len(recent_volumes) >= 2 else 0.0
             growth   = (pred_actual - prev_vol) / prev_vol if prev_vol > 0 else 0.0
             growth   = max(-1.0, min(5.0, growth))
-            new_row[fi["hotel_vol_growth"]] = _scale_value(growth, fi["hotel_vol_growth"], scaler)
+            new_row[fi["hotel_vol_growth"]] = _scale_value(growth, fi["hotel_vol_growth"], scaler, province_sk, M_safe_inf, default_anchors_inf)
 
             # social_to_booking_ratio
             idx_tc  = fi["total_comments"]
-            raw_tc  = _descale_value(new_row[idx_tc], idx_tc, scaler)
+            raw_tc  = _descale_value(new_row[idx_tc], idx_tc, scaler, province_sk, M_safe_inf, default_anchors_inf)
             new_row[fi["social_to_booking_ratio"]] = _scale_value(
-                raw_tc / (pred_actual + 1.0), fi["social_to_booking_ratio"], scaler
+                raw_tc / (pred_actual + 1.0), fi["social_to_booking_ratio"], scaler, province_sk, M_safe_inf, default_anchors_inf
             )
 
             new_row[fi["sentiment_polarity_change"]] = _scale_value(
-                0.0, fi["sentiment_polarity_change"], scaler
+                0.0, fi["sentiment_polarity_change"], scaler, province_sk, M_safe_inf, default_anchors_inf
             )
             new_std = float(np.std(recent_volumes[-3:]))
             new_row[fi["hotel_vol_std_rolling_3m"]] = _scale_value(
-                new_std, fi["hotel_vol_std_rolling_3m"], scaler
+                new_std, fi["hotel_vol_std_rolling_3m"], scaler, province_sk, M_safe_inf, default_anchors_inf
             )
 
             # Hotness lags: persistence assumption

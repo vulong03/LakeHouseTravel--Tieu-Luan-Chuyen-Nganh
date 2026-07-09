@@ -123,7 +123,7 @@ BATCH_SIZE      = 32
 PATIENCE        = 25
 
 # Fourier Seasonality Configuration
-FOURIER_K = 1  # Set to 1 (baseline sin/cos), 2, 3 or higher to add harmonics
+FOURIER_K = 3  # Set to 1 (baseline sin/cos), 2, 3 or higher to add harmonics
 
 # Hyperparameter Search Space for Optuna
 TUNING_EPOCHS   = 150
