@@ -5,10 +5,10 @@ ML Pipeline: Train LSTM Deep Learning Model & Forecast Province Hotel Volume
 Source table: gold.gold.fact_province_month_dl_features
 
 Architecture:
-- 2-layer LSTM + LayerNorm + Temporal Attention
+- 1 or 2-layer LSTM + LayerNorm + Temporal Attention (tuned via Optuna)
 - Deeper FC head: Linear(hidden) → GELU → Dropout → Linear(16) → ReLU → Linear(1)
 - HybridLoss: 70% HuberLoss + 30% SMAPELoss
-- RobustScaler (median/IQR)
+- RobustScaler (applied to continuous features; temporal/ratio/sentiment excluded)
 - CosineAnnealingWarmRestarts scheduler
 
 Features: 39 total
@@ -30,6 +30,7 @@ Output:
 - Model: province_hotel_volume_forecaster_lstm_v5 (MLflow registry)
 - Table: gold.gold.province_month_forecast_lstm_next12
 """
+
 
 import sys
 sys.path.append('/opt/spark/jobs')
@@ -186,6 +187,15 @@ ALL_FEATURES = (
     + CUSTOM_FEATURES
 )
 
+UNSCALED_FEATURES = [
+    "month_sin", "month_cos",
+    "viral_post_ratio",
+    "avg_sentiment", "sentiment_std", "positive_ratio", "negative_ratio", "emoji_sentiment_ratio", "reply_ratio",
+    "avg_aspect_scenery", "avg_aspect_food", "avg_aspect_price", "avg_aspect_service", "avg_aspect_transport", "avg_aspect_accommodation",
+    "high_score_ratio", "domestic_review_ratio", "couple_ratio", "family_ratio", "business_ratio", "solo_ratio",
+    "sentiment_polarity_change"
+]
+
 # ============================================================
 # Loss Functions
 # ============================================================
@@ -328,7 +338,7 @@ def load_features(spark):
 
     before = df.count()
     df = df.dropna(subset=HOTEL_LAG_FEATURES + [TARGET])
-    df = df.filter(F.col(TARGET) > 0)
+    df = df.filter(F.col(TARGET) >= 0)
     after = df.count()
 
     print(f"  Dropped {before - after} rows (NULL lags or zero target), remaining: {after}")
@@ -382,8 +392,8 @@ def clip_and_scale_entire(df_pd, train_end, features):
 
     print(f"  Clip thresholds (train p99): { {k: f'{v:.2f}' for k,v in clip_thresholds.items()} }")
 
-    # --- RobustScaler: fit on train only (excluding temporal features) ---
-    features_to_scale = [f for f in features if f not in TEMPORAL_FEATURES]
+    # --- RobustScaler: fit on train only (excluding unscaled features) ---
+    features_to_scale = [f for f in features if f not in UNSCALED_FEATURES]
     scaler = RobustScaler()
     scaler.fit(train_raw[features_to_scale])
     df[features_to_scale] = scaler.transform(df[features_to_scale])
@@ -520,7 +530,7 @@ def train_single_lstm(X_train, y_train, X_val, y_val, X_test, y_test,
         avg_val = val_loss / max(len(X_val), 1)
         val_losses.append(avg_val)
 
-        scheduler.step(epoch)
+        scheduler.step()
 
         if (epoch + 1) % 20 == 0:
             lr = optimizer.param_groups[0]['lr']
@@ -865,7 +875,7 @@ def _save_artifacts(scaler, clip_thresholds):
 def _scale_value(raw, feat_idx, scaler):
     """Scale a single raw value using fitted RobustScaler."""
     feature_name = ALL_FEATURES[feat_idx]
-    features_to_scale = [f for f in ALL_FEATURES if f not in TEMPORAL_FEATURES]
+    features_to_scale = [f for f in ALL_FEATURES if f not in UNSCALED_FEATURES]
     if feature_name not in features_to_scale:
         return raw
     scaler_idx = features_to_scale.index(feature_name)
@@ -876,7 +886,7 @@ def _scale_value(raw, feat_idx, scaler):
 def _descale_value(scaled_val, feat_idx, scaler):
     """Descale a single scaled value back to raw using fitted RobustScaler."""
     feature_name = ALL_FEATURES[feat_idx]
-    features_to_scale = [f for f in ALL_FEATURES if f not in TEMPORAL_FEATURES]
+    features_to_scale = [f for f in ALL_FEATURES if f not in UNSCALED_FEATURES]
     if feature_name not in features_to_scale:
         return scaled_val
     scaler_idx = features_to_scale.index(feature_name)
