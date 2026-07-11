@@ -45,6 +45,7 @@ LSTM_FILE_PATTERN = "province_hotel_volume_forecast_lstm_"
 
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
 LSTM_MODEL_NAME = "province_hotel_volume_forecaster_lstm_v5"
+MLFLOW_RUN_ID = "4cda72b3b9ac4054a08eedb067613a4d"  # Set to specific Run ID, or None for latest registered version
 
 CACHE_DURATION = 60   # seconds
 _forecast_cache = {"data": None, "timestamp": 0, "run_folder": ""}
@@ -189,7 +190,7 @@ def load_average_aspects():
 
     aspect_cols = [
         "avg_aspect_scenery", "avg_aspect_food", "avg_aspect_price",
-        "avg_aspect_service", "avg_aspect_accommodation"
+        "avg_aspect_service", "avg_aspect_transport", "avg_aspect_accommodation"
     ]
     existing = [c for c in aspect_cols if c in df_feat.columns]
     if not existing:
@@ -201,20 +202,29 @@ def load_average_aspects():
 
 
 def get_model_info():
-    """Fetch LSTM model info from MLflow registry."""
+    """Fetch LSTM model info from MLflow registry or direct run ID."""
     try:
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
         client = mlflow.MlflowClient()
-        versions = client.search_model_versions(f"name='{LSTM_MODEL_NAME}'")
-        if not versions:
-            return None
-        latest = max(versions, key=lambda v: int(v.version))
-        run = client.get_run(latest.run_id)
+        
+        if MLFLOW_RUN_ID:
+            run = client.get_run(MLFLOW_RUN_ID)
+            version = "Custom (Direct Run)"
+            run_id = MLFLOW_RUN_ID
+        else:
+            versions = client.search_model_versions(f"name='{LSTM_MODEL_NAME}'")
+            if not versions:
+                return None
+            latest = max(versions, key=lambda v: int(v.version))
+            run = client.get_run(latest.run_id)
+            version = latest.version
+            run_id = latest.run_id
+            
         m = run.data.metrics
         p = run.data.params
         return {
-            "version": latest.version,
-            "run_id": latest.run_id,
+            "version": version,
+            "run_id": run_id,
             "trained_at": datetime.fromtimestamp(run.info.start_time / 1000).strftime("%Y-%m-%d %H:%M"),
             
             # Log scale
@@ -276,7 +286,7 @@ def tab1_seasonal_recommend(start_month, end_month, selected_theme, selected_reg
     # Set default values for aspects if missing
     aspect_cols = [
         "avg_aspect_scenery", "avg_aspect_food", "avg_aspect_price",
-        "avg_aspect_service", "avg_aspect_accommodation"
+        "avg_aspect_service", "avg_aspect_transport", "avg_aspect_accommodation"
     ]
     for c in aspect_cols:
         if c in df_filtered.columns:
@@ -307,6 +317,7 @@ def tab1_seasonal_recommend(start_month, end_month, selected_theme, selected_reg
         "🍲 Food":           "avg_aspect_food",
         "💰 Price":          "avg_aspect_price",
         "🛎️ Service":        "avg_aspect_service",
+        "🚗 Transport":      "avg_aspect_transport",
         "🏨 Accommodation":  "avg_aspect_accommodation",
         "All": None
     }
@@ -1213,6 +1224,7 @@ def create_app():
                                     "🍲 Food",
                                     "💰 Price",
                                     "🛎️ Service",
+                                    "🚗 Transport",
                                     "🏨 Accommodation"
                                 ],
                                 value="All",
