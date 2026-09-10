@@ -4,9 +4,7 @@ Tourism Data Analytics Platform là một nền tảng phân tích dữ liệu d
 ## Architecture
 
 
-<img width="1631" height="916" alt="Screenshot 2026-09-10 155732" src="https://github.com/user-attachments/assets/c87de102-a414-467d-880f-f98b420ae387" />
-
-
+<img width="1036" height="520" alt="image" src="https://github.com/user-attachments/assets/73783848-ea9e-40a2-bf10-1572c31ddfb0" />
 
 
 
@@ -14,9 +12,9 @@ Tourism Data Analytics Platform là một nền tảng phân tích dữ liệu d
 
 Dự án tuân theo kiến trúc Medallion (Bronze → Silver → Gold):
 
-- **Bronze Layer**: Dữ liệu thô (raw) từ các nguồn, lưu dưới dạng Parquet
-- **Silver Layer**: Dữ liệu đã được làm sạch, chuẩn hóa và validate
-- **Gold Layer**: Dữ liệu đã được aggregate, có sẵn dimensions và fact tables cho analytics
+- **Bronze Layer**: Dữ liệu thô (raw) từ các nguồn, lưu dưới dạng CSV gốc trên MinIO
+- **Silver Layer**: Dữ liệu đã được làm sạch, chuẩn hóa và validate (Iceberg tables)
+- **Gold Layer**: Dữ liệu đã được aggregate theo Star Schema, có sẵn dimensions và fact tables cho analytics
 
 ## Technology Stack
 ### Core Infrastructure
@@ -36,11 +34,13 @@ Dự án tuân theo kiến trúc Medallion (Bronze → Silver → Gold):
 | Component | Technology | Version | Purpose |
 |-----------|-----------|---------|---------|
 | **Query Engine** | Dremio | Latest | Interactive SQL analytics |
-| **Visualization** | PowerBI | Latest  | Data visualization |
-| **ML** | XGBoost | - | Time-series forecasting |
+| **Visualization** | Apache Superset + Power BI | Latest | BI dashboards & data visualization |
+| **DL Model** | PyTorch (LSTM + Temporal Attention) | - | Hotel volume forecasting |
+| **ML Model** | XGBoost | - | Hotness forecasting (baseline) |
+| **NLP Model** | PhoBERT (vinai/phobert-base-v2) | - | Vietnamese sentiment & aspect analysis |
+| **NLP Library** | Underthesea | - | Vietnamese text preprocessing |
 | **ML Ops** | MLflow | - | Experiment tracking, model registry |
-| **Web Framework** | Gradio | - | Interactive web application |
-| **NLP Library** | Underthesea | - | Vietnamese text processing |
+| **Web Framework** | Gradio | - | Interactive forecasting dashboard |
 
 ### Programming Languages
 
@@ -101,12 +101,10 @@ Dự án tuân theo kiến trúc Medallion (Bronze → Silver → Gold):
    - Map to provinces via destination matching
 
 5. **TikTok Comments**
-   - **NLP Processing** với Underthesea:
-     - Sentiment analysis (positive/negative)
-     - Word count & unique word ratio
-     - Emoji detection (positive/negative emojis)
-   - Parent-child comment hierarchy
-   - Deduplication
+   - **NLP v1** với Underthesea: sentiment analysis, word count, unique word ratio, emoji detection
+   - **NLP v2** với PhoBERT (`vinai/phobert-base-v2`): multi-task fine-tuning cho sentiment (3-class), 6-aspect ABSA và intent classification
+   - Parent-child comment hierarchy (`level_comment`)
+   - Deduplication theo composite key `(post_url, stt)`
 
 **Resource Management**:
 - **Phase 1** (Parallel): Light jobs (hotels_detail, hotels_list, tiktok_videos)
@@ -133,8 +131,10 @@ Dự án tuân theo kiến trúc Medallion (Bronze → Silver → Gold):
 
 **Fact Tables**:
 - `fact_province_content_engagement` - TikTok engagement metrics by province
-- `fact_hotel_review` - Hotel review analytics
-- `fact_comment_nlp` - NLP analytics cho comments
+- `fact_hotel_review_daily` - Hotel review analytics (grain: 1 review)
+- `fact_comment_nlp_engagement` - NLP v1 analytics cho comments (Underthesea)
+- `fact_comment_nlp_v2` - NLP v2 analytics cho comments (PhoBERT) — chạy riêng ngoài DAG chính
+- `fact_province_month_dl_features` - ML feature table (grain: province × month, ~39 features)
 
 **Key Features**:
 - Surrogate keys (SK) cho tất cả dimensions
@@ -144,56 +144,64 @@ Dự án tuân theo kiến trúc Medallion (Bronze → Silver → Gold):
 
 ### ML Layer (Forecasting)
 
-**Job**: `train_and_forecast.py`  
-**Schedule**: Triggered sau Gold layer aggregation  
-**Purpose**: Train XGBoost model để dự báo province hotness
+#### Model 1: LSTM v5 (Primary)
 
-**Pipeline**:
+**Job**: `spark/jobs/dl/train_province_lstm_v5.py`  
+**Purpose**: Train LSTM model để dự báo lượng đặt phòng khách sạn (`hotel_review_volume`) theo tỉnh
 
-1. **Feature Engineering**
-   - Calculate `hotness_score` từ 11 metrics:
-     - Volume: total_comments, total_posts
-     - Post Engagement: total_post_likes, total_post_saves
-     - Sentiment: positive_ratio, avg_sentiment_score
-     - NLP Richness: avg_words_per_comment, avg_unique_word_ratio, total_positive_emojis, total_emojis, total_negative_emojis
-   
-   - Temporal features:
-     - Month (1-12)
-     - Month sin/cos (cyclical encoding)
-   
-   - Lag features:
-     - hotness_lag_1, lag_2, lag_3, lag_12 (1, 2, 3, 12 tháng trước)
-     - hotness_rolling_avg_3m (rolling average 3 tháng)
+**Architecture**:
+- 2-layer LSTM + LayerNorm + Temporal Attention
+- FC Head: `Linear(hidden) → GELU → Dropout → Linear(16) → ReLU → Linear(1)`
+- Loss: HybridLoss (70% Huber + 30% SMAPE)
+- Scheduler: CosineAnnealingWarmRestarts
+- Scaler: RobustScaler (fit trên train set only — no data leakage)
 
-2. **Model Training**
-   - Algorithm: XGBoost Regressor
-   - Train/Test Split: 70/30
-   - Cross-validation với time series split
-   - Hyperparameters:
-     ```python
-     {
-       "n_estimators": 200,
-       "max_depth": 4,
-       "learning_rate": 0.01,
-       "min_child_weight": 5,
-       "subsample": 0.7,
-       "colsample_bytree": 0.7,
-       "gamma": 0.1,
-       "reg_alpha": 0.1,
-       "reg_lambda": 1.0
-     }
+**Features**: 39 total (sequence length = 3 tháng)
+- Temporal (2): `month_sin`, `month_cos`
+- Hotel lags (3): `hotel_vol_lag_12`, `hotel_vol_rolling_3m`, `hotel_vol_momentum`
+- Hotness lags (3): `hotness_lag_12`, `hotness_rolling_3m`, `hotness_momentum`
+- TikTok Volume (3): `total_posts`, `total_comments`, `comments_per_post`
+- Engagement (4): `avg_likes_per_post`, `avg_saves_per_post`, `viral_post_ratio`, `engagement_score`
+- NLP/Sentiment (6): `avg_sentiment`, `sentiment_std`, `positive_ratio`, `negative_ratio`, `emoji_sentiment_ratio`, `reply_ratio`
+- Aspect Scores (6): `avg_aspect_scenery/food/price/service/transport/accommodation`
+- Hotel Quality (9): `avg_hotel_score`, `hotel_score_std`, `high_score_ratio`, `domestic_review_ratio`, `couple_ratio`, `family_ratio`, `business_ratio`, `solo_ratio`, `hotel_vol_growth`
+- Custom (3): `social_to_booking_ratio`, `sentiment_polarity_change`, `hotel_vol_std_rolling_3m`
 
+**Training Config**:
+- Train/Val/Test Split: 70% / 15% / 15% (time-based)
+- Epochs: 200, Early Stopping patience: 20
+- Optuna hyperparameter tuning
 
-3. **MLflow Tracking**
-   - Experiment name: `province_hotness_forecasting`
-   - Logged metrics: RMSE, MAE, R², MAPE
-   - Artifacts: Feature importance plots, actual vs predicted charts
-   - Model registry: `province_hotness_forecaster`
+**MLflow Tracking**:
+- Experiment: `province_hotel_volume_forecasting_lstm_v5`
+- Metrics: RMSE, MAE, R², MAPE
+- Model registry: `province_hotel_volume_forecaster_lstm_v5`
 
-4. **Forecasting**
-   - Recursive autoregressive forecasting (12 tháng)
-   - Output table: `gold.gold.province_month_forecast_next12`
-   - Columns: province_sk, province_name, forecast_month, predicted_hotness, prediction_date
+**Forecasting**:
+- Recursive autoregressive forecasting (12 tháng)
+- Output table: `gold.gold.province_month_forecast_lstm_next12`
+- Output path: `s3a://gold/dl_forecast/province_hotel_volume_forecast_lstm_v5/`
+
+---
+
+#### Model 2: XGBoost (Baseline)
+
+**Job**: `spark/jobs/ml/train_and_forecast.py`  
+**Purpose**: Train XGBoost model để dự báo `hotness_score` (composite index) theo tỉnh
+
+**Features**: Temporal + lag features từ `fact_province_month_dl_features`
+- Lag features: `hotness_lag_1/2/3/12`, `hotness_rolling_3m`, `hotness_momentum`
+- Temporal: `month_sin`, `month_cos`
+
+**Training Config**:
+- Algorithm: XGBoost Regressor
+- Train/Test Split: 70/30
+- Hyperparameters: n_estimators=200, max_depth=4, learning_rate=0.01
+
+**MLflow Tracking**:
+- Experiment: `province_hotness_forecasting`
+- Model registry: `province_hotness_forecaster`
+- Output table: `gold.gold.province_month_forecast_next12`
 
 ## Prerequisites
 
@@ -330,7 +338,16 @@ docker exec lakehouse_airflow airflow tasks logs bronze_raw_ingestion <task_id> 
 Sau khi Gold layer hoàn thành:
 
 ```bash
-# Trigger ML job từ Spark
+# LSTM v5 (Primary — hotel volume forecasting)
+docker exec lakehouse_spark_master /opt/spark/bin/spark-submit \
+  --master spark://spark-master:7077 \
+  --deploy-mode client \
+  --driver-memory 4g \
+  --executor-memory 4g \
+  --executor-cores 2 \
+  /opt/spark/jobs/dl/train_province_lstm_v5.py
+
+# XGBoost (Baseline — hotness forecasting)
 docker exec lakehouse_spark_master /opt/spark/bin/spark-submit \
   --master spark://spark-master:7077 \
   --deploy-mode client \
@@ -347,20 +364,26 @@ Hoặc trigger từ Airflow (nếu đã thêm ML DAG).
 #### Option 1: Gradio Web App (Recommended)
 
 1. Truy cập http://localhost:7860
-2. Select:
-   - **Start Month**: Tháng bắt đầu dự báo
-   - **Forecast Months**: Số tháng dự báo (1-12)
-   - **Region Filter**: Vùng miền (optional)
-   - **Top N Provinces**: Số lượng tỉnh hiển thị
-3. Click **"Forecast Province Hotness"**
-4. Xem:
-   - Line chart: Hotness trend theo thời gian
-   - Table: Top provinces với predicted hotness scores
+2. Tabs:
+   - **🏆 Top Tỉnh Dự Báo**: Bảng xếp hạng tỉnh theo lượng đặt phòng
+   - **📈 So sánh Tỉnh**: So sánh xu hướng giữa các tỉnh (tối đa 8 tỉnh)
+   - **👥 Phân tích Du khách**: Tỷ lệ cặp đôi/gia đình/công tác/một mình theo tháng
+   - **🧠 Thông tin Model**: Kết nối MLflow hiển thị metrics và hyperparameters
 
 #### Option 2: Dremio SQL Query
 
 ```sql
--- View forecast results
+-- LSTM v5: Hotel volume forecast
+SELECT 
+  province_name,
+  forecast_month,
+  predicted_hotel_volume,
+  prediction_date
+FROM gold.gold.province_month_forecast_lstm_next12
+ORDER BY forecast_month, predicted_hotel_volume DESC
+LIMIT 100;
+
+-- XGBoost: Hotness forecast
 SELECT 
   province_name,
   forecast_month,
@@ -374,10 +397,8 @@ LIMIT 100;
 #### Option 3: MLflow UI
 
 1. Truy cập http://localhost:5001
-2. Click experiment: `province_hotness_forecasting`
-3. View:
-   - Run metrics (RMSE, MAE, R²)
-   - Feature importance plots
-   - Actual vs Predicted charts
-4. Download model từ Models tab
-</div>
+2. Experiments:
+   - `province_hotel_volume_forecasting_lstm_v5` — LSTM v5 runs
+   - `province_hotness_forecasting` — XGBoost runs
+3. View: Run metrics (RMSE, MAE, R², MAPE), actual vs predicted charts
+4. Model Registry: `province_hotel_volume_forecaster_lstm_v5` / `province_hotness_forecaster`
