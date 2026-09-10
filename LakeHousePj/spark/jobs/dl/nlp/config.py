@@ -87,25 +87,6 @@ NEGATIVE_KEYWORDS = [
     "nhạt", "không ok", "không ổn", "dở ẹc",
 ]
 
-QUESTION_KEYWORDS = [
-    "bao nhiêu", "giá", "ở đâu", "đường nào", "làm sao", "thế nào",
-    "như nào", "mấy giờ", "khi nào", "có không", "ai biết", "cho hỏi",
-    "cho mình hỏi", "mn ơi", "mọi người ơi", "giúp", "tư vấn",
-    "review", "?",
-]
-
-RECOMMEND_KEYWORDS = [
-    "nên đi", "đáng đi", "recommend", "phải đi", "nhất định đi",
-    "10/10", "10 điểm", "5 sao", "cứ đi", "đi ngay", "mau đi",
-    "khuyên", "gợi ý", "suggest",
-]
-
-COMPLAIN_KEYWORDS = [
-    "phàn nàn", "tệ", "dở", "thất vọng", "không bao giờ",
-    "lần cuối", "hối hận", "phí", "lừa", "chặt chém",
-    "đừng", "tránh", "cẩn thận", "cảnh giác",
-]
-
 ASPECT_KEYWORD_MAP = {
     "scenery": [
         "cảnh", "view", "biển", "núi", "sông", "hồ", "thác", "đảo",

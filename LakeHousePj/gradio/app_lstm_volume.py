@@ -45,7 +45,7 @@ LSTM_FILE_PATTERN = "province_hotel_volume_forecast_lstm_"
 
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
 LSTM_MODEL_NAME = "province_hotel_volume_forecaster_lstm_v5"
-MLFLOW_RUN_ID = "4cda72b3b9ac4054a08eedb067613a4d"  # Set to specific Run ID, or None for latest registered version
+MLFLOW_RUN_ID = None  # Set to specific Run ID, or None for latest registered version
 
 CACHE_DURATION = 60   # seconds
 _forecast_cache = {"data": None, "timestamp": 0, "run_folder": ""}
